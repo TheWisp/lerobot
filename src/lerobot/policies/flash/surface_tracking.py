@@ -18,7 +18,7 @@ from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
 from .surface_correspondence import SurfaceMotionConfig, crop_pair, robust_fit, ufm_pairs
-from .surface_grounding import PreparedReferenceSurface, ShapeConfig, WholeSurfaceFit, project
+from .surface_grounding import PreparedReferenceSurface, ShapeConfig, SurfaceFitView, WholeSurfaceFit, project
 from .surface_motion import measured_surface_information
 from .surface_observation import (
     SurfaceFrameFilters,
@@ -167,6 +167,7 @@ class SurfaceTrackingSession:
         if not np.isfinite(self.information_correspondence_m) or self.information_correspondence_m <= 0:
             raise ValueError("surface information correspondence distance must be positive")
         self.reference = None
+        self.appearance_view = None
         self.registered_reference_camera_m = None
         if registered_reference_camera_m is not None:
             points = np.asarray(registered_reference_camera_m, dtype=float)
@@ -236,10 +237,9 @@ class SurfaceTrackingSession:
             "intrinsics": intrinsics,
             "all_surface_points": all_points,
         }
-        if self.shape_config.scene_depth_constraints:
-            # Boundary trimming removes precise correspondences, not scene
-            # evidence. Explicit depth-range outliers remain unknown in both.
-            current["scene_depth"] = np.where(obs["depth_range_rejected"], 0, depth_m)
+        # Boundary trimming removes precise correspondences, not scene
+        # evidence. Explicit depth-range outliers remain unknown in both.
+        current["scene_depth"] = np.where(obs["depth_range_rejected"], 0, depth_m)
         if self.observation_config.filtered_depth_for_fitting:
             reliable_depth = np.where(mask, obs["valid_image"], obs["depth_reliable"])
             current["depth"] = np.where(reliable_depth, depth_m, 0)
@@ -353,6 +353,7 @@ class SurfaceTrackingSession:
             return {"status": prepared["status"], "diagnostics": detail}
         if self.reference is None:
             self.reference = current["obs"]["points"].copy()
+            self.appearance_view = SurfaceFitView(current, intrinsics.copy(), np.eye(4))
             self.anchors, self.basis = initial_landmarks(self.reference)
             self.reference_frame_id = prepared["frame_id"]
             detail["reference_frame_id"] = self.reference_frame_id
@@ -374,7 +375,7 @@ class SurfaceTrackingSession:
             start = time.perf_counter()
             if self.prepared_reference is None:
                 self.prepared_reference = PreparedReferenceSurface.build(fitting_reference, self.shape_config)
-            self.pose, fit = WholeSurfaceFit(
+            fitter = WholeSurfaceFit(
                 fitting_reference,
                 current,
                 intrinsics,
@@ -382,8 +383,14 @@ class SurfaceTrackingSession:
                 prepared_reference=self.prepared_reference,
                 fit_kernels=self.fit_kernels,
                 search_pool=self.search_pool,
-            ).correct(proposal)
+                appearance_views=(self.appearance_view,) if self.appearance_view is not None else (),
+            )
+            candidate, fit = fitter.correct(proposal)
             detail.update(fit, fit_ms=(time.perf_counter() - start) * 1000)
+            if candidate is None:
+                return {"status": "fit_rejected", "diagnostics": detail}
+            self.pose = candidate
+            detail.update(fitter.scene_depth_check(self.pose))
 
             def angle(a, b):
                 return float(np.degrees(Rotation.from_matrix(a[:3, :3] @ b[:3, :3].T).magnitude()))

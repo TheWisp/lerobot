@@ -1,0 +1,4326 @@
+{
+  "checkpoint": "2163ba8755d1651c0960c64fdaafb6b07d6daab8",
+  "local_artifacts": "/home/feit/.cache/flash-tracker-restart/library-trials-20261105",
+  "settings_sha256": "1e24495d537330edfcec5a626d272b6539fd48f00eff1a8c171ab7650fb43cfe",
+  "scope": "Four full saved-mask replays per method, one timing run each. All objects. Timing excludes SAM, camera capture, display, disk and scoring. Library objective differs from the current fitter. No default changed.",
+  "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39",
+  "dependencies": {
+    "small_gicp": "1.0.1",
+    "open3d": "0.20.0",
+    "numpy": "2.2.6",
+    "scipy": "1.17.1",
+    "numba": "0.68.1",
+    "torch": "2.10.0"
+  },
+  "baseline_identity": {
+    "flash-demo-dowel-ring": {
+      "identical": true,
+      "changed_frame_objects": {
+        "pose": 0,
+        "status": 0,
+        "surface_events": 0
+      },
+      "first_changes": {
+        "pose": [],
+        "status": [],
+        "surface_events": []
+      },
+      "before_processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 29.07692495500669,
+        "steady_ms": {
+          "median": 268.6149105138611,
+          "p90": 338.6918436270207
+        },
+        "max_ms": 611.3739379798062,
+        "slower_than_source_interval": 712,
+        "intervals": 712
+      },
+      "after_processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 30.418045003898442,
+        "steady_ms": {
+          "median": 264.967858500313,
+          "p90": 335.7272462861147
+        },
+        "max_ms": 618.2318080682307,
+        "slower_than_source_interval": 712,
+        "intervals": 712
+      }
+    },
+    "flash-demo-gamepad-cube": {
+      "identical": true,
+      "changed_frame_objects": {
+        "pose": 0,
+        "status": 0,
+        "surface_events": 0
+      },
+      "first_changes": {
+        "pose": [],
+        "status": [],
+        "surface_events": []
+      },
+      "before_processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 30.140966991893947,
+        "steady_ms": {
+          "median": 223.25166902737692,
+          "p90": 278.08782294159755
+        },
+        "max_ms": 553.4551870659925,
+        "slower_than_source_interval": 627,
+        "intervals": 627
+      },
+      "after_processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 30.31944204121828,
+        "steady_ms": {
+          "median": 220.7387590315193,
+          "p90": 278.3882728544995
+        },
+        "max_ms": 566.9016320025548,
+        "slower_than_source_interval": 627,
+        "intervals": 627
+      }
+    },
+    "dexycb-tomato-can-20201002_105506": {
+      "identical": true,
+      "changed_frame_objects": {
+        "pose": 0,
+        "status": 0,
+        "surface_events": 0
+      },
+      "first_changes": {
+        "pose": [],
+        "status": [],
+        "surface_events": []
+      },
+      "before_processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 20.057912974152714,
+        "steady_ms": {
+          "median": 248.45568399177864,
+          "p90": 384.12292399443686
+        },
+        "max_ms": 505.9286269824952,
+        "slower_than_source_interval": 67,
+        "intervals": 67
+      },
+      "after_processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 19.95467400411144,
+        "steady_ms": {
+          "median": 260.53686800878495,
+          "p90": 408.4120736224577
+        },
+        "max_ms": 566.4117549313232,
+        "slower_than_source_interval": 67,
+        "intervals": 67
+      }
+    },
+    "ycb-mustard_easy_00_02": {
+      "identical": true,
+      "changed_frame_objects": {
+        "pose": 0,
+        "status": 0,
+        "surface_events": 0
+      },
+      "first_changes": {
+        "pose": [],
+        "status": [],
+        "surface_events": []
+      },
+      "before_processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 12.165661028120667,
+        "steady_ms": {
+          "median": 134.52616444556043,
+          "p90": 168.23917693691328
+        },
+        "max_ms": 214.3972729681991,
+        "slower_than_source_interval": 176,
+        "intervals": 180
+      },
+      "after_processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 16.55399100854993,
+        "steady_ms": {
+          "median": 135.88288697064854,
+          "p90": 199.28865788970143
+        },
+        "max_ms": 363.37819800246507,
+        "slower_than_source_interval": 176,
+        "intervals": 180
+      }
+    }
+  },
+  "results": [
+    {
+      "variant": "baseline",
+      "case": "flash-demo-dowel-ring",
+      "role": "dowel",
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "median_ms": 264.967858500313,
+      "p90_ms": 335.7272462861147,
+      "metrics": {
+        "available_after_initialization": 707,
+        "total_after_initialization": 712,
+        "max_map_points": 651,
+        "pose_sources": {
+          "observed_candidate": 662,
+          "predicted": 45,
+          "lost": 5
+        }
+      }
+    },
+    {
+      "variant": "baseline",
+      "case": "flash-demo-dowel-ring",
+      "role": "ring",
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "median_ms": 264.967858500313,
+      "p90_ms": 335.7272462861147,
+      "metrics": {
+        "available_after_initialization": 712,
+        "total_after_initialization": 712,
+        "max_map_points": 655,
+        "pose_sources": {
+          "observed_candidate": 712,
+          "predicted": 0,
+          "lost": 0
+        }
+      }
+    },
+    {
+      "variant": "baseline",
+      "case": "flash-demo-gamepad-cube",
+      "role": "gamepad",
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "median_ms": 220.7387590315193,
+      "p90_ms": 278.3882728544995,
+      "metrics": {
+        "available_after_initialization": 618,
+        "total_after_initialization": 627,
+        "max_map_points": 671,
+        "pose_sources": {
+          "observed_candidate": 532,
+          "predicted": 86,
+          "lost": 9
+        }
+      },
+      "stationary": {
+        "available": 193,
+        "total": 193,
+        "max_shift_mm": 1.4937525859878618,
+        "max_rotation_deg": 4.926434887006544
+      }
+    },
+    {
+      "variant": "baseline",
+      "case": "flash-demo-gamepad-cube",
+      "role": "cube",
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "median_ms": 220.7387590315193,
+      "p90_ms": 278.3882728544995,
+      "metrics": {
+        "available_after_initialization": 625,
+        "total_after_initialization": 627,
+        "max_map_points": 317,
+        "pose_sources": {
+          "observed_candidate": 517,
+          "predicted": 108,
+          "lost": 2
+        }
+      }
+    },
+    {
+      "variant": "baseline",
+      "case": "dexycb-tomato-can-20201002_105506",
+      "role": "object",
+      "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+      "median_ms": 260.53686800878495,
+      "p90_ms": 408.4120736224577,
+      "metrics": {
+        "available_after_initialization": 60,
+        "total_after_initialization": 67,
+        "pose_error": {
+          "available": 60,
+          "total": 67,
+          "cloud_mm_median": 7.262445196361377,
+          "cloud_mm_p90": 62.21371026929515,
+          "angle_deg_median": 7.332924024091227,
+          "angle_deg_p90": 114.98948052416095,
+          "center_mm_median": 6.508325902361497,
+          "within_10mm_10deg": 31,
+          "within_20mm_20deg": 32,
+          "final_cloud_mm": 59.936156553818414,
+          "final_angle_deg": 114.95450215330295
+        },
+        "max_map_points": 1808,
+        "pose_sources": {
+          "observed_candidate": 52,
+          "predicted": 8,
+          "lost": 7
+        }
+      },
+      "partial_to_labelled_full_mesh": {
+        "per_frame": [
+          {
+            "median_mm": 2.6447632118871036,
+            "p90_mm": 4.400550038400972
+          },
+          {
+            "median_mm": 2.5631134989930153,
+            "p90_mm": 4.390498948149894
+          },
+          {
+            "median_mm": 2.4747375550620085,
+            "p90_mm": 4.333234302819688
+          },
+          {
+            "median_mm": 2.5166821562174686,
+            "p90_mm": 4.3422511192393625
+          },
+          {
+            "median_mm": 2.5462788279383552,
+            "p90_mm": 4.358798842237498
+          },
+          {
+            "median_mm": 2.746454427806372,
+            "p90_mm": 4.548428042594013
+          },
+          {
+            "median_mm": 2.498260133250606,
+            "p90_mm": 4.343310684503145
+          },
+          {
+            "median_mm": 2.525345474239391,
+            "p90_mm": 4.317501817819313
+          },
+          {
+            "median_mm": 2.5171172183832757,
+            "p90_mm": 4.344032498329078
+          },
+          {
+            "median_mm": 2.4928254809058354,
+            "p90_mm": 4.340173813418853
+          },
+          {
+            "median_mm": 2.4851877544500898,
+            "p90_mm": 4.255545918549061
+          },
+          {
+            "median_mm": 2.5035659870236873,
+            "p90_mm": 4.315390416979302
+          },
+          {
+            "median_mm": 2.415338887295882,
+            "p90_mm": 4.186463034187474
+          },
+          {
+            "median_mm": 2.322008280807758,
+            "p90_mm": 4.059604133505609
+          },
+          {
+            "median_mm": 2.636560465791474,
+            "p90_mm": 4.438305069541681
+          },
+          {
+            "median_mm": 2.3880173143991352,
+            "p90_mm": 4.257663668010806
+          },
+          {
+            "median_mm": 2.354886116348519,
+            "p90_mm": 4.177496085608065
+          },
+          {
+            "median_mm": 2.2168109070682758,
+            "p90_mm": 3.985241191389696
+          },
+          {
+            "median_mm": 2.385848310712872,
+            "p90_mm": 3.9546371930216364
+          },
+          {
+            "median_mm": 2.5442849630488262,
+            "p90_mm": 4.233426466496853
+          },
+          {
+            "median_mm": 2.3013778221479706,
+            "p90_mm": 4.255639710381881
+          },
+          {
+            "median_mm": 2.446041374442277,
+            "p90_mm": 4.220353625057076
+          },
+          {
+            "median_mm": 2.4563249489112398,
+            "p90_mm": 4.043618719235165
+          },
+          {
+            "median_mm": 2.8637274799669683,
+            "p90_mm": 4.550314931700856
+          },
+          {
+            "median_mm": 3.2497131475984973,
+            "p90_mm": 5.395108402624453
+          },
+          {
+            "median_mm": 2.7681305639461655,
+            "p90_mm": 5.137876409394951
+          },
+          {
+            "median_mm": 2.5376851812059753,
+            "p90_mm": 4.77193706634599
+          },
+          {
+            "median_mm": 2.8989391517023257,
+            "p90_mm": 5.273249406869068
+          },
+          {
+            "median_mm": 2.337607756023874,
+            "p90_mm": 4.320197886763769
+          },
+          {
+            "median_mm": 2.0338537301257222,
+            "p90_mm": 3.7614356864188676
+          },
+          {
+            "median_mm": 1.7452296827197586,
+            "p90_mm": 3.8833678396853766
+          },
+          {
+            "median_mm": 2.047909254980769,
+            "p90_mm": 5.0835546358091
+          },
+          {
+            "median_mm": 2.584257763848588,
+            "p90_mm": 5.447006399995211
+          },
+          {
+            "median_mm": 2.6374259202277903,
+            "p90_mm": 5.448033581317525
+          },
+          {
+            "median_mm": 2.394512451913339,
+            "p90_mm": 5.6137796461652565
+          },
+          {
+            "median_mm": 2.4260675013818833,
+            "p90_mm": 6.1576078020869245
+          },
+          {
+            "median_mm": 2.7919218870381113,
+            "p90_mm": 8.2872507512587
+          },
+          {
+            "median_mm": 3.5011788562673782,
+            "p90_mm": 11.040957377236563
+          },
+          {
+            "median_mm": 7.942167756260795,
+            "p90_mm": 13.895968548155492
+          },
+          {
+            "median_mm": 11.577048846090635,
+            "p90_mm": 21.217904356832204
+          },
+          {
+            "median_mm": 16.73514929444145,
+            "p90_mm": 22.816860896699744
+          },
+          {
+            "median_mm": 18.906693266992527,
+            "p90_mm": 25.380327494078657
+          },
+          {
+            "median_mm": 17.13261541792749,
+            "p90_mm": 22.721539589474844
+          },
+          {
+            "median_mm": 18.764215836270033,
+            "p90_mm": 24.83533719305051
+          },
+          {
+            "median_mm": 17.980615949422933,
+            "p90_mm": 22.84240163655821
+          },
+          {
+            "median_mm": 19.21462115379671,
+            "p90_mm": 23.75585719356169
+          },
+          {
+            "median_mm": 16.683432074341066,
+            "p90_mm": 20.729237442581223
+          },
+          {
+            "median_mm": 14.89573521928292,
+            "p90_mm": 19.225155672023394
+          },
+          null,
+          {
+            "median_mm": 12.455656951601384,
+            "p90_mm": 16.495073134269724
+          },
+          {
+            "median_mm": 8.816360984711027,
+            "p90_mm": 14.25751941720827
+          },
+          {
+            "median_mm": 9.199429640391365,
+            "p90_mm": 13.47458299032144
+          },
+          {
+            "median_mm": 7.565124714510457,
+            "p90_mm": 12.426125373621048
+          },
+          null,
+          null,
+          {
+            "median_mm": 5.832092747140351,
+            "p90_mm": 11.755390241882028
+          },
+          {
+            "median_mm": 6.124068583333563,
+            "p90_mm": 12.440321895009461
+          },
+          null,
+          {
+            "median_mm": 6.502303108091052,
+            "p90_mm": 13.181851492688336
+          },
+          null,
+          null,
+          {
+            "median_mm": 6.838543423615197,
+            "p90_mm": 12.55353300949672
+          },
+          {
+            "median_mm": 6.7676624028401156,
+            "p90_mm": 13.093260314367084
+          },
+          {
+            "median_mm": 6.982881204945653,
+            "p90_mm": 13.20672067157533
+          },
+          {
+            "median_mm": 6.353184949365171,
+            "p90_mm": 12.649058560826235
+          },
+          {
+            "median_mm": 6.3802154406229,
+            "p90_mm": 12.160442275201133
+          },
+          null,
+          {
+            "median_mm": 6.996042870495671,
+            "p90_mm": 12.258080883609225
+          }
+        ],
+        "median_frame_error_mm": 2.6447632118871036,
+        "p90_frame_error_mm": 16.683432074341066
+      }
+    },
+    {
+      "variant": "baseline",
+      "case": "ycb-mustard_easy_00_02",
+      "role": "object",
+      "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+      "median_ms": 135.88288697064854,
+      "p90_ms": 199.28865788970143,
+      "metrics": {
+        "available_after_initialization": 169,
+        "total_after_initialization": 180,
+        "pose_error": {
+          "available": 169,
+          "total": 180,
+          "cloud_mm_median": 5.668841816165675,
+          "cloud_mm_p90": 11.823382518537537,
+          "angle_deg_median": 3.109787119239104,
+          "angle_deg_p90": 8.36714799868929,
+          "center_mm_median": 5.273480551053826,
+          "within_10mm_10deg": 121,
+          "within_20mm_20deg": 169,
+          "final_cloud_mm": null,
+          "final_angle_deg": null
+        },
+        "max_map_points": 385,
+        "pose_sources": {
+          "observed_candidate": 161,
+          "predicted": 8,
+          "lost": 11
+        }
+      }
+    },
+    {
+      "variant": "small_gicp",
+      "case": "flash-demo-dowel-ring",
+      "role": "dowel",
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "median_ms": 98.50056655704975,
+      "p90_ms": 105.19392049172893,
+      "metrics": {
+        "available_after_initialization": 689,
+        "total_after_initialization": 712,
+        "max_map_points": 629,
+        "pose_sources": {
+          "observed_candidate": 637,
+          "predicted": 52,
+          "lost": 23
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "small_gicp",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "1.0.1",
+        "refinements": 9722,
+        "mean_per_refinement": {
+          "prepare_ms": 0.31413487224575043,
+          "solve_ms": 0.7611583554598038,
+          "validation_score_ms": 1.4610555585465346,
+          "inliers": 412.2277309195639,
+          "levels": 1.9641020366179798
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "small_gicp",
+      "case": "flash-demo-dowel-ring",
+      "role": "ring",
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "median_ms": 98.50056655704975,
+      "p90_ms": 105.19392049172893,
+      "metrics": {
+        "available_after_initialization": 712,
+        "total_after_initialization": 712,
+        "max_map_points": 612,
+        "pose_sources": {
+          "observed_candidate": 699,
+          "predicted": 13,
+          "lost": 0
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "small_gicp",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "1.0.1",
+        "refinements": 9722,
+        "mean_per_refinement": {
+          "prepare_ms": 0.31413487224575043,
+          "solve_ms": 0.7611583554598038,
+          "validation_score_ms": 1.4610555585465346,
+          "inliers": 412.2277309195639,
+          "levels": 1.9641020366179798
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "small_gicp",
+      "case": "flash-demo-gamepad-cube",
+      "role": "gamepad",
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "median_ms": 90.93012800440192,
+      "p90_ms": 109.47960565099493,
+      "metrics": {
+        "available_after_initialization": 567,
+        "total_after_initialization": 627,
+        "max_map_points": 658,
+        "pose_sources": {
+          "observed_candidate": 466,
+          "predicted": 101,
+          "lost": 60
+        }
+      },
+      "stationary": {
+        "available": 193,
+        "total": 193,
+        "max_shift_mm": 1.4753664217649278,
+        "max_rotation_deg": 2.4610452583128857
+      },
+      "library": {
+        "config": {
+          "backend": "small_gicp",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "1.0.1",
+        "refinements": 9722,
+        "mean_per_refinement": {
+          "prepare_ms": 0.31413487224575043,
+          "solve_ms": 0.7611583554598038,
+          "validation_score_ms": 1.4610555585465346,
+          "inliers": 412.2277309195639,
+          "levels": 1.9641020366179798
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "small_gicp",
+      "case": "flash-demo-gamepad-cube",
+      "role": "cube",
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "median_ms": 90.93012800440192,
+      "p90_ms": 109.47960565099493,
+      "metrics": {
+        "available_after_initialization": 542,
+        "total_after_initialization": 627,
+        "max_map_points": 319,
+        "pose_sources": {
+          "observed_candidate": 430,
+          "predicted": 112,
+          "lost": 85
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "small_gicp",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "1.0.1",
+        "refinements": 9722,
+        "mean_per_refinement": {
+          "prepare_ms": 0.31413487224575043,
+          "solve_ms": 0.7611583554598038,
+          "validation_score_ms": 1.4610555585465346,
+          "inliers": 412.2277309195639,
+          "levels": 1.9641020366179798
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "small_gicp",
+      "case": "dexycb-tomato-can-20201002_105506",
+      "role": "object",
+      "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+      "median_ms": 93.09226897312328,
+      "p90_ms": 104.14815661497414,
+      "metrics": {
+        "available_after_initialization": 67,
+        "total_after_initialization": 67,
+        "pose_error": {
+          "available": 67,
+          "total": 67,
+          "cloud_mm_median": 14.645973030352154,
+          "cloud_mm_p90": 63.8347783430741,
+          "angle_deg_median": 19.762196060948693,
+          "angle_deg_p90": 99.3747560246109,
+          "center_mm_median": 13.149741707694465,
+          "within_10mm_10deg": 31,
+          "within_20mm_20deg": 34,
+          "final_cloud_mm": 59.6117967849392,
+          "final_angle_deg": 93.28807766897837
+        },
+        "max_map_points": 1826,
+        "pose_sources": {
+          "observed_candidate": 53,
+          "predicted": 14,
+          "lost": 0
+        }
+      },
+      "partial_to_labelled_full_mesh": {
+        "per_frame": [
+          {
+            "median_mm": 2.6447632118871036,
+            "p90_mm": 4.400550038400972
+          },
+          {
+            "median_mm": 2.655881682617987,
+            "p90_mm": 4.421409769803355
+          },
+          {
+            "median_mm": 2.5074443215330007,
+            "p90_mm": 4.522227316104262
+          },
+          {
+            "median_mm": 2.6846258558417118,
+            "p90_mm": 4.453354562429365
+          },
+          {
+            "median_mm": 2.6659202505302,
+            "p90_mm": 4.481546181200291
+          },
+          {
+            "median_mm": 2.915904991238992,
+            "p90_mm": 4.695924188532278
+          },
+          {
+            "median_mm": 2.612564853018005,
+            "p90_mm": 4.457175164332808
+          },
+          {
+            "median_mm": 2.610062634529116,
+            "p90_mm": 4.398354699744413
+          },
+          {
+            "median_mm": 2.630810973789147,
+            "p90_mm": 4.485911903632648
+          },
+          {
+            "median_mm": 2.627735282583201,
+            "p90_mm": 4.539144688506981
+          },
+          {
+            "median_mm": 2.624233780035381,
+            "p90_mm": 4.38728861574256
+          },
+          {
+            "median_mm": 2.6113869578797595,
+            "p90_mm": 4.427381414601217
+          },
+          {
+            "median_mm": 2.4720080652821186,
+            "p90_mm": 4.241720972129833
+          },
+          {
+            "median_mm": 2.3758368221695076,
+            "p90_mm": 4.073052283428339
+          },
+          {
+            "median_mm": 2.7066310366578192,
+            "p90_mm": 4.5207131324055645
+          },
+          {
+            "median_mm": 2.479950331566973,
+            "p90_mm": 4.4502400621719715
+          },
+          {
+            "median_mm": 2.4963803940422506,
+            "p90_mm": 4.4127234168492215
+          },
+          {
+            "median_mm": 2.3500045902475857,
+            "p90_mm": 4.259979812169466
+          },
+          {
+            "median_mm": 2.4969596174441913,
+            "p90_mm": 4.218643528981579
+          },
+          {
+            "median_mm": 2.570937279204416,
+            "p90_mm": 4.459743608580453
+          },
+          {
+            "median_mm": 2.3056419446522316,
+            "p90_mm": 4.426679770839199
+          },
+          {
+            "median_mm": 2.5847307082815303,
+            "p90_mm": 4.450071462349912
+          },
+          {
+            "median_mm": 2.7502188125412306,
+            "p90_mm": 4.399109580090581
+          },
+          {
+            "median_mm": 3.1079593163357195,
+            "p90_mm": 4.891343904231907
+          },
+          {
+            "median_mm": 3.4198305498493475,
+            "p90_mm": 5.539769279564555
+          },
+          {
+            "median_mm": 2.948444017847644,
+            "p90_mm": 5.298897910354554
+          },
+          {
+            "median_mm": 2.5332644787570158,
+            "p90_mm": 5.444609517879684
+          },
+          {
+            "median_mm": 2.8763018386973367,
+            "p90_mm": 5.637368164701318
+          },
+          {
+            "median_mm": 2.3554738970054747,
+            "p90_mm": 4.774031015784257
+          },
+          {
+            "median_mm": 2.0920935836657986,
+            "p90_mm": 3.9823827364848734
+          },
+          {
+            "median_mm": 1.5035534004289193,
+            "p90_mm": 4.746265699500093
+          },
+          {
+            "median_mm": 1.7201524215193376,
+            "p90_mm": 6.173730260300101
+          },
+          {
+            "median_mm": 2.742895429321179,
+            "p90_mm": 6.774097625136994
+          },
+          {
+            "median_mm": 3.1236191365520845,
+            "p90_mm": 7.059302897603426
+          },
+          {
+            "median_mm": 1.9367555193105752,
+            "p90_mm": 6.634924885068477
+          },
+          {
+            "median_mm": 1.8462847646490455,
+            "p90_mm": 6.8978541174526145
+          },
+          {
+            "median_mm": 6.897686167366267,
+            "p90_mm": 11.938151719388838
+          },
+          {
+            "median_mm": 6.72971840469531,
+            "p90_mm": 12.73930937058465
+          },
+          {
+            "median_mm": 10.199891521743407,
+            "p90_mm": 14.427009255876563
+          },
+          {
+            "median_mm": 12.976220466744442,
+            "p90_mm": 23.836351494605594
+          },
+          {
+            "median_mm": 17.247007114125815,
+            "p90_mm": 24.452697280181336
+          },
+          {
+            "median_mm": 19.2947487987734,
+            "p90_mm": 27.51503259958005
+          },
+          {
+            "median_mm": 17.8388574011971,
+            "p90_mm": 25.047371632195066
+          },
+          {
+            "median_mm": 20.397930634056937,
+            "p90_mm": 27.83548328598414
+          },
+          {
+            "median_mm": 18.16258584906729,
+            "p90_mm": 23.638046498563074
+          },
+          {
+            "median_mm": 18.71624358972743,
+            "p90_mm": 23.00802622831204
+          },
+          {
+            "median_mm": 16.723302623239107,
+            "p90_mm": 21.539859547257088
+          },
+          {
+            "median_mm": 15.14514838478818,
+            "p90_mm": 19.31605694432183
+          },
+          {
+            "median_mm": 13.2909494031693,
+            "p90_mm": 17.00388323393879
+          },
+          {
+            "median_mm": 12.444451285048215,
+            "p90_mm": 15.590134068113416
+          },
+          {
+            "median_mm": 10.427765456852288,
+            "p90_mm": 14.584613279583165
+          },
+          {
+            "median_mm": 10.36806340548635,
+            "p90_mm": 14.145771217349234
+          },
+          {
+            "median_mm": 9.527346185923237,
+            "p90_mm": 13.225805563154417
+          },
+          {
+            "median_mm": 9.317863874378801,
+            "p90_mm": 13.835899325931951
+          },
+          {
+            "median_mm": 9.177391559333984,
+            "p90_mm": 12.94871703108381
+          },
+          {
+            "median_mm": 8.869235551005373,
+            "p90_mm": 11.869413028321492
+          },
+          {
+            "median_mm": 9.272456785570181,
+            "p90_mm": 12.733954016042732
+          },
+          {
+            "median_mm": 9.858277930942387,
+            "p90_mm": 13.169542531192503
+          },
+          {
+            "median_mm": 10.012694035490826,
+            "p90_mm": 13.944791458119221
+          },
+          {
+            "median_mm": 10.438008466615356,
+            "p90_mm": 14.043576581350845
+          },
+          {
+            "median_mm": 9.622285035894311,
+            "p90_mm": 13.133822411687106
+          },
+          {
+            "median_mm": 9.743154409273716,
+            "p90_mm": 13.591496863805578
+          },
+          {
+            "median_mm": 9.761770721174239,
+            "p90_mm": 14.006830899521034
+          },
+          {
+            "median_mm": 9.828317917036221,
+            "p90_mm": 14.551523762598887
+          },
+          {
+            "median_mm": 9.525578556828565,
+            "p90_mm": 14.146650732552922
+          },
+          {
+            "median_mm": 9.6750948145547,
+            "p90_mm": 13.93707932466998
+          },
+          {
+            "median_mm": 9.811185378063412,
+            "p90_mm": 13.951677625346198
+          },
+          {
+            "median_mm": 9.89329696723206,
+            "p90_mm": 14.204560098784654
+          }
+        ],
+        "median_frame_error_mm": 3.115789226443902,
+        "p90_frame_error_mm": 15.618594656323465
+      },
+      "library": {
+        "config": {
+          "backend": "small_gicp",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "1.0.1",
+        "refinements": 9722,
+        "mean_per_refinement": {
+          "prepare_ms": 0.31413487224575043,
+          "solve_ms": 0.7611583554598038,
+          "validation_score_ms": 1.4610555585465346,
+          "inliers": 412.2277309195639,
+          "levels": 1.9641020366179798
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "small_gicp",
+      "case": "ycb-mustard_easy_00_02",
+      "role": "object",
+      "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+      "median_ms": 69.7924850101117,
+      "p90_ms": 73.1438212969806,
+      "metrics": {
+        "available_after_initialization": 173,
+        "total_after_initialization": 180,
+        "pose_error": {
+          "available": 173,
+          "total": 180,
+          "cloud_mm_median": 5.403747113522564,
+          "cloud_mm_p90": 9.828146083933243,
+          "angle_deg_median": 2.853655325088822,
+          "angle_deg_p90": 6.749060892532862,
+          "center_mm_median": 4.892038555528641,
+          "within_10mm_10deg": 164,
+          "within_20mm_20deg": 173,
+          "final_cloud_mm": 5.426656265239101,
+          "final_angle_deg": 4.118453351347531
+        },
+        "max_map_points": 385,
+        "pose_sources": {
+          "observed_candidate": 173,
+          "predicted": 0,
+          "lost": 7
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "small_gicp",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "1.0.1",
+        "refinements": 9722,
+        "mean_per_refinement": {
+          "prepare_ms": 0.31413487224575043,
+          "solve_ms": 0.7611583554598038,
+          "validation_score_ms": 1.4610555585465346,
+          "inliers": 412.2277309195639,
+          "levels": 1.9641020366179798
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_plane",
+      "case": "flash-demo-dowel-ring",
+      "role": "dowel",
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "median_ms": 102.08249150309712,
+      "p90_ms": 112.42238442064263,
+      "metrics": {
+        "available_after_initialization": 513,
+        "total_after_initialization": 712,
+        "max_map_points": 690,
+        "pose_sources": {
+          "observed_candidate": 483,
+          "predicted": 30,
+          "lost": 199
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_plane",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 13933,
+        "mean_per_refinement": {
+          "prepare_ms": 0.2697562086988816,
+          "solve_ms": 0.3360297870677202,
+          "validation_score_ms": 1.3700664569405192,
+          "inliers": 63.0296418574607,
+          "levels": 1.972583076150147
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_plane",
+      "case": "flash-demo-dowel-ring",
+      "role": "ring",
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "median_ms": 102.08249150309712,
+      "p90_ms": 112.42238442064263,
+      "metrics": {
+        "available_after_initialization": 493,
+        "total_after_initialization": 712,
+        "max_map_points": 618,
+        "pose_sources": {
+          "observed_candidate": 492,
+          "predicted": 1,
+          "lost": 219
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_plane",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 13933,
+        "mean_per_refinement": {
+          "prepare_ms": 0.2697562086988816,
+          "solve_ms": 0.3360297870677202,
+          "validation_score_ms": 1.3700664569405192,
+          "inliers": 63.0296418574607,
+          "levels": 1.972583076150147
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_plane",
+      "case": "flash-demo-gamepad-cube",
+      "role": "gamepad",
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "median_ms": 85.30678600072861,
+      "p90_ms": 109.1182101983577,
+      "metrics": {
+        "available_after_initialization": 222,
+        "total_after_initialization": 627,
+        "max_map_points": 682,
+        "pose_sources": {
+          "observed_candidate": 195,
+          "predicted": 27,
+          "lost": 405
+        }
+      },
+      "stationary": {
+        "available": 193,
+        "total": 193,
+        "max_shift_mm": 2.2898666273001114,
+        "max_rotation_deg": 1.3415652477772702
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_plane",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 13933,
+        "mean_per_refinement": {
+          "prepare_ms": 0.2697562086988816,
+          "solve_ms": 0.3360297870677202,
+          "validation_score_ms": 1.3700664569405192,
+          "inliers": 63.0296418574607,
+          "levels": 1.972583076150147
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_plane",
+      "case": "flash-demo-gamepad-cube",
+      "role": "cube",
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "median_ms": 85.30678600072861,
+      "p90_ms": 109.1182101983577,
+      "metrics": {
+        "available_after_initialization": 446,
+        "total_after_initialization": 627,
+        "max_map_points": 341,
+        "pose_sources": {
+          "observed_candidate": 341,
+          "predicted": 105,
+          "lost": 181
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_plane",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 13933,
+        "mean_per_refinement": {
+          "prepare_ms": 0.2697562086988816,
+          "solve_ms": 0.3360297870677202,
+          "validation_score_ms": 1.3700664569405192,
+          "inliers": 63.0296418574607,
+          "levels": 1.972583076150147
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_plane",
+      "case": "dexycb-tomato-can-20201002_105506",
+      "role": "object",
+      "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+      "median_ms": 93.33262901054695,
+      "p90_ms": 116.09251836780459,
+      "metrics": {
+        "available_after_initialization": 35,
+        "total_after_initialization": 67,
+        "pose_error": {
+          "available": 35,
+          "total": 67,
+          "cloud_mm_median": 0.9093580423604971,
+          "cloud_mm_p90": 6.210441513535348,
+          "angle_deg_median": 2.0742325680136227,
+          "angle_deg_p90": 9.479374151037916,
+          "center_mm_median": 0.39698935719058603,
+          "within_10mm_10deg": 31,
+          "within_20mm_20deg": 35,
+          "final_cloud_mm": null,
+          "final_angle_deg": null
+        },
+        "max_map_points": 1779,
+        "pose_sources": {
+          "observed_candidate": 34,
+          "predicted": 1,
+          "lost": 32
+        }
+      },
+      "partial_to_labelled_full_mesh": {
+        "per_frame": [
+          {
+            "median_mm": 2.6447632118871036,
+            "p90_mm": 4.400550038400972
+          },
+          {
+            "median_mm": 2.611954303669485,
+            "p90_mm": 4.442635753595013
+          },
+          {
+            "median_mm": 2.554862586201871,
+            "p90_mm": 4.290913128486273
+          },
+          {
+            "median_mm": 2.704325542765832,
+            "p90_mm": 4.380571622786482
+          },
+          {
+            "median_mm": 2.6723174664565983,
+            "p90_mm": 4.396176694274304
+          },
+          {
+            "median_mm": 2.924420560710313,
+            "p90_mm": 4.607876733795343
+          },
+          {
+            "median_mm": 2.7345196479596314,
+            "p90_mm": 4.423697645426737
+          },
+          {
+            "median_mm": 2.6721210722619393,
+            "p90_mm": 4.365725948668185
+          },
+          {
+            "median_mm": 2.6787880878903754,
+            "p90_mm": 4.4339384974758875
+          },
+          {
+            "median_mm": 2.640718042480832,
+            "p90_mm": 4.514641385350292
+          },
+          {
+            "median_mm": 2.6428199321251182,
+            "p90_mm": 4.3489695935326065
+          },
+          {
+            "median_mm": 2.6708594269032884,
+            "p90_mm": 4.375356274153644
+          },
+          {
+            "median_mm": 2.486347998563038,
+            "p90_mm": 4.2826377210302695
+          },
+          {
+            "median_mm": 2.4655806282984902,
+            "p90_mm": 4.103885004575008
+          },
+          {
+            "median_mm": 2.810122929551976,
+            "p90_mm": 4.5392047996240565
+          },
+          {
+            "median_mm": 2.5487086611041825,
+            "p90_mm": 4.380627708625752
+          },
+          {
+            "median_mm": 2.5199546152164762,
+            "p90_mm": 4.348536389051984
+          },
+          {
+            "median_mm": 2.358024176943091,
+            "p90_mm": 4.214292856396657
+          },
+          {
+            "median_mm": 2.563552982926933,
+            "p90_mm": 4.193537861430137
+          },
+          {
+            "median_mm": 2.726161861195502,
+            "p90_mm": 4.482244003456414
+          },
+          {
+            "median_mm": 2.5013887171916744,
+            "p90_mm": 4.394460865518494
+          },
+          {
+            "median_mm": 2.738551620974286,
+            "p90_mm": 4.474264370896356
+          },
+          {
+            "median_mm": 2.8434369999041684,
+            "p90_mm": 4.548546551810161
+          },
+          {
+            "median_mm": 3.264760401633162,
+            "p90_mm": 5.091134507047944
+          },
+          {
+            "median_mm": 3.635952607950325,
+            "p90_mm": 5.731518973959527
+          },
+          {
+            "median_mm": 3.1545204541423257,
+            "p90_mm": 5.421274250913645
+          },
+          {
+            "median_mm": 2.6946973077878806,
+            "p90_mm": 5.5197532408729675
+          },
+          {
+            "median_mm": 3.3312581075500503,
+            "p90_mm": 5.689587094439299
+          },
+          {
+            "median_mm": 2.7500726784332534,
+            "p90_mm": 4.883421216568831
+          },
+          {
+            "median_mm": 2.24833692207849,
+            "p90_mm": 4.330890287319671
+          },
+          {
+            "median_mm": 2.0176479472851976,
+            "p90_mm": 4.409195734764967
+          },
+          {
+            "median_mm": 2.4002162708764088,
+            "p90_mm": 5.429895596803684
+          },
+          {
+            "median_mm": 2.940436829474302,
+            "p90_mm": 6.8324271142840365
+          },
+          {
+            "median_mm": 3.2683514838483783,
+            "p90_mm": 6.925826718729815
+          },
+          {
+            "median_mm": 2.188213499841456,
+            "p90_mm": 6.3691076695052065
+          },
+          {
+            "median_mm": 1.8965442905265983,
+            "p90_mm": 6.510769736357708
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "median_frame_error_mm": 2.6714902495826136,
+        "p90_frame_error_mm": 3.209640427887744
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_plane",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 13933,
+        "mean_per_refinement": {
+          "prepare_ms": 0.2697562086988816,
+          "solve_ms": 0.3360297870677202,
+          "validation_score_ms": 1.3700664569405192,
+          "inliers": 63.0296418574607,
+          "levels": 1.972583076150147
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_plane",
+      "case": "ycb-mustard_easy_00_02",
+      "role": "object",
+      "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+      "median_ms": 70.65970555413514,
+      "p90_ms": 74.4521452987101,
+      "metrics": {
+        "available_after_initialization": 168,
+        "total_after_initialization": 180,
+        "pose_error": {
+          "available": 168,
+          "total": 180,
+          "cloud_mm_median": 4.7208220024786565,
+          "cloud_mm_p90": 9.811060091827333,
+          "angle_deg_median": 1.8961046772032653,
+          "angle_deg_p90": 6.552744123656285,
+          "center_mm_median": 4.375225561386404,
+          "within_10mm_10deg": 166,
+          "within_20mm_20deg": 168,
+          "final_cloud_mm": null,
+          "final_angle_deg": null
+        },
+        "max_map_points": 385,
+        "pose_sources": {
+          "observed_candidate": 168,
+          "predicted": 0,
+          "lost": 12
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_plane",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 13933,
+        "mean_per_refinement": {
+          "prepare_ms": 0.2697562086988816,
+          "solve_ms": 0.3360297870677202,
+          "validation_score_ms": 1.3700664569405192,
+          "inliers": 63.0296418574607,
+          "levels": 1.972583076150147
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_color",
+      "case": "flash-demo-dowel-ring",
+      "role": "dowel",
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "median_ms": 102.31506847776473,
+      "p90_ms": 113.04629765218124,
+      "metrics": {
+        "available_after_initialization": 669,
+        "total_after_initialization": 712,
+        "max_map_points": 749,
+        "pose_sources": {
+          "observed_candidate": 597,
+          "predicted": 72,
+          "lost": 43
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_color",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 10327,
+        "refinements_with_library_solve": 10214,
+        "mean_per_refinement": {
+          "prepare_ms": 0.5356907616819441,
+          "solve_ms": 0.8790493857675455,
+          "validation_score_ms": 1.2805954844151923,
+          "inliers": 112.47496852909848,
+          "levels": 1.9640747554953035
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_color",
+      "case": "flash-demo-dowel-ring",
+      "role": "ring",
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "median_ms": 102.31506847776473,
+      "p90_ms": 113.04629765218124,
+      "metrics": {
+        "available_after_initialization": 712,
+        "total_after_initialization": 712,
+        "max_map_points": 691,
+        "pose_sources": {
+          "observed_candidate": 711,
+          "predicted": 1,
+          "lost": 0
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_color",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 10327,
+        "refinements_with_library_solve": 10214,
+        "mean_per_refinement": {
+          "prepare_ms": 0.5356907616819441,
+          "solve_ms": 0.8790493857675455,
+          "validation_score_ms": 1.2805954844151923,
+          "inliers": 112.47496852909848,
+          "levels": 1.9640747554953035
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_color",
+      "case": "flash-demo-gamepad-cube",
+      "role": "gamepad",
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "median_ms": 88.00770394736901,
+      "p90_ms": 110.83001957740635,
+      "metrics": {
+        "available_after_initialization": 474,
+        "total_after_initialization": 627,
+        "max_map_points": 709,
+        "pose_sources": {
+          "observed_candidate": 312,
+          "predicted": 162,
+          "lost": 153
+        }
+      },
+      "stationary": {
+        "available": 193,
+        "total": 193,
+        "max_shift_mm": 1.9106857354346949,
+        "max_rotation_deg": 1.6033263866607337
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_color",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 10327,
+        "refinements_with_library_solve": 10214,
+        "mean_per_refinement": {
+          "prepare_ms": 0.5356907616819441,
+          "solve_ms": 0.8790493857675455,
+          "validation_score_ms": 1.2805954844151923,
+          "inliers": 112.47496852909848,
+          "levels": 1.9640747554953035
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_color",
+      "case": "flash-demo-gamepad-cube",
+      "role": "cube",
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "median_ms": 88.00770394736901,
+      "p90_ms": 110.83001957740635,
+      "metrics": {
+        "available_after_initialization": 589,
+        "total_after_initialization": 627,
+        "max_map_points": 359,
+        "pose_sources": {
+          "observed_candidate": 483,
+          "predicted": 106,
+          "lost": 38
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_color",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 10327,
+        "refinements_with_library_solve": 10214,
+        "mean_per_refinement": {
+          "prepare_ms": 0.5356907616819441,
+          "solve_ms": 0.8790493857675455,
+          "validation_score_ms": 1.2805954844151923,
+          "inliers": 112.47496852909848,
+          "levels": 1.9640747554953035
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_color",
+      "case": "dexycb-tomato-can-20201002_105506",
+      "role": "object",
+      "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+      "median_ms": 95.26316198753193,
+      "p90_ms": 103.3035482163541,
+      "metrics": {
+        "available_after_initialization": 35,
+        "total_after_initialization": 67,
+        "pose_error": {
+          "available": 35,
+          "total": 67,
+          "cloud_mm_median": 1.0491681720330321,
+          "cloud_mm_p90": 7.934621581893709,
+          "angle_deg_median": 1.618263727743519,
+          "angle_deg_p90": 12.516419673782899,
+          "center_mm_median": 0.9535933708204485,
+          "within_10mm_10deg": 31,
+          "within_20mm_20deg": 33,
+          "final_cloud_mm": null,
+          "final_angle_deg": null
+        },
+        "max_map_points": 1842,
+        "pose_sources": {
+          "observed_candidate": 35,
+          "predicted": 0,
+          "lost": 32
+        }
+      },
+      "partial_to_labelled_full_mesh": {
+        "per_frame": [
+          {
+            "median_mm": 2.6447632118871036,
+            "p90_mm": 4.400550038400972
+          },
+          {
+            "median_mm": 2.655881682617987,
+            "p90_mm": 4.421409769803355
+          },
+          {
+            "median_mm": 2.5704286082813255,
+            "p90_mm": 4.272520064880777
+          },
+          {
+            "median_mm": 2.7125594030459634,
+            "p90_mm": 4.372592222593589
+          },
+          {
+            "median_mm": 2.6893604446917303,
+            "p90_mm": 4.439736348908953
+          },
+          {
+            "median_mm": 2.9553634094289642,
+            "p90_mm": 4.651698510925434
+          },
+          {
+            "median_mm": 2.7762130287878257,
+            "p90_mm": 4.459464526555774
+          },
+          {
+            "median_mm": 2.629475253505075,
+            "p90_mm": 4.446717525080366
+          },
+          {
+            "median_mm": 2.6668741422742515,
+            "p90_mm": 4.497948225738667
+          },
+          {
+            "median_mm": 2.6751520444868286,
+            "p90_mm": 4.551491436939849
+          },
+          {
+            "median_mm": 2.634113642966296,
+            "p90_mm": 4.430295028272515
+          },
+          {
+            "median_mm": 2.6539390679788966,
+            "p90_mm": 4.425091210902107
+          },
+          {
+            "median_mm": 2.493255334833367,
+            "p90_mm": 4.342802984010159
+          },
+          {
+            "median_mm": 2.38972684138302,
+            "p90_mm": 4.246675219988617
+          },
+          {
+            "median_mm": 2.7856500794586205,
+            "p90_mm": 4.8068765585963416
+          },
+          {
+            "median_mm": 2.562249542932183,
+            "p90_mm": 4.789877463016396
+          },
+          {
+            "median_mm": 2.52606671633425,
+            "p90_mm": 4.760307580367107
+          },
+          {
+            "median_mm": 2.33141781601197,
+            "p90_mm": 4.696904047280321
+          },
+          {
+            "median_mm": 2.5973352693362015,
+            "p90_mm": 4.702668647354688
+          },
+          {
+            "median_mm": 2.665079553863608,
+            "p90_mm": 4.880538583844177
+          },
+          {
+            "median_mm": 2.329301729016359,
+            "p90_mm": 5.005866196704756
+          },
+          {
+            "median_mm": 2.693529745733964,
+            "p90_mm": 4.895219157685998
+          },
+          {
+            "median_mm": 2.774264833792515,
+            "p90_mm": 4.853200121624477
+          },
+          {
+            "median_mm": 3.2387112528836313,
+            "p90_mm": 5.33819281282403
+          },
+          {
+            "median_mm": 3.5536457708057436,
+            "p90_mm": 5.908339115037598
+          },
+          {
+            "median_mm": 3.0199266571626384,
+            "p90_mm": 5.626052147110015
+          },
+          {
+            "median_mm": 2.922023635328731,
+            "p90_mm": 5.686969244916771
+          },
+          {
+            "median_mm": 3.5607539450001564,
+            "p90_mm": 5.771491060545729
+          },
+          {
+            "median_mm": 2.948089848312993,
+            "p90_mm": 4.959934279091451
+          },
+          {
+            "median_mm": 2.3742751093482712,
+            "p90_mm": 4.22952269695047
+          },
+          {
+            "median_mm": 1.8499119180917034,
+            "p90_mm": 4.68248622173877
+          },
+          {
+            "median_mm": 2.0393677281966536,
+            "p90_mm": 6.068014170302948
+          },
+          {
+            "median_mm": 3.300508461905921,
+            "p90_mm": 6.713425582527676
+          },
+          {
+            "median_mm": 3.5919295538786535,
+            "p90_mm": 6.883682638621949
+          },
+          {
+            "median_mm": 2.362526763925772,
+            "p90_mm": 6.365949756074551
+          },
+          {
+            "median_mm": 1.8188657776374217,
+            "p90_mm": 6.520014202434735
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "median_frame_error_mm": 2.6604806182407974,
+        "p90_frame_error_mm": 3.269609857394776
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_color",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 10327,
+        "refinements_with_library_solve": 10214,
+        "mean_per_refinement": {
+          "prepare_ms": 0.5356907616819441,
+          "solve_ms": 0.8790493857675455,
+          "validation_score_ms": 1.2805954844151923,
+          "inliers": 112.47496852909848,
+          "levels": 1.9640747554953035
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    },
+    {
+      "variant": "open3d_color",
+      "case": "ycb-mustard_easy_00_02",
+      "role": "object",
+      "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+      "median_ms": 78.30939799896441,
+      "p90_ms": 81.69895015889779,
+      "metrics": {
+        "available_after_initialization": 172,
+        "total_after_initialization": 180,
+        "pose_error": {
+          "available": 172,
+          "total": 180,
+          "cloud_mm_median": 5.743690276854952,
+          "cloud_mm_p90": 10.27812066758734,
+          "angle_deg_median": 2.7958553744972514,
+          "angle_deg_p90": 7.531122901024804,
+          "center_mm_median": 5.283250316670407,
+          "within_10mm_10deg": 141,
+          "within_20mm_20deg": 172,
+          "final_cloud_mm": null,
+          "final_angle_deg": null
+        },
+        "max_map_points": 385,
+        "pose_sources": {
+          "observed_candidate": 172,
+          "predicted": 0,
+          "lost": 8
+        }
+      },
+      "library": {
+        "config": {
+          "backend": "open3d_color",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968
+        },
+        "library_version": "0.20.0",
+        "refinements": 10327,
+        "refinements_with_library_solve": 10214,
+        "mean_per_refinement": {
+          "prepare_ms": 0.5356907616819441,
+          "solve_ms": 0.8790493857675455,
+          "validation_score_ms": 1.2805954844151923,
+          "inliers": 112.47496852909848,
+          "levels": 1.9640747554953035
+        },
+        "objective_change": "Library geometry/color replaces all local solves; UFM/groups remain seeds and ranking evidence."
+      }
+    }
+  ],
+  "neural": {
+    "provenance": {
+      "upstream_commit": "07dd9be5a58c9c02213584535592766c9023cebc",
+      "checkpoint_sha256": {
+        "Desc": "daf910b6e2a79c4346a6ef8eeb18b56ffc15b552cc82af091b8b6c0a18116eef",
+        "Pose": "9e186c5f32d1ceabc1ed244e4e3fb5776525880b951bf666664c2117bc48e633"
+      },
+      "normalization": "Both raw metres and centered/shared scale: largest cloud extent becomes 1. Undo normalization on returned pose.",
+      "normalization_used_labels": false,
+      "scope": "Pair matching, not sequential tracking. Cold first call is identified; saved mask/depth cleaning precedes these clouds.",
+      "torch": "2.10.0+cu128",
+      "open3d": "0.20.0"
+    },
+    "parameters": 907607,
+    "config": {
+      "data": {
+        "dataset": "",
+        "root": "",
+        "downsample": 0.02,
+        "voxel_size_0": 0.035,
+        "voxel_size_1": 0.035,
+        "max_numPts": 30000,
+        "manual_seed": 123
+      },
+      "train": {
+        "epoch": 10,
+        "max_iter": 50000,
+        "batch_size": 1,
+        "num_workers": 0,
+        "pos_num": 512,
+        "augmentation_noise": 0.001,
+        "pretrain_model": "",
+        "all_stage": [
+          "Desc",
+          "Pose"
+        ]
+      },
+      "test": {
+        "experiment_id": "threedmatch",
+        "pose_refine": false,
+        "enable_timing": false,
+        "rte_thresh": 0.3,
+        "rre_thresh": 15.0
+      },
+      "optim": {
+        "lr": {
+          "Desc": 0.001,
+          "Pose": 0.001
+        },
+        "lr_decay": 0.5,
+        "weight_decay": 1e-06,
+        "scheduler_interval": {
+          "Desc": 2,
+          "Pose": 1
+        }
+      },
+      "patch": {
+        "des_r": 0.3,
+        "num_points_per_patch": 512,
+        "num_fps": 1013,
+        "rad_n": 3,
+        "azi_n": 20,
+        "ele_n": 7,
+        "delta": 0.8,
+        "voxel_sample": 10,
+        "num_scales": 3,
+        "is_aligned_to_global_z": false,
+        "search_radius_thresholds": [
+          5,
+          2,
+          0.5
+        ],
+        "num_points_radius_estimate": 1013
+      },
+      "match": {
+        "pose_estimator": "ransac",
+        "dist_th": 0.1,
+        "inlier_th": 0.3333333333333333,
+        "similar_th": 0.8,
+        "confidence": 0.999,
+        "iter_n": 50000,
+        "kiss_resolution": 0.3,
+        "enable_early_exit": true,
+        "early_exit_min_inliers": 50
+      },
+      "stage": "test"
+    },
+    "results": [
+      {
+        "name": "box-0",
+        "kind": "synthetic",
+        "angle": 0,
+        "cold_first_call": true,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          2730,
+          2730
+        ],
+        "voxel": 0.001,
+        "total_ms": 547.891034046188,
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 553,
+        "scales": 1,
+        "surface_median_mm": 0.0,
+        "point_error_mm": 0.0,
+        "angle_error_deg": 0.0
+      },
+      {
+        "name": "box-0",
+        "kind": "synthetic",
+        "angle": 0,
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 8.708273178633812,
+        "input_counts": [
+          2730,
+          2730
+        ],
+        "voxel": 0.001,
+        "total_ms": 80.46270400518551,
+        "pose": [
+          [
+            -1.6194169769057076e-07,
+            -0.9999999999999865,
+            0.0,
+            -0.020583335205120873
+          ],
+          [
+            0.9999999999999865,
+            -1.6194169769057076e-07,
+            0.0,
+            4.682558149169888e-09
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 440,
+        "scales": 1,
+        "surface_median_mm": 9.958990716687015e-06,
+        "point_error_mm": 55.71535843319251,
+        "angle_error_deg": 90.00000927857583
+      },
+      {
+        "name": "box-20",
+        "kind": "synthetic",
+        "angle": 20,
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          442,
+          816
+        ],
+        "voxel": 0.0046,
+        "total_ms": 27.644223999232054,
+        "pose": [
+          [
+            -0.6920056019400774,
+            0.6357288072156246,
+            -0.3420191961860472,
+            0.21252643692065024
+          ],
+          [
+            0.6765282177743425,
+            0.7364167098559561,
+            -1.1041373519882743e-18,
+            0.015568916601238452
+          ],
+          [
+            0.25186865116290763,
+            -0.2313856372403597,
+            -0.9396929655159977,
+            1.261153333815953
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 105,
+        "scales": 1,
+        "surface_median_mm": 1.0306538622010037,
+        "point_error_mm": 56.78811069973375,
+        "angle_error_deg": 179.9999461900335
+      },
+      {
+        "name": "box-20",
+        "kind": "synthetic",
+        "angle": 20,
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 7.1603337113281516,
+        "input_counts": [
+          2072,
+          2609
+        ],
+        "voxel": 0.0123,
+        "total_ms": 75.24666195968166,
+        "pose": [
+          [
+            -0.934419922561013,
+            0.09939584952317848,
+            0.3420232059650863,
+            -0.24261861754652533
+          ],
+          [
+            -0.10577616946765855,
+            -0.9943899647331191,
+            -3.288609598944836e-06,
+            0.005516315546172457
+          ],
+          [
+            0.34010411684338565,
+            -0.03618097753836161,
+            0.9396915060649155,
+            0.043381514434168045
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 159,
+        "scales": 1,
+        "surface_median_mm": 0.9343406350560803,
+        "point_error_mm": 75.1662059788778,
+        "angle_error_deg": 173.9281131646909
+      },
+      {
+        "name": "box-40",
+        "kind": "synthetic",
+        "angle": 40,
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          459,
+          932
+        ],
+        "voxel": 0.0045,
+        "total_ms": 28.177160013001412,
+        "pose": [
+          [
+            0.7289844191697468,
+            -0.23538311857005714,
+            -0.642788070906719,
+            0.38680371503915717
+          ],
+          [
+            -0.3072721452546309,
+            -0.9516216836267121,
+            -1.4417575363023793e-06,
+            0.0027421547484758873
+          ],
+          [
+            -0.6116907268860331,
+            0.1975119205103736,
+            -0.766044056107702,
+            1.158677427690793
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 84,
+        "scales": 1,
+        "surface_median_mm": 0.9925233703348829,
+        "point_error_mm": 37.10089628309792,
+        "angle_error_deg": 179.99991303335966
+      },
+      {
+        "name": "box-40",
+        "kind": "synthetic",
+        "angle": 40,
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 6.734279599268438,
+        "input_counts": [
+          2109,
+          2878
+        ],
+        "voxel": 0.0117,
+        "total_ms": 75.7256579818204,
+        "pose": [
+          [
+            -0.642372699560903,
+            -0.02310910418935983,
+            -0.7660439179070632,
+            0.5360279904413795
+          ],
+          [
+            0.03595134899670034,
+            -0.9993535412982326,
+            3.470270500927273e-18,
+            0.0018784310654495035
+          ],
+          [
+            -0.7655487021503959,
+            -0.02754031223947649,
+            0.6427882356092063,
+            0.23424948075107754
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 89,
+        "scales": 1,
+        "surface_median_mm": 1.068004505550929,
+        "point_error_mm": 83.79888441433009,
+        "angle_error_deg": 178.54318333295018
+      },
+      {
+        "name": "box-60",
+        "kind": "synthetic",
+        "angle": 60,
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          400,
+          858
+        ],
+        "voxel": 0.0048,
+        "total_ms": 26.159637956880033,
+        "pose": [
+          [
+            0.1374966880912804,
+            -0.9680484751014474,
+            0.20970648682787904,
+            -0.10385467876342665
+          ],
+          [
+            -0.9451545902345939,
+            -0.19155504748418317,
+            -0.26455521983474234,
+            0.1577522449639414
+          ],
+          [
+            0.2962726131832062,
+            -0.16182958208280265,
+            -0.9412936444279755,
+            1.271878198705683
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 78,
+        "scales": 1,
+        "surface_median_mm": 10.653607253563885,
+        "point_error_mm": 94.57596757147608,
+        "angle_error_deg": 146.53377077944032
+      },
+      {
+        "name": "box-60",
+        "kind": "synthetic",
+        "angle": 60,
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 7.134544681236289,
+        "input_counts": [
+          2142,
+          3107
+        ],
+        "voxel": 0.0127,
+        "total_ms": 76.5626230277121,
+        "pose": [
+          [
+            -0.4995016135147813,
+            0.08913280473647146,
+            0.8617154293709381,
+            -0.6047234312816802
+          ],
+          [
+            -0.04469989652975299,
+            -0.9960197503663318,
+            0.07711404625889713,
+            -0.04813558772362696
+          ],
+          [
+            0.8651589780764918,
+            0.0,
+            0.5014976995496994,
+            0.34560429335525467
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 116,
+        "scales": 1,
+        "surface_median_mm": 3.090945610554057,
+        "point_error_mm": 75.04212308859773,
+        "angle_error_deg": 177.4399465325111
+      },
+      {
+        "name": "flash-demo-dowel-ring-dowel-356-357",
+        "kind": "recorded",
+        "case": "flash-demo-dowel-ring",
+        "role": "dowel",
+        "frames": [
+          356,
+          357
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          232,
+          230
+        ],
+        "voxel": 0.0013,
+        "total_ms": 23.916594975162297,
+        "pose": [
+          [
+            0.9682144277034813,
+            -0.15594204607650108,
+            0.195557920454005,
+            -0.0776016367075903
+          ],
+          [
+            0.15136187180577731,
+            0.9877382640476342,
+            0.03824533304361982,
+            0.0009133859302990974
+          ],
+          [
+            -0.19912409635770345,
+            -0.0074296703587940355,
+            0.979946118033072,
+            -0.015472885995493124
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 69,
+        "scales": 1,
+        "surface_median_mm": 1.8889855263259825
+      },
+      {
+        "name": "flash-demo-dowel-ring-dowel-356-357",
+        "kind": "recorded",
+        "case": "flash-demo-dowel-ring",
+        "role": "dowel",
+        "frames": [
+          356,
+          357
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 10.869564315997886,
+        "input_counts": [
+          251,
+          245
+        ],
+        "voxel": 0.0042,
+        "total_ms": 43.89352397993207,
+        "pose": [
+          [
+            -0.938062240780545,
+            -0.25123790750406755,
+            0.2385764997956866,
+            -0.29116180052892254
+          ],
+          [
+            0.34638245721590644,
+            -0.6952552638618579,
+            0.6297930703059929,
+            -0.2703991284065945
+          ],
+          [
+            0.007643674172448739,
+            0.6734238129924988,
+            0.7392171144797648,
+            0.1233636410385541
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 98,
+        "scales": 3,
+        "surface_median_mm": 7.873225103041392
+      },
+      {
+        "name": "flash-demo-dowel-ring-dowel-534-535",
+        "kind": "recorded",
+        "case": "flash-demo-dowel-ring",
+        "role": "dowel",
+        "frames": [
+          534,
+          535
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          683,
+          666
+        ],
+        "voxel": 0.0012,
+        "total_ms": 38.78246899694204,
+        "pose": [
+          [
+            0.9993019388135743,
+            0.013123515455377543,
+            -0.034977255831799337,
+            0.014484331124374597
+          ],
+          [
+            -0.012600831740065266,
+            0.9998062485074046,
+            0.015122317448315714,
+            -0.0074152820568287175
+          ],
+          [
+            0.03516893690302919,
+            -0.01467101862999054,
+            0.999273689781467,
+            0.0036318002226356505
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 255,
+        "scales": 1,
+        "surface_median_mm": 0.8253500203339476
+      },
+      {
+        "name": "flash-demo-dowel-ring-dowel-534-535",
+        "kind": "recorded",
+        "case": "flash-demo-dowel-ring",
+        "role": "dowel",
+        "frames": [
+          534,
+          535
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 14.492752421330513,
+        "input_counts": [
+          807,
+          767
+        ],
+        "voxel": 0.0046,
+        "total_ms": 38.997691008262336,
+        "pose": [
+          [
+            0.9989712944880106,
+            0.04533131632503856,
+            -0.001193544799332924,
+            0.0047018899453031004
+          ],
+          [
+            -0.04533443235789478,
+            0.9989681418324169,
+            -0.002727791538230412,
+            -0.005053887407165947
+          ],
+          [
+            0.001068658849295065,
+            0.0027790941200109553,
+            0.9999955672922436,
+            0.00036289556315260985
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 177,
+        "scales": 1,
+        "surface_median_mm": 1.0667915546806495
+      },
+      {
+        "name": "flash-demo-gamepad-cube-gamepad-156-157",
+        "kind": "recorded",
+        "case": "flash-demo-gamepad-cube",
+        "role": "gamepad",
+        "frames": [
+          156,
+          157
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          1057,
+          1010
+        ],
+        "voxel": 0.0011,
+        "total_ms": 49.61646400624886,
+        "pose": [
+          [
+            0.9998753499865216,
+            -0.0019247857105536455,
+            -0.01567098239741549,
+            0.006578362755894324
+          ],
+          [
+            0.0019540145000473616,
+            0.9999963795540866,
+            0.0018500556893804032,
+            -0.0006785398545243737
+          ],
+          [
+            0.015667364700716717,
+            -0.0018804464067488924,
+            0.9998754910510839,
+            0.002236569680067191
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 347,
+        "scales": 1,
+        "surface_median_mm": 0.3443863561730186
+      },
+      {
+        "name": "flash-demo-gamepad-cube-gamepad-156-157",
+        "kind": "recorded",
+        "case": "flash-demo-gamepad-cube",
+        "role": "gamepad",
+        "frames": [
+          156,
+          157
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 19.03631590146783,
+        "input_counts": [
+          1548,
+          1456
+        ],
+        "voxel": 0.0049,
+        "total_ms": 72.78962898999453,
+        "pose": [
+          [
+            0.9999999999999807,
+            1.7417827236076988e-08,
+            -1.9581300730875384e-07,
+            8.092468598008828e-08
+          ],
+          [
+            -1.7417717157464097e-08,
+            0.9999999999998415,
+            5.625779290752142e-07,
+            -2.360146492061399e-07
+          ],
+          [
+            1.9581301699544973e-07,
+            -5.625779256335228e-07,
+            0.9999999999998228,
+            4.55111112684925e-08
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 634,
+        "scales": 1,
+        "surface_median_mm": 1.0755260058515796e-05
+      },
+      {
+        "name": "flash-demo-gamepad-cube-gamepad-313-314",
+        "kind": "recorded",
+        "case": "flash-demo-gamepad-cube",
+        "role": "gamepad",
+        "frames": [
+          313,
+          314
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          29,
+          35
+        ],
+        "voxel": 0.0011,
+        "total_ms": 57.627381989732385,
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0004310682415962219
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.004220996983349323
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            -0.001999974250793457
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 3,
+        "scales": 3,
+        "surface_median_mm": 2.129074472987665
+      },
+      {
+        "name": "flash-demo-gamepad-cube-gamepad-313-314",
+        "kind": "recorded",
+        "case": "flash-demo-gamepad-cube",
+        "role": "gamepad",
+        "frames": [
+          313,
+          314
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 45.4134955517493,
+        "input_counts": [
+          31,
+          36
+        ],
+        "voxel": 0.0072,
+        "total_ms": 25.26528702583164,
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.004445405306030686
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            -0.0021944006393510357
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0002446287849043327
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 0,
+        "scales": 3,
+        "surface_median_mm": 1.8534891005775644
+      },
+      {
+        "name": "flash-demo-gamepad-cube-gamepad-470-471",
+        "kind": "recorded",
+        "case": "flash-demo-gamepad-cube",
+        "role": "gamepad",
+        "frames": [
+          470,
+          471
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          66,
+          67
+        ],
+        "voxel": 0.0011,
+        "total_ms": 28.311502013821155,
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            -0.0006554126739501953
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            -0.0013108430430293083
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 3,
+        "scales": 3,
+        "surface_median_mm": 1.4655631192933596
+      },
+      {
+        "name": "flash-demo-gamepad-cube-gamepad-470-471",
+        "kind": "recorded",
+        "case": "flash-demo-gamepad-cube",
+        "role": "gamepad",
+        "frames": [
+          470,
+          471
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 47.00562556689529,
+        "input_counts": [
+          69,
+          69
+        ],
+        "voxel": 0.0073,
+        "total_ms": 28.25731097254902,
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            -0.0008526223379274889
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            -0.0006972532242062502
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.000942029814789247
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 0,
+        "scales": 3,
+        "surface_median_mm": 1.4493264234639522
+      },
+      {
+        "name": "dexycb-tomato-can-20201002_105506-object-16-17",
+        "kind": "recorded",
+        "case": "dexycb-tomato-can-20201002_105506",
+        "role": "object",
+        "frames": [
+          16,
+          17
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          811,
+          793
+        ],
+        "voxel": 0.0035,
+        "total_ms": 40.42240499984473,
+        "pose": [
+          [
+            0.999912017254683,
+            0.012661726860077882,
+            -0.003954544549176375,
+            0.0028556938832129397
+          ],
+          [
+            -0.01259475067943705,
+            0.9997841166676283,
+            0.016525504968199267,
+            -0.01386317013758552
+          ],
+          [
+            0.004162932259053731,
+            -0.016474244506256897,
+            0.9998556242092933,
+            0.001958908873254339
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 255,
+        "scales": 1,
+        "surface_median_mm": 0.9336837966537683
+      },
+      {
+        "name": "dexycb-tomato-can-20201002_105506-object-16-17",
+        "kind": "recorded",
+        "case": "dexycb-tomato-can-20201002_105506",
+        "role": "object",
+        "frames": [
+          16,
+          17
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 10.278271442943812,
+        "input_counts": [
+          2419,
+          2397
+        ],
+        "voxel": 0.0112,
+        "total_ms": 77.1006690338254,
+        "pose": [
+          [
+            0.9999999592293279,
+            -2.6647921527400698e-05,
+            -0.000284308338563799,
+            0.00012110246650877399
+          ],
+          [
+            2.656182855531597e-05,
+            0.9999999537987776,
+            -0.00030281498063849943,
+            8.977604840997022e-05
+          ],
+          [
+            0.00028431639481824034,
+            0.00030280741654320487,
+            0.9999999137359245,
+            -0.001082934261632973
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 450,
+        "scales": 1,
+        "surface_median_mm": 1.051993878282623
+      },
+      {
+        "name": "dexycb-tomato-can-20201002_105506-object-33-34",
+        "kind": "recorded",
+        "case": "dexycb-tomato-can-20201002_105506",
+        "role": "object",
+        "frames": [
+          33,
+          34
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          1202,
+          1308
+        ],
+        "voxel": 0.002,
+        "total_ms": 61.59359699813649,
+        "pose": [
+          [
+            0.9957189891423222,
+            0.09214100026627264,
+            0.007330124918685843,
+            -0.01781439432326823
+          ],
+          [
+            -0.08890116486609734,
+            0.9763754745731925,
+            -0.1969454633583241,
+            0.18105055880879495
+          ],
+          [
+            -0.025303706187903285,
+            0.1954506810474316,
+            0.9803870428209731,
+            -0.003508609504142557
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 304,
+        "scales": 1,
+        "surface_median_mm": 1.7585039408088907
+      },
+      {
+        "name": "dexycb-tomato-can-20201002_105506-object-33-34",
+        "kind": "recorded",
+        "case": "dexycb-tomato-can-20201002_105506",
+        "role": "object",
+        "frames": [
+          33,
+          34
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 9.498206627219053,
+        "input_counts": [
+          1816,
+          1914
+        ],
+        "voxel": 0.0061,
+        "total_ms": 76.49363396922126,
+        "pose": [
+          [
+            0.999993123550452,
+            0.003707967471384639,
+            6.187925229687863e-05,
+            -0.004870661906364981
+          ],
+          [
+            -0.003707902213125197,
+            0.9999926020792941,
+            -0.0010233512890396312,
+            -0.006208724459192683
+          ],
+          [
+            -6.567334781063666e-05,
+            0.0010231148097994969,
+            0.9999994744614106,
+            -0.0030636641281100996
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 346,
+        "scales": 1,
+        "surface_median_mm": 1.6788129304313535
+      },
+      {
+        "name": "dexycb-tomato-can-20201002_105506-object-50-51",
+        "kind": "recorded",
+        "case": "dexycb-tomato-can-20201002_105506",
+        "role": "object",
+        "frames": [
+          50,
+          51
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          590,
+          575
+        ],
+        "voxel": 0.0036,
+        "total_ms": 34.46236200397834,
+        "pose": [
+          [
+            0.937233060778564,
+            -0.31129115854031286,
+            0.15713689699836964,
+            -0.1910366512416493
+          ],
+          [
+            0.2590450237937815,
+            0.9232148808562322,
+            0.2838484796740925,
+            -0.3074035535504803
+          ],
+          [
+            -0.23343064372812267,
+            -0.22532664818046805,
+            0.9459059341120725,
+            0.04216644442774076
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 142,
+        "scales": 1,
+        "surface_median_mm": 5.009036870359362
+      },
+      {
+        "name": "dexycb-tomato-can-20201002_105506-object-50-51",
+        "kind": "recorded",
+        "case": "dexycb-tomato-can-20201002_105506",
+        "role": "object",
+        "frames": [
+          50,
+          51
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 10.24045483806779,
+        "input_counts": [
+          1539,
+          1501
+        ],
+        "voxel": 0.0116,
+        "total_ms": 71.69296900974587,
+        "pose": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.003368426648472214
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            -0.0008460102317397467
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.006999969005043072
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 366,
+        "scales": 1,
+        "surface_median_mm": 2.0234154343338853
+      },
+      {
+        "name": "ycb-mustard_easy_00_02-object-45-46",
+        "kind": "recorded",
+        "case": "ycb-mustard_easy_00_02",
+        "role": "object",
+        "frames": [
+          45,
+          46
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          910,
+          835
+        ],
+        "voxel": 0.0026,
+        "total_ms": 41.726291994564235,
+        "pose": [
+          [
+            0.99703670635239,
+            -0.02897142566543879,
+            -0.07126333335517385,
+            0.0378020695337818
+          ],
+          [
+            0.016829254404981966,
+            0.9860788021277213,
+            -0.1654248233806882,
+            0.0881679027126083
+          ],
+          [
+            0.07506385536429014,
+            0.16373531228562593,
+            0.9836443285703313,
+            0.021267142745315715
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 208,
+        "scales": 1,
+        "surface_median_mm": 2.693989586109853
+      },
+      {
+        "name": "ycb-mustard_easy_00_02-object-45-46",
+        "kind": "recorded",
+        "case": "ycb-mustard_easy_00_02",
+        "role": "object",
+        "frames": [
+          45,
+          46
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 7.41334529930543,
+        "input_counts": [
+          1119,
+          1014
+        ],
+        "voxel": 0.0072,
+        "total_ms": 48.73955500079319,
+        "pose": [
+          [
+            0.9999999999999993,
+            -1.3105792173728759e-08,
+            3.755648414482948e-08,
+            -2.113856206222009e-08
+          ],
+          [
+            1.3105791701883973e-08,
+            0.9999999999999998,
+            1.1197605898072283e-08,
+            -6.476726308046743e-09
+          ],
+          [
+            -3.7556484255851785e-08,
+            -1.1197605398471921e-08,
+            0.9999999999999993,
+            5.147594572818548e-10
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 274,
+        "scales": 1,
+        "surface_median_mm": 1.0088020767962982
+      },
+      {
+        "name": "ycb-mustard_easy_00_02-object-90-91",
+        "kind": "recorded",
+        "case": "ycb-mustard_easy_00_02",
+        "role": "object",
+        "frames": [
+          90,
+          91
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          1031,
+          975
+        ],
+        "voxel": 0.0018,
+        "total_ms": 47.60947200702503,
+        "pose": [
+          [
+            0.9991490000457842,
+            -0.04124628162877439,
+            0.00014127742056601472,
+            -0.004459848131408151
+          ],
+          [
+            0.04124635649666847,
+            0.999148840953314,
+            -0.0005759317661530594,
+            0.0012475386037157365
+          ],
+          [
+            -0.00011740212718570203,
+            0.0005812688271000233,
+            0.99999982417163,
+            0.0010432497423584763
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 242,
+        "scales": 1,
+        "surface_median_mm": 1.4638947277889558
+      },
+      {
+        "name": "ycb-mustard_easy_00_02-object-90-91",
+        "kind": "recorded",
+        "case": "ycb-mustard_easy_00_02",
+        "role": "object",
+        "frames": [
+          90,
+          91
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 7.3005702835083115,
+        "input_counts": [
+          1084,
+          1018
+        ],
+        "voxel": 0.0048,
+        "total_ms": 49.12881297059357,
+        "pose": [
+          [
+            0.9999816300058723,
+            0.0034394837673849647,
+            -0.00499095203474087,
+            0.003719725586038487
+          ],
+          [
+            -0.0038189049673187352,
+            0.9969367446379798,
+            -0.07811877594713917,
+            0.04376530252706416
+          ],
+          [
+            0.004706975212360437,
+            0.07813640087720075,
+            0.9969315659774793,
+            0.010353112061325498
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 261,
+        "scales": 1,
+        "surface_median_mm": 2.9130044982003493
+      },
+      {
+        "name": "ycb-mustard_easy_00_02-object-135-136",
+        "kind": "recorded",
+        "case": "ycb-mustard_easy_00_02",
+        "role": "object",
+        "frames": [
+          135,
+          136
+        ],
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          968,
+          988
+        ],
+        "voxel": 0.0018,
+        "total_ms": 46.887642005458474,
+        "pose": [
+          [
+            0.9995255049910652,
+            0.0028232768519607814,
+            -0.030672365089349146,
+            0.01767871101250157
+          ],
+          [
+            -0.0032118820599145326,
+            0.9999151091338987,
+            -0.012627681472742347,
+            0.00845155738166889
+          ],
+          [
+            0.0306341098449155,
+            0.012720205720074873,
+            0.9994497224375263,
+            0.0012255391362520074
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 252,
+        "scales": 1,
+        "surface_median_mm": 1.5574705666118158
+      },
+      {
+        "name": "ycb-mustard_easy_00_02-object-135-136",
+        "kind": "recorded",
+        "case": "ycb-mustard_easy_00_02",
+        "role": "object",
+        "frames": [
+          135,
+          136
+        ],
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 7.3693754996971155,
+        "input_counts": [
+          1013,
+          1024
+        ],
+        "voxel": 0.0049,
+        "total_ms": 49.06256904359907,
+        "pose": [
+          [
+            0.9999999942859955,
+            1.5692657531825305e-05,
+            0.00010574379196685163,
+            -3.2440945766668006e-05
+          ],
+          [
+            -1.577411604015283e-05,
+            0.9999997031316017,
+            0.0007703816485521431,
+            -0.0005937449962646474
+          ],
+          [
+            -0.00010573167123946459,
+            -0.0007703833121650017,
+            0.999999697665137,
+            0.0009296577816958473
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 292,
+        "scales": 1,
+        "surface_median_mm": 0.9833715865990266
+      }
+    ]
+  },
+  "neural_asymmetric": {
+    "provenance": {
+      "upstream_commit": "07dd9be5a58c9c02213584535592766c9023cebc",
+      "checkpoint_sha256": {
+        "Desc": "daf910b6e2a79c4346a6ef8eeb18b56ffc15b552cc82af091b8b6c0a18116eef",
+        "Pose": "9e186c5f32d1ceabc1ed244e4e3fb5776525880b951bf666664c2117bc48e633"
+      },
+      "normalization": "Both raw metres and centered/shared scale: largest cloud extent becomes 1. Undo normalization on returned pose.",
+      "normalization_used_labels": false,
+      "scope": "Pair matching, not sequential tracking. Cold first call is identified; saved mask/depth cleaning precedes these clouds.",
+      "torch": "2.10.0+cu128",
+      "open3d": "0.20.0"
+    },
+    "parameters": 907607,
+    "config": {
+      "data": {
+        "dataset": "",
+        "root": "",
+        "downsample": 0.02,
+        "voxel_size_0": 0.035,
+        "voxel_size_1": 0.035,
+        "max_numPts": 30000,
+        "manual_seed": 123
+      },
+      "train": {
+        "epoch": 10,
+        "max_iter": 50000,
+        "batch_size": 1,
+        "num_workers": 0,
+        "pos_num": 512,
+        "augmentation_noise": 0.001,
+        "pretrain_model": "",
+        "all_stage": [
+          "Desc",
+          "Pose"
+        ]
+      },
+      "test": {
+        "experiment_id": "threedmatch",
+        "pose_refine": false,
+        "enable_timing": false,
+        "rte_thresh": 0.3,
+        "rre_thresh": 15.0
+      },
+      "optim": {
+        "lr": {
+          "Desc": 0.001,
+          "Pose": 0.001
+        },
+        "lr_decay": 0.5,
+        "weight_decay": 1e-06,
+        "scheduler_interval": {
+          "Desc": 2,
+          "Pose": 1
+        }
+      },
+      "patch": {
+        "des_r": 0.3,
+        "num_points_per_patch": 512,
+        "num_fps": 1468,
+        "rad_n": 3,
+        "azi_n": 20,
+        "ele_n": 7,
+        "delta": 0.8,
+        "voxel_sample": 10,
+        "num_scales": 3,
+        "is_aligned_to_global_z": false,
+        "search_radius_thresholds": [
+          5,
+          2,
+          0.5
+        ],
+        "num_points_radius_estimate": 1468
+      },
+      "match": {
+        "pose_estimator": "ransac",
+        "dist_th": 0.1,
+        "inlier_th": 0.3333333333333333,
+        "similar_th": 0.8,
+        "confidence": 0.999,
+        "iter_n": 50000,
+        "kiss_resolution": 0.3,
+        "enable_early_exit": true,
+        "early_exit_min_inliers": 50
+      },
+      "stage": "test"
+    },
+    "results": [
+      {
+        "name": "asymmetric-0-full",
+        "kind": "synthetic-asymmetric",
+        "angle": 0,
+        "partial": false,
+        "cold_first_call": true,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          1279,
+          1279
+        ],
+        "voxel": 0.0035,
+        "total_ms": 290.06647202186286,
+        "pose": [
+          [
+            0.9999999999999815,
+            -1.5204977110716555e-08,
+            1.9003252037241847e-07,
+            0.007999865826553924
+          ],
+          [
+            1.5205076753233016e-08,
+            0.9999999999998614,
+            -5.25425007530389e-07,
+            -0.004999628894804668
+          ],
+          [
+            -1.9003251239269048e-07,
+            5.254250103337021e-07,
+            0.999999999999844,
+            0.0030000023659373376
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 1276,
+        "scales": 1,
+        "surface_median_mm": 1.3586860114880156e-05,
+        "point_error_mm": 1.3586860114880156e-05,
+        "angle_error_deg": 3.202495766529214e-05
+      },
+      {
+        "name": "asymmetric-0-full",
+        "kind": "synthetic-asymmetric",
+        "angle": 0,
+        "partial": false,
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 6.666666666666667,
+        "input_counts": [
+          1825,
+          1825
+        ],
+        "voxel": 0.009,
+        "total_ms": 88.56561605352908,
+        "pose": [
+          [
+            1.0,
+            -1.2212453270876722e-15,
+            1.4988010832439613e-15,
+            0.007999999999998945
+          ],
+          [
+            1.2628786905111156e-15,
+            1.0,
+            5.440092820663267e-15,
+            -0.005000000000003655
+          ],
+          [
+            -1.3322676295501878e-15,
+            -5.329070518200751e-15,
+            1.0000000000000004,
+            0.003000000000001224
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 1382,
+        "scales": 1,
+        "surface_median_mm": 1.5646515791261858e-12,
+        "point_error_mm": 1.5646515791261858e-12,
+        "angle_error_deg": 3.2683802427801675e-13
+      },
+      {
+        "name": "asymmetric-0-partial",
+        "kind": "synthetic-asymmetric",
+        "angle": 0,
+        "partial": true,
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          1114,
+          1088
+        ],
+        "voxel": 0.0034,
+        "total_ms": 54.999098007101566,
+        "pose": [
+          [
+            0.9998978317310941,
+            0.01020941394831621,
+            0.010004697211235813,
+            0.0008434586074140618
+          ],
+          [
+            -0.010042156916661108,
+            0.9998113169219904,
+            -0.016627857323667547,
+            0.006574847381576673
+          ],
+          [
+            -0.010172570172661988,
+            0.016525689744970234,
+            0.9998116924674039,
+            0.003066197264345649
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 523,
+        "scales": 1,
+        "surface_median_mm": 0.6561196604455657,
+        "point_error_mm": 0.6561196604455657,
+        "angle_error_deg": 1.2542123526394802
+      },
+      {
+        "name": "asymmetric-0-partial",
+        "kind": "synthetic-asymmetric",
+        "angle": 0,
+        "partial": true,
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 6.666666666666667,
+        "input_counts": [
+          1538,
+          1468
+        ],
+        "voxel": 0.0088,
+        "total_ms": 75.97159803844988,
+        "pose": [
+          [
+            0.9999999999981112,
+            -2.0463607536269635e-07,
+            -1.9328278989250063e-06,
+            0.008001389686206697
+          ],
+          [
+            2.046311158299119e-07,
+            0.9999999999966873,
+            -2.5658508444391695e-06,
+            -0.004998140729021835
+          ],
+          [
+            1.9328284239884966e-06,
+            2.565850448909943e-06,
+            0.9999999999948403,
+            0.0030001277713300745
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 893,
+        "scales": 1,
+        "surface_median_mm": 0.00018858270999121747,
+        "point_error_mm": 0.0001311973656780381,
+        "angle_error_deg": 0.00018442913495434566
+      },
+      {
+        "name": "asymmetric-20-full",
+        "kind": "synthetic-asymmetric",
+        "angle": 20,
+        "partial": false,
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          1279,
+          1299
+        ],
+        "voxel": 0.0035,
+        "total_ms": 63.80641303258017,
+        "pose": [
+          [
+            0.9333383042701905,
+            -0.35576911023392305,
+            -0.0480411280613684,
+            0.040494395354537166
+          ],
+          [
+            0.3397089104355079,
+            0.9185204402417046,
+            -0.20228212236602908,
+            0.13375207631176203
+          ],
+          [
+            0.11609248878702816,
+            0.17247765380346453,
+            0.9781482469368771,
+            0.018235970146030733
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 760,
+        "scales": 1,
+        "surface_median_mm": 0.0001180929617753906,
+        "point_error_mm": 0.0001180929617753906,
+        "angle_error_deg": 0.00023791762130983066
+      },
+      {
+        "name": "asymmetric-20-full",
+        "kind": "synthetic-asymmetric",
+        "angle": 20,
+        "partial": false,
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 6.166221948947804,
+        "input_counts": [
+          1825,
+          1825
+        ],
+        "voxel": 0.0087,
+        "total_ms": 80.69247798994184,
+        "pose": [
+          [
+            0.9333387751146728,
+            -0.3557676010256283,
+            -0.04804315693115378,
+            0.04049584396796618
+          ],
+          [
+            0.33970742062595605,
+            0.9185216360436164,
+            -0.20227919441063974,
+            0.13375002404448366
+          ],
+          [
+            0.11609306283797322,
+            0.17247439862259845,
+            0.9781487527879751,
+            0.018235569398954765
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 1065,
+        "scales": 1,
+        "surface_median_mm": 1.8337148366486435e-05,
+        "point_error_mm": 1.8337148366486435e-05,
+        "angle_error_deg": 2.3487507645841535e-05
+      },
+      {
+        "name": "asymmetric-20-partial",
+        "kind": "synthetic-asymmetric",
+        "angle": 20,
+        "partial": true,
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          1114,
+          1106
+        ],
+        "voxel": 0.0034,
+        "total_ms": 55.71321403840557,
+        "pose": [
+          [
+            0.9431823287752705,
+            -0.3298046200401351,
+            -0.04044758690255362,
+            0.03491247220047931
+          ],
+          [
+            0.31216424886943794,
+            0.9212124136615524,
+            -0.23220932505744935,
+            0.1549262593337142
+          ],
+          [
+            0.11384452737763479,
+            0.20638944138700188,
+            0.9718244811024906,
+            0.022290619126501876
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 493,
+        "scales": 1,
+        "surface_median_mm": 1.4717819049795307,
+        "point_error_mm": 1.5561659762641293,
+        "angle_error_deg": 2.459801229630344
+      },
+      {
+        "name": "asymmetric-20-partial",
+        "kind": "synthetic-asymmetric",
+        "angle": 20,
+        "partial": true,
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 6.3828531827468655,
+        "input_counts": [
+          1538,
+          1468
+        ],
+        "voxel": 0.0086,
+        "total_ms": 72.90410000132397,
+        "pose": [
+          [
+            0.9333387684930975,
+            -0.3557676380134328,
+            -0.04804301166799557,
+            0.04049574244722283
+          ],
+          [
+            0.3397075214648952,
+            0.9185216715424462,
+            -0.20227886386631647,
+            0.13374978693017198
+          ],
+          [
+            0.11609282100098067,
+            0.17247413327572708,
+            0.9781488282786116,
+            0.01823553585410309
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 716,
+        "scales": 1,
+        "surface_median_mm": 7.1307647962858094e-06,
+        "point_error_mm": 5.799163166232974e-06,
+        "angle_error_deg": 7.946112872720419e-06
+      },
+      {
+        "name": "asymmetric-60-full",
+        "kind": "synthetic-asymmetric",
+        "angle": 60,
+        "partial": false,
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          1279,
+          1301
+        ],
+        "voxel": 0.0035,
+        "total_ms": 63.49676399258897,
+        "pose": [
+          [
+            0.4698463501041905,
+            -0.8355050594150767,
+            0.2849135008833028,
+            -0.19127722957919807
+          ],
+          [
+            0.8137974749414438,
+            0.28491349088875806,
+            -0.5065155204813689,
+            0.34043098608883493
+          ],
+          [
+            0.34202057989644546,
+            0.4698463561648542,
+            0.8137974714423166,
+            0.13292960184085123
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 742,
+        "scales": 1,
+        "surface_median_mm": 1.7353144490147933e-05,
+        "point_error_mm": 1.7353144490147933e-05,
+        "angle_error_deg": 2.8391669617635246e-05
+      },
+      {
+        "name": "asymmetric-60-full",
+        "kind": "synthetic-asymmetric",
+        "angle": 60,
+        "partial": false,
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 6.322975094221553,
+        "input_counts": [
+          1825,
+          1825
+        ],
+        "voxel": 0.0088,
+        "total_ms": 81.29599702078849,
+        "pose": [
+          [
+            0.4698463122263113,
+            -0.8355050175295533,
+            0.28491368617579016,
+            -0.1912773551089799
+          ],
+          [
+            0.8137976929205261,
+            0.2849136233656234,
+            -0.5065150957453297,
+            0.3404306866023143
+          ],
+          [
+            0.34202011327488446,
+            0.4698463503142408,
+            0.813797670930449,
+            0.13292947563416024
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 1131,
+        "scales": 1,
+        "surface_median_mm": 1.7412414986320587e-06,
+        "point_error_mm": 1.7412414986320587e-06,
+        "angle_error_deg": 3.119488182866932e-06
+      },
+      {
+        "name": "asymmetric-60-partial",
+        "kind": "synthetic-asymmetric",
+        "angle": 60,
+        "partial": true,
+        "cold_first_call": false,
+        "normalized": false,
+        "scale": 1.0,
+        "input_counts": [
+          1114,
+          1102
+        ],
+        "voxel": 0.0034,
+        "total_ms": 55.61137403128669,
+        "pose": [
+          [
+            0.47893374360206936,
+            -0.8307416608202659,
+            0.2837089392615144,
+            -0.19082730212801274
+          ],
+          [
+            0.8130707611488319,
+            0.2979392255821866,
+            -0.5001481332808771,
+            0.3358319560091558
+          ],
+          [
+            0.3309658692435923,
+            0.47021326101788485,
+            0.8181449031551564,
+            0.13033714211279002
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 489,
+        "scales": 1,
+        "surface_median_mm": 0.7734570824234177,
+        "point_error_mm": 0.7314513986541762,
+        "angle_error_deg": 0.8676991146453569
+      },
+      {
+        "name": "asymmetric-60-partial",
+        "kind": "synthetic-asymmetric",
+        "angle": 60,
+        "partial": true,
+        "cold_first_call": false,
+        "normalized": true,
+        "scale": 6.528160743193054,
+        "input_counts": [
+          1538,
+          1468
+        ],
+        "voxel": 0.0087,
+        "total_ms": 72.89374095853418,
+        "pose": [
+          [
+            0.46984631694127693,
+            -0.835505015212713,
+            0.28491368519451993,
+            -0.19127735531053833
+          ],
+          [
+            0.8137976732684412,
+            0.2849136037648917,
+            -0.50651513834492,
+            0.34043071847013456
+          ],
+          [
+            0.3420201535576353,
+            0.4698463663199993,
+            0.8137976447596198,
+            0.13292949630720863
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "num_inliers": 699,
+        "scales": 1,
+        "surface_median_mm": 3.3110791747058626e-06,
+        "point_error_mm": 3.2944489426006976e-06,
+        "angle_error_deg": 3.9554902637546534e-06
+      }
+    ]
+  },
+  "tests": {
+    "focused_suite": "81 passed, 3 pre-existing xfailed; includes original six adapter tests.",
+    "final_adapters": "8 passed after adding actual-session color wiring and missing-RGB failure tests.",
+    "mutation": "Reinstating missing RGB / zero solver levels makes the new actual-session test fail.",
+    "coverage": "Known asymmetric motion, partial rendered geometry, source/target transform direction, independent free-space rejection, measured color visibility, production session RGB wiring, patch restoration."
+  },
+  "excluded_runs": [
+    "invalid-color-missing-reference-rgb (zero color solver calls)",
+    "invalid-timing-no-accelerator (missing Numba)",
+    "failed-missing-ufm",
+    "failed-missing-uniception",
+    "failed-missing-jaxtyping"
+  ],
+  "local_reproduction_scripts": {
+    "export_asymmetric.py": {
+      "path": "/home/feit/.cache/flash-tracker-restart/library-trials-20261105/export_asymmetric.py",
+      "sha256": "3807aa04280534115547b940fced983607a04a537ce4f44f4bdebd0957fa9443"
+    },
+    "render_replays.py": {
+      "path": "/home/feit/.cache/flash-tracker-restart/library-trials-20261105/render_replays.py",
+      "sha256": "d72cfe40c626c131e8e659668455de0c38eb379c6e438f1476f61d191d1b5bc1"
+    },
+    "export_pairs.py": {
+      "path": "/home/feit/.cache/flash-tracker-restart/library-trials-20261105/export_pairs.py",
+      "sha256": "3737fe8b277190b6208232d385f245e00cefcd090571a841f150d3db0c3b3c0b"
+    },
+    "summarize.py": {
+      "path": "/home/feit/.cache/flash-tracker-restart/library-trials-20261105/summarize.py",
+      "sha256": "34bb47e9a471639eac57dabf795527a5965a2b8193b6aef320faf991fa3536c7"
+    },
+    "run_replays.py": {
+      "path": "/home/feit/.cache/flash-tracker-restart/library-trials-20261105/run_replays.py",
+      "sha256": "1d94084ad2d73ea83c5023f91e39e5ebb8a4c471970d5d5dca839d81438ddeeb"
+    }
+  },
+  "pairs_inputs": {
+    "box-20.npz": "7d8842f37e0cab1fbebf996ae8285ecee0b96e9df89af74d87b2a43085419bf8",
+    "ycb-mustard_easy_00_02-object-90-91.npz": "3fd9dd21aa4755518e0bdccd0c4f42c08e155920926fbda8607ff4924fd9465c",
+    "ycb-mustard_easy_00_02-object-45-46.npz": "5d3115b1a839d5f0e0b302344f01c84c9c2e24a81bdcbd6983864b8be2d708f5",
+    "box-60.npz": "e6dd7ee6adc46f9dfb6305c621ab8fb03691cf44b725e3e4fead8cbd1be0a371",
+    "box-0.npz": "5b313e38c1f12c9830a9dea1ed67e9efa1e5c1385ec65696326a951e3708f97c",
+    "dexycb-tomato-can-20201002_105506-object-16-17.npz": "0868fa6df858380b917e890ba0b52dd449631050c815a47007fda12f2394a37a",
+    "box-40.npz": "1dbcdc6e0232badd0babde15a7e5c0cfd5c941f81547ba779a1d4b755c0aade7",
+    "flash-demo-gamepad-cube-gamepad-313-314.npz": "0d6a905f18f5ead99186e7dd2e650539d7dc12a5ec83d0093f7733e866940aba",
+    "dexycb-tomato-can-20201002_105506-object-50-51.npz": "aceaf516d214161e1db0d739464415cc820e79f309d646d1f14b5dbfe84d2f28",
+    "dexycb-tomato-can-20201002_105506-object-33-34.npz": "104b3bbfebc03fd845831bad9f7e048dc20ceb4a4c636222906678a7f6ec262c",
+    "manifest.json": "b581f01e905dca9d6ae223dd382315c69237ae570076a4890b61b71214ef3b6d",
+    "flash-demo-gamepad-cube-gamepad-156-157.npz": "d4cc2aa2fb8c95e028cd7f83d55a57952c4df61006c3d265b661171fc17c5236",
+    "flash-demo-gamepad-cube-gamepad-470-471.npz": "297d5396adb2c3e999fa139972ac53a210ebfd0e50a27ea92f00b9e145485a12",
+    "ycb-mustard_easy_00_02-object-135-136.npz": "feb1d053dff7abab9e6a2797caaf32c1028f572b8ccdd112b9b1c45afac288de",
+    "flash-demo-dowel-ring-dowel-534-535.npz": "98e75af59f3a421326a2036638becc1d37e7617338c72643e34c46d46aa43dc1",
+    "flash-demo-dowel-ring-dowel-356-357.npz": "63772788654fffb51a95aae0823f2aa41ded71268c7e1c85cfb5063fce52672d"
+  },
+  "asymmetric-pairs_inputs": {
+    "asymmetric-60-partial.npz": "c17980b74fefe1f6f464a6e7f96768b4348ec98a1f873b03fdb11fe8a347bbcb",
+    "asymmetric-60-full.npz": "f41dc75bc437ff8ed03bc1f42207cbac82df17d163728e92c3d37444bae4036b",
+    "manifest.json": "7e8e9a2cc5c1c4cf54b80a60c0ab602d64bc22657503131da3e4cfe92a6917da",
+    "asymmetric-0-partial.npz": "be06a8e16331caeceb4c382da23717c4cff5cfc1bbf8919b4a7e569c0c5e6072",
+    "asymmetric-20-full.npz": "99e7ce81a825cb3a94d317f6f2c2ef1cc5a12995c6580c15df9adf1b58fe76ca",
+    "asymmetric-20-partial.npz": "1eed8b7db47784d2ed5e418fbdb891618e4ee968ed386ee7cedc503007ff73fc",
+    "asymmetric-0-full.npz": "ecc8257401f5d3f6457d1106e02d7806bc65d83d7e562ec617d8af3e9d83872c"
+  },
+  "videos": {
+    "flash-demo-dowel-ring-comparison.mp4": {
+      "path": "/home/feit/.cache/flash-tracker-restart/library-trials-20261105/flash-demo-dowel-ring-comparison.mp4",
+      "description": "Four methods, same initial measured surface and axes, white recorded mask; source frame timing preserved. Growing map is not displayed."
+    },
+    "flash-demo-gamepad-cube-comparison.mp4": {
+      "path": "/home/feit/.cache/flash-tracker-restart/library-trials-20261105/flash-demo-gamepad-cube-comparison.mp4",
+      "description": "Four methods, same initial measured surface and axes, white recorded mask; source frame timing preserved. Growing map is not displayed."
+    }
+  }
+}

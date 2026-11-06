@@ -246,8 +246,8 @@ def test_runtime_profiling_keeps_real_fits_and_counts_nested_work(tmp_path):
     with FitProfile() as profile:
         run_case(case, tmp_path / "profiled", None, VisionPipelineConfig(), None, None, **options)
     assert compare_runs(tmp_path / "plain", tmp_path / "profiled", "group_growing")["identical"]
-    assert profile.stats["fitter.refine"]["calls"] > 0
-    solver = profile.stats["fitter.refine"]
+    assert profile.stats["fitter.search"]["calls"] > 0
+    solver = profile.stats["fitter.search"]
     assert 0 <= solver["exclusive_ms"] < solver["inclusive_ms"]
 
 
@@ -406,7 +406,7 @@ def test_growing_experiment_keeps_baselines_and_archives_original_patches(tmp_pa
 
 
 def test_retry_connects_to_last_good_image_not_the_unregistered_one(monkeypatch):
-    from benchmarks import flash_tracker_experiment as experiment
+    from lerobot.policies.flash import surface_frame_session as experiment
 
     old, missed, current = {}, {}, {}
 

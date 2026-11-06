@@ -12,7 +12,7 @@ import hashlib
 import json
 import time
 from contextlib import ExitStack
-from dataclasses import replace
+from dataclasses import asdict, replace
 from functools import wraps
 from itertools import islice
 from pathlib import Path
@@ -78,6 +78,7 @@ class FitProfile(ExitStack):
         for name in (
             "__init__",
             "refine",
+            "search",
             "residual",
             "batch_residuals",
             "score",
@@ -237,6 +238,7 @@ def main():
     parser.add_argument("--source-run", type=Path, action="append", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--settings", type=Path, help="One complete pipeline-settings JSON for every scene")
+    parser.add_argument("--registration-config", type=Path, help="Optional 3D surface matcher configuration")
     parser.add_argument("--ufm-revision", help="Pin the UFM checkpoint for repeatable comparisons")
     parser.add_argument("--compare-to", type=Path, help="Previous single-method benchmark output")
     parser.add_argument("--frames", type=int, help="Profile only the first N consecutive frames")
@@ -289,6 +291,17 @@ def main():
         settings = fixed_settings or from_recording(
             json.loads((source.parent / "provenance.json").read_text()), [args.method]
         )
+        if args.registration_config:
+            from lerobot.policies.flash.surface_registration import LibraryConfig
+
+            registration = LibraryConfig(**json.loads(args.registration_config.read_text()))
+            settings = {
+                **settings,
+                "config": {
+                    **settings["config"],
+                    "shape": {**settings["config"]["shape"], "registration": asdict(registration)},
+                },
+            }
         config = VisionPipelineConfig.from_dict(settings["config"])
         if args.debugger_defaults:
             config = VisionPipelineConfig()

@@ -1,0 +1,942 @@
+[
+  {
+    "source_frame": 0,
+    "method": "small_gicp",
+    "voxels": [
+      0.006,
+      0.003
+    ],
+    "movement_from_seed_mm": 3.72520752477088,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.14812870966019173,
+      "evaluations": 33,
+      "converged": true,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "small_gicp",
+      "library_inliers": 403,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": []
+  },
+  {
+    "source_frame": 0,
+    "method": "small_gicp",
+    "voxels": [
+      0.003,
+      0.0015
+    ],
+    "movement_from_seed_mm": 4.112524046099873,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.15538728378326316,
+      "evaluations": 36,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "small_gicp",
+      "library_inliers": 1238,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": []
+  },
+  {
+    "source_frame": 0,
+    "method": "small_gicp",
+    "voxels": [
+      0.0015
+    ],
+    "movement_from_seed_mm": 4.070427950662951,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.15448260860825286,
+      "evaluations": 19,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "small_gicp",
+      "library_inliers": 1243,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": []
+  },
+  {
+    "source_frame": 0,
+    "method": "small_gicp",
+    "voxels": [
+      0.001
+    ],
+    "movement_from_seed_mm": 3.5342087091330403,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.1338076612238958,
+      "evaluations": 19,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "small_gicp",
+      "library_inliers": 1716,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": []
+  },
+  {
+    "source_frame": 0,
+    "method": "open3d_plane",
+    "voxels": [
+      0.006,
+      0.003
+    ],
+    "movement_from_seed_mm": 169.11216138269148,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 732.4022470962137,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "open3d_plane",
+      "library_inliers": 0,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.006,
+        "points": 114,
+        "normal_sv": [
+          10.580198665654311,
+          1.04593221530056,
+          0.9825589021952766
+        ],
+        "jacobian_sv": [
+          10.70613277631012,
+          1.1793379655322873,
+          1.0903015132090563,
+          0.13651247641095546,
+          0.072150696678951,
+          0.00835871329358256
+        ]
+      },
+      {
+        "voxel": 0.003,
+        "points": 380,
+        "normal_sv": [
+          19.09090140016304,
+          2.893298581290634,
+          2.6769959000256347
+        ],
+        "jacobian_sv": [
+          19.314864115869813,
+          3.1582215470142128,
+          2.954730041316834,
+          0.26207012419805537,
+          0.15170318473868408,
+          0.03824560323763222
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 0,
+    "method": "open3d_plane",
+    "voxels": [
+      0.003,
+      0.0015
+    ],
+    "movement_from_seed_mm": 9.35629604746264,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.23540775327957955,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "open3d_plane",
+      "library_inliers": 1266,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.003,
+        "points": 380,
+        "normal_sv": [
+          19.09090140016304,
+          2.893298581290634,
+          2.6769959000256347
+        ],
+        "jacobian_sv": [
+          19.314864115869813,
+          3.1582215470142128,
+          2.954730041316834,
+          0.26207012419805537,
+          0.15170318473868408,
+          0.03824560323763222
+        ]
+      },
+      {
+        "voxel": 0.0015,
+        "points": 1248,
+        "normal_sv": [
+          34.28746686250037,
+          6.231372385657651,
+          5.79133959841774
+        ],
+        "jacobian_sv": [
+          34.686858423000096,
+          6.8259586011146824,
+          6.283766180165759,
+          0.49264822729346985,
+          0.28217423139815495,
+          0.0932785472173342
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 0,
+    "method": "open3d_plane",
+    "voxels": [
+      0.0015
+    ],
+    "movement_from_seed_mm": 12.158729982085454,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.5431235288193996,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "open3d_plane",
+      "library_inliers": 1186,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.0015,
+        "points": 1248,
+        "normal_sv": [
+          34.28746686250037,
+          6.231372385657651,
+          5.79133959841774
+        ],
+        "jacobian_sv": [
+          34.686858423000096,
+          6.8259586011146824,
+          6.283766180165759,
+          0.49264822729346985,
+          0.28217423139815495,
+          0.0932785472173342
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 0,
+    "method": "open3d_plane",
+    "voxels": [
+      0.001
+    ],
+    "movement_from_seed_mm": 6.834356009133426,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.15584775411137947,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "open3d_plane",
+      "library_inliers": 1801,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.001,
+        "points": 1851,
+        "normal_sv": [
+          41.54538644560148,
+          8.22929735926008,
+          7.567002712997265
+        ],
+        "jacobian_sv": [
+          42.0006290859872,
+          8.983521273659589,
+          8.219563273154671,
+          0.6042370458378297,
+          0.3499525823766921,
+          0.12551507836858602
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 0,
+    "method": "open3d_color",
+    "voxels": [
+      0.006,
+      0.003
+    ],
+    "movement_from_seed_mm": 0.0,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.19718567326625674,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "open3d_color",
+      "library_inliers": 0,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.006,
+        "points": 114,
+        "normal_sv": [
+          10.580198665654311,
+          1.04593221530056,
+          0.9825589021952766
+        ],
+        "jacobian_sv": [
+          10.70613277631012,
+          1.1793379655322873,
+          1.0903015132090563,
+          0.13651247641095546,
+          0.072150696678951,
+          0.00835871329358256
+        ]
+      },
+      {
+        "voxel": 0.003,
+        "points": 380,
+        "normal_sv": [
+          19.09090140016304,
+          2.893298581290634,
+          2.6769959000256347
+        ],
+        "jacobian_sv": [
+          19.314864115869813,
+          3.1582215470142128,
+          2.954730041316834,
+          0.26207012419805537,
+          0.15170318473868408,
+          0.03824560323763222
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 0,
+    "method": "open3d_color",
+    "voxels": [
+      0.003,
+      0.0015
+    ],
+    "movement_from_seed_mm": 0.0,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.19718567326625674,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "open3d_color",
+      "library_inliers": 0,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.003,
+        "points": 380,
+        "normal_sv": [
+          19.09090140016304,
+          2.893298581290634,
+          2.6769959000256347
+        ],
+        "jacobian_sv": [
+          19.314864115869813,
+          3.1582215470142128,
+          2.954730041316834,
+          0.26207012419805537,
+          0.15170318473868408,
+          0.03824560323763222
+        ]
+      },
+      {
+        "voxel": 0.0015,
+        "points": 1248,
+        "normal_sv": [
+          34.28746686250037,
+          6.231372385657651,
+          5.79133959841774
+        ],
+        "jacobian_sv": [
+          34.686858423000096,
+          6.8259586011146824,
+          6.283766180165759,
+          0.49264822729346985,
+          0.28217423139815495,
+          0.0932785472173342
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 0,
+    "method": "open3d_color",
+    "voxels": [
+      0.0015
+    ],
+    "movement_from_seed_mm": 0.0,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.19718567326625674,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "open3d_color",
+      "library_inliers": 0,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.0015,
+        "points": 1248,
+        "normal_sv": [
+          34.28746686250037,
+          6.231372385657651,
+          5.79133959841774
+        ],
+        "jacobian_sv": [
+          34.686858423000096,
+          6.8259586011146824,
+          6.283766180165759,
+          0.49264822729346985,
+          0.28217423139815495,
+          0.0932785472173342
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 0,
+    "method": "open3d_color",
+    "voxels": [
+      0.001
+    ],
+    "movement_from_seed_mm": 0.0,
+    "detail": {
+      "initial_cost": 0.19718567326625674,
+      "cost": 0.19718567326625674,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1244,
+      "fit_target_points": 1248,
+      "library": "open3d_color",
+      "library_inliers": 0,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.001,
+        "points": 1851,
+        "normal_sv": [
+          41.54538644560148,
+          8.22929735926008,
+          7.567002712997265
+        ],
+        "jacobian_sv": [
+          42.0006290859872,
+          8.983521273659589,
+          8.219563273154671,
+          0.6042370458378297,
+          0.3499525823766921,
+          0.12551507836858602
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 510,
+    "method": "small_gicp",
+    "voxels": [
+      0.006,
+      0.003
+    ],
+    "movement_from_seed_mm": 0.7244754530193487,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.033139762759115135,
+      "evaluations": 5,
+      "converged": true,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "small_gicp",
+      "library_inliers": 372,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": []
+  },
+  {
+    "source_frame": 510,
+    "method": "small_gicp",
+    "voxels": [
+      0.003,
+      0.0015
+    ],
+    "movement_from_seed_mm": 1.0408206536498978,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.02990445470804109,
+      "evaluations": 7,
+      "converged": true,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "small_gicp",
+      "library_inliers": 1230,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": []
+  },
+  {
+    "source_frame": 510,
+    "method": "small_gicp",
+    "voxels": [
+      0.0015
+    ],
+    "movement_from_seed_mm": 1.0411941099578064,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.029910155868955214,
+      "evaluations": 5,
+      "converged": true,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "small_gicp",
+      "library_inliers": 1230,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": []
+  },
+  {
+    "source_frame": 510,
+    "method": "small_gicp",
+    "voxels": [
+      0.001
+    ],
+    "movement_from_seed_mm": 0.9567797038456857,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.03205677046692723,
+      "evaluations": 6,
+      "converged": true,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "small_gicp",
+      "library_inliers": 1776,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": []
+  },
+  {
+    "source_frame": 510,
+    "method": "open3d_plane",
+    "voxels": [
+      0.006,
+      0.003
+    ],
+    "movement_from_seed_mm": 0.7842212954833007,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.03285254932796547,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "open3d_plane",
+      "library_inliers": 372,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.006,
+        "points": 114,
+        "normal_sv": [
+          10.580198665654311,
+          1.04593221530056,
+          0.9825589021952766
+        ],
+        "jacobian_sv": [
+          10.70613277631012,
+          1.1793379655322873,
+          1.0903015132090563,
+          0.13651247641095546,
+          0.072150696678951,
+          0.00835871329358256
+        ]
+      },
+      {
+        "voxel": 0.003,
+        "points": 380,
+        "normal_sv": [
+          19.09090140016304,
+          2.893298581290634,
+          2.6769959000256347
+        ],
+        "jacobian_sv": [
+          19.314864115869813,
+          3.1582215470142128,
+          2.954730041316834,
+          0.26207012419805537,
+          0.15170318473868408,
+          0.03824560323763222
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 510,
+    "method": "open3d_plane",
+    "voxels": [
+      0.003,
+      0.0015
+    ],
+    "movement_from_seed_mm": 0.8822122007740442,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.03242882529798277,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "open3d_plane",
+      "library_inliers": 1227,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.003,
+        "points": 380,
+        "normal_sv": [
+          19.09090140016304,
+          2.893298581290634,
+          2.6769959000256347
+        ],
+        "jacobian_sv": [
+          19.314864115869813,
+          3.1582215470142128,
+          2.954730041316834,
+          0.26207012419805537,
+          0.15170318473868408,
+          0.03824560323763222
+        ]
+      },
+      {
+        "voxel": 0.0015,
+        "points": 1248,
+        "normal_sv": [
+          34.28746686250037,
+          6.231372385657651,
+          5.79133959841774
+        ],
+        "jacobian_sv": [
+          34.686858423000096,
+          6.8259586011146824,
+          6.283766180165759,
+          0.49264822729346985,
+          0.28217423139815495,
+          0.0932785472173342
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 510,
+    "method": "open3d_plane",
+    "voxels": [
+      0.0015
+    ],
+    "movement_from_seed_mm": 0.8715132590457949,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.032438337809112774,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "open3d_plane",
+      "library_inliers": 1227,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.0015,
+        "points": 1248,
+        "normal_sv": [
+          34.28746686250037,
+          6.231372385657651,
+          5.79133959841774
+        ],
+        "jacobian_sv": [
+          34.686858423000096,
+          6.8259586011146824,
+          6.283766180165759,
+          0.49264822729346985,
+          0.28217423139815495,
+          0.0932785472173342
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 510,
+    "method": "open3d_plane",
+    "voxels": [
+      0.001
+    ],
+    "movement_from_seed_mm": 0.6406878867048199,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.03292711110740722,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "open3d_plane",
+      "library_inliers": 1832,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.001,
+        "points": 1851,
+        "normal_sv": [
+          41.54538644560148,
+          8.22929735926008,
+          7.567002712997265
+        ],
+        "jacobian_sv": [
+          42.0006290859872,
+          8.983521273659589,
+          8.219563273154671,
+          0.6042370458378297,
+          0.3499525823766921,
+          0.12551507836858602
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 510,
+    "method": "open3d_color",
+    "voxels": [
+      0.006,
+      0.003
+    ],
+    "movement_from_seed_mm": 0.1837093193302491,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.0322681224743476,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "open3d_color",
+      "library_inliers": 372,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.006,
+        "points": 114,
+        "normal_sv": [
+          10.580198665654311,
+          1.04593221530056,
+          0.9825589021952766
+        ],
+        "jacobian_sv": [
+          10.70613277631012,
+          1.1793379655322873,
+          1.0903015132090563,
+          0.13651247641095546,
+          0.072150696678951,
+          0.00835871329358256
+        ]
+      },
+      {
+        "voxel": 0.003,
+        "points": 380,
+        "normal_sv": [
+          19.09090140016304,
+          2.893298581290634,
+          2.6769959000256347
+        ],
+        "jacobian_sv": [
+          19.314864115869813,
+          3.1582215470142128,
+          2.954730041316834,
+          0.26207012419805537,
+          0.15170318473868408,
+          0.03824560323763222
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 510,
+    "method": "open3d_color",
+    "voxels": [
+      0.003,
+      0.0015
+    ],
+    "movement_from_seed_mm": 0.2262653577674745,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.03167003464069731,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "open3d_color",
+      "library_inliers": 1227,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.003,
+        "points": 380,
+        "normal_sv": [
+          19.09090140016304,
+          2.893298581290634,
+          2.6769959000256347
+        ],
+        "jacobian_sv": [
+          19.314864115869813,
+          3.1582215470142128,
+          2.954730041316834,
+          0.26207012419805537,
+          0.15170318473868408,
+          0.03824560323763222
+        ]
+      },
+      {
+        "voxel": 0.0015,
+        "points": 1248,
+        "normal_sv": [
+          34.28746686250037,
+          6.231372385657651,
+          5.79133959841774
+        ],
+        "jacobian_sv": [
+          34.686858423000096,
+          6.8259586011146824,
+          6.283766180165759,
+          0.49264822729346985,
+          0.28217423139815495,
+          0.0932785472173342
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 510,
+    "method": "open3d_color",
+    "voxels": [
+      0.0015
+    ],
+    "movement_from_seed_mm": 0.24244484497294774,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.0323194426001934,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "open3d_color",
+      "library_inliers": 1227,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.0015,
+        "points": 1248,
+        "normal_sv": [
+          34.28746686250037,
+          6.231372385657651,
+          5.79133959841774
+        ],
+        "jacobian_sv": [
+          34.686858423000096,
+          6.8259586011146824,
+          6.283766180165759,
+          0.49264822729346985,
+          0.28217423139815495,
+          0.0932785472173342
+        ]
+      }
+    ]
+  },
+  {
+    "source_frame": 510,
+    "method": "open3d_color",
+    "voxels": [
+      0.001
+    ],
+    "movement_from_seed_mm": 0.2506739224260652,
+    "detail": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.034070471184254957,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "open3d_color",
+      "library_inliers": 1832,
+      "library_levels": 1,
+      "retained_admissible_iterate": false
+    },
+    "levels": [
+      {
+        "voxel": 0.001,
+        "points": 1851,
+        "normal_sv": [
+          41.54538644560148,
+          8.22929735926008,
+          7.567002712997265
+        ],
+        "jacobian_sv": [
+          42.0006290859872,
+          8.983521273659589,
+          8.219563273154671,
+          0.6042370458378297,
+          0.3499525823766921,
+          0.12551507836858602
+        ]
+      }
+    ]
+  }
+]

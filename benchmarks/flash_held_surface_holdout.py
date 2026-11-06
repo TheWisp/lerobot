@@ -208,6 +208,9 @@ def run(
                     prepared_reference=prepared_reference,
                 )
                 pose, detail = fitter.refine(candidate_pose)
+                if pose is None:
+                    fitted[name] = {"available": False, **detail}
+                    continue
                 before_center = move(center[None], candidate_pose)[0]
                 after_center = move(center[None], pose)[0]
                 displacement = np.linalg.norm(

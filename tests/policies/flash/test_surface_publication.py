@@ -18,6 +18,38 @@ from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig, check_surface_contradiction
 
 
+@pytest.mark.parametrize("kalman,surface_priority", [(False, False), (False, True), (True, True)])
+def test_any_matcher_proposal_must_pass_empty_space_check_before_publication_and_growth(
+    monkeypatch, kalman, surface_priority
+):
+    config = GrowingSurfaceConfig(
+        surface_priority=surface_priority,
+        uncertainty=PoseUncertaintyConfig(enabled=kalman, mode="kalman", max_visible_outlier_fraction=0.99),
+    )
+    session = GrowingSurfaceSession(ShapeConfig(scene_depth_constraints=False), config)
+    initial = frame(0)
+    session.update(initial, 0.0)
+    original = session.store.points.copy()
+    wrong = np.eye(4)
+    wrong[0, 3] = 0.008  # Narrow protrusion, not an obviously detached object.
+
+    # The solver boundary may return any candidate: neither solver confidence
+    # nor a very good matching score is permission to occupy measured air.
+    def propose_wrong(fitter, seed, limit):
+        return wrong.copy(), {"evaluations": 1, "converged": True}, [(0.0, wrong.copy())]
+
+    monkeypatch.setattr(WholeSurfaceFit, "_solve", propose_wrong)
+    monkeypatch.setattr(WholeSurfaceFit, "_refine_visible_correspondences", lambda *a: iter(()))
+    result = session.update(frame(1), 0.1)
+    returned = result["camera_from_reference"]
+    if returned is not None:
+        # Keeping the compatible previous pose is valid; publishing the
+        # contradicted proposal is not. Use the independently known static scene.
+        points = original @ np.asarray(returned)[:3, :3].T + np.asarray(returned)[:3, 3]
+        assert np.max(np.linalg.norm(points - original, axis=1)) < 0.005
+    np.testing.assert_array_equal(session.store.points, original)
+
+
 def frame(index, *, extension=0):
     mask = np.zeros((100, 140), bool)
     mask[25:75, 35 : 85 + extension] = True
@@ -105,11 +137,21 @@ def test_insufficient_overlap_checks_fallback_and_rolls_back_filter(wrong_suppor
         motion=MeasuredGroupMotion(support, support + pose[:3, 3], 0.0, 0.1, "measured_support"),
     )
     result = session.update(frame(1, extension=10), 0.1, hint=hint)
-    assert result["diagnostics"]["reason"] == "insufficient_surface_overlap"
+    reason = result["diagnostics"]["reason"]
+    if reason == "no_observation_compatible_candidate":
+        # The stronger depth check may now reject a bad support-seeded fit
+        # before Kalman or the later overlap check. No correction occurred.
+        assert wrong_support
+        assert not result["diagnostics"]["kalman"]["accepted"]
+        np.testing.assert_array_equal(
+            session.kalman.covariance, result["diagnostics"]["kalman"]["prior_covariance"]
+        )
+    else:
+        assert reason == "insufficient_surface_overlap"
+        assert not result["diagnostics"]["kalman"]["accepted"]
+        np.testing.assert_array_equal(
+            session.kalman.covariance, result["diagnostics"]["kalman"]["prior_covariance"]
+        )
     assert (result["camera_from_reference"] is None) == wrong_support
-    assert not result["diagnostics"]["kalman"]["accepted"]
-    np.testing.assert_array_equal(
-        session.kalman.covariance, result["diagnostics"]["kalman"]["prior_covariance"]
-    )
     np.testing.assert_array_equal(session.store.points, original)
     assert session.connected_frame == 0

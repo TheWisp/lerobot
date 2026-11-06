@@ -33,6 +33,7 @@ class ReferenceViewRegistrationCandidate:
     reference_in_front_p90_m: float | None
     reference_behind_p90_m: float | None
     surface_center_camera_m: tuple[float, float, float]
+    geometry_accepted: bool
 
 
 def fit_reference_view_candidates(
@@ -86,7 +87,13 @@ def fit_reference_view_candidates(
     prepared_agreement = PreparedSurfaceAgreement.build(model)
     results = []
     for name, seed in seeds:
-        pose, detail = fit.refine(seed)
+        # This is a review of attempted alignments, not pose publication.
+        # Keep rejected alternatives visible, explicitly marked as rejected.
+        attempts, search_detail = fit.search(seed, coarse=False)
+        accepted = [item for item in attempts if item["check"]["accepted"]]
+        selected = min(accepted or attempts, key=lambda item: item["cost"])
+        pose = selected["pose"]
+        detail = {**selected["detail"], **search_detail, "cost": selected["cost"]}
         score, _ = registered_surface_agreement(
             model,
             pose,
@@ -110,6 +117,7 @@ def fit_reference_view_candidates(
                 score.reference_in_front_p90_m,
                 score.reference_behind_p90_m,
                 tuple(float(value) for value in center),
+                selected["check"]["accepted"],
             )
         )
     return tuple(sorted(results, key=lambda item: item.fit_cost))

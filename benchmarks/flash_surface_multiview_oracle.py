@@ -50,6 +50,8 @@ class PartialReferenceFit(WholeSurfaceFit):
 
 
 def score_pose(reference: np.ndarray, candidate: np.ndarray, truth: np.ndarray) -> dict:
+    if candidate is None:
+        return {"available": False}
     distance = np.linalg.norm(move(reference, candidate) - move(reference, truth), axis=1)
     angle = Rotation.from_matrix(candidate[:3, :3] @ truth[:3, :3].T).magnitude()
     return {
@@ -115,17 +117,17 @@ def run(
                 fitted, detail = fitter.correct(truth)
                 row[name] = {
                     **score_pose(reference, fitted, truth),
-                    "cost": detail["cost"],
+                    "cost": detail.get("cost"),
                     "cost_at_annotation": fitter.score(truth),
-                    "used_coarse": detail["used_coarse"],
+                    "used_coarse": detail.get("used_coarse"),
                     "local_only": score_pose(reference, local, truth),
-                    "local_cost": local_detail["cost"],
+                    "local_cost": local_detail.get("cost"),
                 }
             partial = PartialReferenceFit(reference, current, k, shape)
             partial_pose, partial_detail = partial.refine(truth)
             row["fixed_partial_fit"] = {
                 **score_pose(reference, partial_pose, truth),
-                "cost": partial_detail["cost"],
+                "cost": partial_detail.get("cost"),
                 "cost_at_annotation": partial.score(truth),
             }
         rows.append(row)

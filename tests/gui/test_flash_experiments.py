@@ -438,7 +438,10 @@ def test_rebuild_recomputes_then_publishes_without_erasing_failed_or_old_results
     from pathlib import Path
 
     new_run = Path(replacement["source_run"])
-    assert json.loads((new_run.parent / "provenance.json").read_text())["config"] == asdict(config)
+    assert (
+        VisionPipelineConfig.from_dict(json.loads((new_run.parent / "provenance.json").read_text())["config"])
+        == config
+    )
     data = json.loads((root / replacement["id"] / "overlays.json").read_text())
     pair = data["frames"][1]["objects"]["object"]["matches"]["pair"]
     assert pair["path_sampling"] == "full_ufm_output"
@@ -1012,6 +1015,16 @@ def test_scene_http_uses_same_frame_units_and_relative_label_origin(tmp_path, mo
         np.testing.assert_array_equal(depth, np.ones((64, 96)))
         np.testing.assert_array_equal(rgb, np.full((64, 96, 3), 100))
         obj = data["objects"]["object"]
+        from benchmarks.flash_experiment_browser import projected_geometry
+
+        overlay = json.loads((output / "overlays.json").read_text())
+        np.testing.assert_allclose(
+            projected_geometry(
+                np.asarray(obj["axis_points"]), obj["pose"], np.asarray(data["camera"]["intrinsics"])
+            ),
+            overlay["frames"][1]["objects"]["object"]["poses"]["surface_corrected"][:4],
+            atol=0.011,
+        )
         assert np.array(obj["pose"])[:3, 3] == pytest.approx([0.01, 0.02, 0])
         assert np.array(obj["labelled_pose"])[:3, 3] == pytest.approx([0, 0.02, 0])
         assert obj["label_kind"] == "initial_observation_at_labelled_pose"
@@ -1109,12 +1122,39 @@ def test_scene_browser_orbits_resets_and_switches_recorded_method(gui_page, tmp_
     page.evaluate("async () => { switchTab('run'); await runTabInit(); await selectWorkflow('flash'); }")
     page.locator(f'.flash-experiment-item[data-id="{first_export.name}"]').click()
     page.wait_for_selector('#flash-experiment-overlay[data-frame="0"]')
+    page.evaluate("""async () => {
+        const T = await import('/static/vendor/three.module.js');
+        const add=T.Object3D.prototype.add;
+        T.Object3D.prototype.add=function(...items) {
+            for(const item of items) if(item.userData.axis) {
+                item.onBeforeRender=function(renderer, scene, camera) {
+                    const el=renderer.domElement, w=el.clientWidth,h=el.clientHeight;
+                    window.renderedAxes=[[0,1,3,5].map(index=>{
+                        const p=new T.Vector3().fromBufferAttribute(item.geometry.attributes.position,index);
+                        p.applyMatrix4(item.matrixWorld).project(camera);
+                        return [(p.x+1)*w/2,(1-p.y)*h/2];
+                    })];
+                };
+            }
+            return add.apply(this,items);
+        };
+    }""")
     page.get_by_role("button", name="3D scene", exact=True).click()
     page.wait_for_selector('#flash-experiment-scene[data-frame="0"]')
+    page.wait_for_function("window.renderedAxes?.length > 0")
+    comparison = page.evaluate("""() => {
+        const data=flashExperiments.data, canvas=document.getElementById('flash-experiment-scene');
+        const w=canvas.clientWidth,h=canvas.clientHeight,s=Math.min(w/data.width,h/data.height);
+        const method=document.getElementById('flash-experiment-method').value;
+        const expected=data.frames[0].objects.object.poses[method].slice(0,4).map(([u,v]) =>
+            [(w-data.width*s)/2+u*s,(h-data.height*s)/2+v*s]);
+        return {expected, actual:window.renderedAxes[0]};
+    }""")
+    np.testing.assert_allclose(comparison["actual"], comparison["expected"], atol=0.1)
     # Validate the actual GPU projection: off-centre intrinsics and portrait
     # source must agree with the pixel positions of object-fit: contain.
     error = page.evaluate("""async () => {
-        const {calibratedProjection} = await import('/static/rgbd_scene.js?v=5');
+        const {calibratedProjection} = await import('/static/rgbd_scene.js?v=6');
         const T = await import('/static/vendor/three.module.js');
         const camera = new T.PerspectiveCamera(45, 1, .01, 100);
         let error = 0;
@@ -1169,7 +1209,7 @@ def test_scene_browser_orbits_resets_and_switches_recorded_method(gui_page, tmp_
 @pytest.mark.requires_playwright
 def test_shared_rgbd_shader_preserves_rgb_depth_alignment_and_missing_depth(gui_page):
     result = gui_page.evaluate("""async () => {
-        const {createRgbdScene} = await import('/static/rgbd_scene.js?v=5');
+        const {createRgbdScene} = await import('/static/rgbd_scene.js?v=6');
         const canvas=document.createElement('canvas');
         canvas.style.cssText='position:fixed;left:0;top:0;width:320px;height:240px';
         document.body.append(canvas);
@@ -1347,7 +1387,7 @@ def test_browser_names_matching_backend_from_selected_recording(gui_page, tmp_pa
 @pytest.mark.parametrize("mode", ["selection", "kalman", "default"])
 @pytest.mark.parametrize("settings_location", ["request", "item"])
 def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(
-    tmp_path, monkeypatch, mode, settings_location
+    tmp_path, monkeypatch, mode, settings_location, matcher="scipy"
 ):
     """Edit covariance through the HTTP contract and inspect real saved fitting diagnostics."""
     from pathlib import Path
@@ -1376,6 +1416,8 @@ def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(
     data = result.json()
     assert any(o["path"] == "surface_experiment.uncertainty.enabled" for o in data["options"])
     edited = data["settings"]
+    edited["config"]["shape"]["registration"]["backend"] = matcher
+    assert set(data["matchers"]) == {"scipy", "small_gicp", "open3d_plane", "open3d_color"}
     if mode != "default":
         edited["surface_experiment"]["uncertainty"]["enabled"] = True
         edited["surface_experiment"]["uncertainty"]["mode"] = mode
@@ -1425,9 +1467,13 @@ def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(
     assert saved["surface_experiment"]["uncertainty"]["enabled"]
     assert saved["surface_experiment"]["uncertainty"]["reset_on_geometry_conflict"] is False
     assert saved["config"]["shape"]["mask_coverage_weight"] == 0.5
+    assert saved["config"]["shape"]["registration"]["backend"] == matcher
+    assert latest["surface_registration"]["backend"] == matcher
     rows = [json.loads(line) for line in (new_run / "frames.jsonl").read_text().splitlines()]
     # Check the actual fit ran the new mode, not merely a saved setting.
     assert "uncertainty" in rows[1]["objects"]["object"]["group_growing_details"]["fit"]
+    if matcher != "scipy":
+        assert rows[1]["objects"]["object"]["diagnostics"]["library"] == matcher
     growth = rows[1]["objects"]["object"]["group_growing_details"]["growth"]
     assert growth["required_overlap"] == 0.9
     assert growth["agreement_m"] == 0.0025
@@ -1439,3 +1485,49 @@ def test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(
         if mode == "default":
             assert saved["surface_experiment"]["uncertainty"]["max_visible_outlier_fraction"] == 0.25
     assert new_run != run
+
+
+@pytest.mark.requires_playwright
+def test_browser_surface_matcher_edits_rerun_without_relabeling_recorded_result(
+    gui_page, tmp_path, monkeypatch
+):
+    from benchmarks.flash_pipeline_settings import defaults
+
+    run, _ = completed_run(tmp_path)
+    (run.parent / "provenance.json").write_text(json.dumps(defaults()))
+    root = tmp_path / "browser"
+    export(run, root)
+    monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(root))
+    page = gui_page
+    page.evaluate("async () => { switchTab('run'); await runTabInit(); await selectWorkflow('flash'); }")
+    page.wait_for_selector('#flash-experiment-overlay[data-frame="0"]')
+    page.select_option("#flash-experiment-method", "surface_corrected")
+    results = page.locator("#flash-experiment-results")
+    assert "Surface matcher: Current fitter (SciPy)" in results.inner_text()
+    page.get_by_role("button", name="Pipeline settings", exact=True).click()
+    matcher = page.get_by_label("Surface matcher", exact=True)
+    editor = page.get_by_label("Pipeline configuration JSON", exact=True)
+    matcher.select_option("small_gicp")
+    assert json.loads(editor.input_value())["config"]["shape"]["registration"]["backend"] == "small_gicp"
+    settings = json.loads(editor.input_value())
+    settings["config"]["shape"]["registration"]["backend"] = "open3d_color"
+    editor.fill(json.dumps(settings))
+    assert matcher.input_value() == "open3d_color"
+    # Worker execution is covered by the real rerun test below. Capture only
+    # the browser boundary here so this test never launches an unowned process.
+    page.route(
+        "**/api/run/flash/experiments/rebuild?*",
+        lambda route: route.fulfill(status=409, json={"detail": "Captured test request"}),
+    )
+    with page.expect_request(lambda request: request.method == "POST" and "/rebuild?" in request.url) as sent:
+        page.get_by_role("button", name="Rerun this scene with these settings").click()
+    assert sent.value.post_data_json["config"]["shape"]["registration"]["backend"] == "open3d_color"
+    assert "Surface matcher: Current fitter (SciPy)" in results.inner_text()
+
+
+@pytest.mark.parametrize("matcher", ["small_gicp", "open3d_plane", "open3d_color"])
+def test_library_setting_reaches_real_rerun_and_saved_playback(tmp_path, monkeypatch, matcher):
+    pytest.importorskip("small_gicp" if matcher == "small_gicp" else "open3d")
+    test_pipeline_settings_roundtrip_through_http_worker_and_real_fitter(
+        tmp_path, monkeypatch, "default", "request", matcher
+    )

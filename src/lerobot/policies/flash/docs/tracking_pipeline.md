@@ -1,6 +1,27 @@
 # FLASH tracking pipeline
 
-Status: proposed
+Status: experimental implementation; accuracy and runtime remain limited.
+
+## Shared execution and outputs
+
+**Implemented, 2026-11-06:** recorded experiments and **Live camera** both call
+`SurfaceFrameSession.step`. Only acquisition, segmentation and output storage
+differ. The live adapter uses aligned camera RGB-D and the same SAM3 adapter as
+the Data tab; recorded experiments use saved RGB-D/masks. Identical inputs and
+settings produce identical poses, surfaces, groups and covariance in parity tests.
+Fresh sessions use shared **LK**, SciPy fitting, groups, growing surface and Kalman
+with the current geometry checks. UFM and the library solvers remain selectable.
+Saved experiments retain their actual settings; playback never reruns inference.
+
+The output is a timestamped 4×4 transform from fixed initial surface coordinates
+to the current camera, its evidence/uncertainty, and versioned measured surface
+patches. The initial origin never moves when the surface grows. Image and 3D views
+now use the same fixed display axes. Full labelled models, when available, add a
+secondary nearest-surface distance score; labelled pose error remains primary.
+
+**Robot execution is not connected to this new session yet.** The older demo
+compiler/run engine still uses its earlier representation. This live view is a
+camera-only perception debugger, not a robot controller.
 
 **Estimate a rigid object's pose from its visible surface.** Use aligned RGB-D
 and SAM masks, image matches, and optional group/gripper predictions. Grow the
@@ -61,7 +82,7 @@ establish equal tracking quality for this next step.
 The first full-clip comparison found regressions, including a sideways dowel
 estimate during rotation. Subsequent geometry fixes improved aggregate accuracy
 across 21 labelled scenes, with individual regressions and higher processing cost.
-It remains opt-in; see the
+Those were historical ablations; fresh shared sessions now use LK. See the
 [full-suite measurements](../../../../../docs/proofs/flash-tracker-restart/RESEARCH.md#2026-11-02--full-suite-validation-after-the-geometry-fixes).
 
 Select one configurable 2D matching backend, initially LK or UFM, for an experiment.
@@ -119,10 +140,46 @@ the result and preserved by GUI reruns and cache keys.
 **Current experiment, 2026-11-02:** both endpoints of object matches must pass
 the configured mask erosion (2 px by default) and depth checks. A match can
 still drift inside a valid surface. With `GrowingSurfaceConfig.surface_priority`,
-surface fitting and group-disagreement checks use the same geometric objective;
-image/group matches choose between equally fitting solutions, rather than
-outweighing a better measured-surface fit. The weighted objective is retained as
-an ablation. This is not a calibrated confidence model.
+one search collects image-, geometry- and group-seeded candidates. Each uses the
+same geometry validation before ranking; the group adapter does not make a
+second geometry decision. The weighted objective is retained as an ablation.
+This is not a calibrated confidence model.
+
+Within a frame:
+
+```text
+Search starts → check geometry → rank valid candidates → Kalman
+                                                        ↓
+                                     check resulting pose → publish
+                                                        ↓
+                                            stricter surface-growth checks
+```
+
+`WholeSurfaceFit.search` owns the starts, cached checks and total search budget.
+Numerical solvers only propose poses. An invalid lower-cost result cannot replace
+a valid one, including intermediate corrective steps. No valid result means no
+measured pose. Insufficient overlap can still leave a prediction available if
+it does not contradict the measurements; it cannot update the surface.
+`check_pose` reads measured geometry directly, independently of solver weights,
+residual-array layout and the uncertainty switch. Rechecking a Kalman-adjusted
+pose is necessary because fusion changes its position/orientation.
+
+**Selectable 3D matchers (2026-11-05):** FLASH → Pipeline settings → Surface
+matcher chooses the current SciPy fitter, small_gicp GICP, Open3D point-to-plane,
+or Open3D geometry + color. Rerun the scene to compute that choice; playback
+reports the matcher actually used. SciPy remains the default. Optional libraries
+must be installed in the benchmark worker's Python environment (tested with
+small_gicp 1.0.1 and Open3D 0.20.0).
+
+All use the shared search, depth/mask rejection, Kalman and growth checks. Their
+numerical objectives differ: the library solver does not directly optimize the
+UFM/group residual. Those sources supply starting poses and candidate ranking.
+The library paths retain a point-to-point intermediate before plane/GICP fitting;
+hidden surface points do not get paired with the visible face. They compare
+measured colors from the first and latest connected observations to help rank
+geometrically valid poses. Earlier measured colors take precedence, so a drifting
+pose does not immediately repaint the stored surface. This is an experimental
+appearance cost, not calibrated confidence; it cannot override depth rejection.
 
 Only the visible part of the saved surface must match the current measured
 surface. Outside the visible mask, nearer or unknown depth can hide a point;
@@ -130,16 +187,16 @@ farther depth can contradict it. A partial saved surface is **not** required to
 cover the entire current outline. Despite its legacy name,
 `ShapeConfig.require_full_mask_coverage` enables a soft outer-extent penalty
 for partial measured surfaces when explicitly enabled. `mask_coverage_weight`
-scales that preference; it is not a rejection threshold. This remains opt-in:
+scales that preference; it is not a rejection threshold. Fresh shared sessions use 0.5:
 a strong preference can pull an incomplete surface away from the measured fit. An uncovered
 region may be newly visible surface absent from the stored model; coverage
-alone cannot establish a pose or a contradiction. The opt-in
+alone cannot establish a pose or a contradiction. The configurable
 `prefer_observed_overlap` cost favors alignment with measured surface over
 hiding the reference; it does not require unseen surface to exist.
 Projected saved surface outside measured object pixels remains subject to depth
-and mask checks. With `scene_depth_constraints` enabled, a connected patch
-projecting beyond the mask into measured empty space is rejected even below
-the global outlier allowance. This check depends on surface sampling; small or
+and mask checks. A connected patch in measured empty space is rejected even
+below the global outlier allowance, including inside the mask.
+`scene_depth_constraints` controls an additional search cost; rejection always runs. This check depends on surface sampling; small or
 sparse conflicts can escape it. Isolated contradictions remain tolerable.
 No scene name or grasp timing selects these rules.
 The recorded gamepad regression checks approach occlusion and subsequent
@@ -229,17 +286,20 @@ compensated for known camera motion, with increasing uncertainty.
 
 The correction uses inverse covariance as directional weight. Its compatibility
 test uses the sum of prediction and observation covariance. If current depth and
-mask clearly contradict the prediction, the filter restarts at a valid observed
-fit with broad uncertainty. The final fused pose is checked against depth and
-mask again. When every fitted candidate contradicts the observation, the output
+mask clearly contradict the prediction, the compatibility option
+`reset_on_geometry_conflict` can restart at a valid observed fit. Fresh shared
+sessions disable this option and retain the normal innovation test. The final
+fused pose is checked against depth and mask again. When every fitted candidate contradicts the observation, the output
 is lost rather than presenting a contradicted pose as valid. Predictions and
 rejected corrections never add surface measurements.
 
 **Limitations:** the information matrix describes depth-normal constraints only.
 Outline/image constraints used by the fitter are not yet represented, so the filter
-can underweight real sideways motion even when the outline locates it. The geometry
-check also conflates newly visible, unmatched surface with contradiction of known
-surface. The 25% allowance reduces rejection but does not resolve this distinction.
+can underweight real sideways motion even when the outline locates it.
+Visibility-aware matching now separates missing/newly visible surface from
+known empty-space conflicts, but imperfect masks, depth and stored geometry can
+still make that distinction wrong. The 25% aggregate allowance is not a pose
+accuracy guarantee.
 Noise settings are assumptions, not calibration. Shared evidence
 between group motion and fitting, and errors correlated across time, are not
 fully modeled. Wrong normals, a wrong reconstructed surface, a local optimizer
@@ -268,7 +328,7 @@ reliably. Keep the new observation separate; do not silently reset the landmarks
 [Example](#e2-a-new-side-after-occlusion). Deformation, transparent objects and
 unreliable segmentation/depth remain explicit limitations.
 
-Keep the implementation in the experiment harness first. Compare fixed and growing
+The core is now shared by the experiment harness and camera debugger. Compare fixed and growing
 surfaces on the same recordings, masks and image matches. Test removal/repositioning
 with deliberate bad additions before trusting automatic repair. Keep the live
 defaults unchanged until benchmark and visual evidence justify moving them.
@@ -276,9 +336,8 @@ defaults unchanged until benchmark and visual evidence justify moving them.
 **Run all benchmarks** processes listed examples in a background worker and
 preserves a code/config snapshot, prior results and a downloadable report. Evaluate
 pose error separately from availability; unlabelled videos have no proven accuracy.
-Supplied-mask tests do not measure SAM accuracy. The same causal estimator is intended
-for demos, benchmarks and the debugger; the independent robot loop consumes its
-outputs at its own fixed rate.
+Supplied-mask tests do not measure SAM accuracy. Recorded experiments and the live debugger use the same causal estimator.
+Connecting those outputs to the robot loop remains separate work.
 
 ## Examples and references
 

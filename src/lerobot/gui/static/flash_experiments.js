@@ -83,7 +83,7 @@ async function loadFlashExperiments() {
         }
         refreshFlashMetrics();
         if (!items.length) list.textContent = 'No exported experiments yet.';
-        if (items.length && !items.some(item => item.id === flashExperiments.selected) && flashUiMode === 'experiments') {
+        if (items.length && !items.some(item => item.id === flashExperiments.selected) && flashUiMode === 'experiments' && !flashLive.visible) {
             await selectFlashExperiment(items.find(item => (item.slot_id || item.id) === oldSlot) || items[0]);
         }
     } catch (error) {
@@ -190,6 +190,10 @@ async function pollFlashRebuild() {
 }
 
 async function selectFlashExperiment(item) {
+    if (typeof flashLive !== 'undefined' && flashLive.visible) {
+        await hideFlashLive(false);
+        if (flashLive.visible) return;
+    }
     resetFlashExperimentScene();
     flashExperiments.request?.abort();
     const request = new AbortController();
@@ -540,6 +544,9 @@ function flashMethodMetrics(item, role, method) {
         count, total, available,
         median: errors.cloud_mm_median, p90: errors.cloud_mm_p90,
         angle: errors.angle_deg_median,
+        surface: data.surface_error?.median_mm,
+        surfaceWithin: data.surface_error?.within_10mm_percent,
+        surfaceDetails: data.surface_error,
         availability: total > 0 ? available / total * 100 : null,
         prepare: timing.prepare_ms?.median,
         groups: method.startsWith('group_') ? timing.scene_point_tracking_ms?.median : null,
@@ -575,6 +582,11 @@ function renderFlashResults() {
     flashText(panel, 'h3', 'Whole-clip results');
     const method = document.getElementById('flash-experiment-method').value;
     flashText(panel, 'p', flashMethodLabel(method, item), 'flash-metric-muted');
+    const registration = item.surface_registration?.backend || 'scipy';
+    const matchers = {scipy: 'Current fitter (SciPy)', small_gicp: 'small_gicp — GICP',
+        open3d_plane: 'Open3D — point-to-plane', open3d_color: 'Open3D — geometry + color'};
+    if (!['ufm_chain', 'ufm_retained_reference'].includes(method))
+        flashText(panel, 'p', `Surface matcher: ${matchers[registration] || registration}`, 'flash-metric-muted');
     const shared = item.metrics?.shared_matching;
     if (shared) flashText(panel, 'p', `Shared ${flashImageBackend(item)} matching: ${flashNumber(shared.timing_ms.median)} ms/frame · all objects and groups`, 'flash-metric-muted');
     if (!item.metrics?.roles) { flashText(panel, 'p', 'No saved scores for this recording.'); return; }
@@ -589,6 +601,8 @@ function renderFlashResults() {
         const fields = [
             ['Point error, median / p90', flashHasAccuracyLabels(item, role) ? `${flashNumber(value.median)} / ${flashNumber(value.p90)} mm` : 'Unmeasured'],
             ['Rotation error, median', flashHasAccuracyLabels(item, role) ? `${flashNumber(value.angle)}°` : 'Unmeasured'],
+            ['Surface distance, median / p90', Number.isFinite(value.surface) ? `${flashNumber(value.surface)} / ${flashNumber(value.surfaceDetails.p90_mm)} mm` : value.surfaceDetails?.reason || 'Unmeasured'],
+            ['Surface points within 10 mm', Number.isFinite(value.surfaceWithin) ? `${flashNumber(value.surfaceWithin)}% · ${value.surfaceDetails.frames_scored}/${value.surfaceDetails.frames_total} frames scored` : 'Unmeasured'],
             ['Frames with a pose', `${value.available} / ${value.total} (${flashNumber(value.availability)}%)`],
             ['Shared preparation', `${flashNumber(value.prepare)} ms`],
             ['Additional processing', `${flashNumber(value.fit)} ms`],
@@ -601,6 +615,7 @@ function renderFlashResults() {
     const help = flashText(panel, 'details', '');
     flashText(help, 'summary', 'How to read these scores');
     flashText(help, 'p', 'Missing poses fail the percentage score. Initialization is excluded. Error medians use returned poses only. Point error measures displacement of the same initial surface points against annotated motion; rotation is not adjusted for symmetry.');
+    flashText(help, 'p', 'Surface distance is a secondary geometry check: each predicted surface point is compared to the nearest point on the full labelled model. Rotationally equivalent shapes can score well despite a large pose error. Missing model parts are not penalized. It does not prove point identity or task success. It uses returned poses and saved surfaces only, so compare availability too; model sampling and label errors affect the result.');
     flashText(help, 'p', 'These are accuracy limits, not confidence. Saved masks are reused, so segmentation is not evaluated. Times are median per-object stages, not end-to-end FPS; — means not separately measured.');
 }
 function showFlashComparison(show) {
@@ -633,9 +648,12 @@ function renderFlashComparison() {
         pass: `Higher is better. Within ${flashLimit()} mm / ${flashLimit()}°. Missing poses fail; initialization excluded. Unlabelled scenes have no accuracy score.`,
         median: 'Lower is better. Error against annotated motion, on returned poses only. Compare availability too: a method may return fewer, easier frames.',
         p90: 'Lower is better. 90% of returned poses have point error below this value. Missing poses are not included; compare availability too.',
+        surface: 'Lower is better. Median distance from predicted surface points to the full labelled model, ignoring point identity. Partial surfaces need not fill the full model. Returned poses only; compare availability too.',
+        surfaceWithin: 'Higher is better. Percentage of predicted surface points within 10 mm of the full labelled model. This is not a percentage of correct poses. Returned poses only; compare availability too.',
         availability: 'Higher means more frames with a pose, not more correct poses. Includes unlabelled scenes; initialization excluded.',
         fit: 'Lower is faster. Median additional processing per object after shared preparation. Not end-to-end latency or FPS. UFM-only stages were not separately timed.',
     };
+    const surfaceMetric = ['surface', 'surfaceWithin'].includes(metric);
     const accuracyMetric = ['pass', 'median', 'p90'].includes(metric);
     const scored = flashExperiments.items.filter(item => item.metrics?.roles);
     const labelled = scored.filter(item => item.metrics.accuracy_labels).length;
@@ -644,12 +662,17 @@ function renderFlashComparison() {
     const groups = flashExperiments.items.flatMap(item => Object.keys(item.metrics?.roles || {}).map(role => ({item, role})))
         .sort((a, b) => Number(flashHasAccuracyLabels(b.item, b.role)) - Number(flashHasAccuracyLabels(a.item, a.role)));
     const values = groups.flatMap(({item, role}) => methods.map(method => flashMethodMetrics(item, role, method)?.[metric])).filter(Number.isFinite);
-    const scale = ['pass', 'availability'].includes(metric) ? 100 : Math.max(1, ...values);
+    const percentage = ['pass', 'availability', 'surfaceWithin'].includes(metric);
+    const scale = percentage ? 100 : Math.max(1, ...values);
     charts.replaceChildren();
     for (const {item, role} of groups) {
         const card = flashText(charts, 'section', '', 'flash-comparison-card');
         card.dataset.id = item.id; card.dataset.role = role;
         flashText(card, 'h3', `${item.name} · ${role}`);
+        if (surfaceMetric && !methods.some(method => Number.isFinite(flashMethodMetrics(item, role, method)?.[metric]))) {
+            flashText(card, 'p', 'Surface agreement unscored: needs pose labels, a full model and saved predicted surfaces.', 'flash-metric-muted');
+            continue;
+        }
         if (accuracyMetric && !flashHasAccuracyLabels(item, role)) {
             flashText(card, 'p', 'Accuracy unscored: no reference poses connected to this result.', 'flash-metric-muted');
             const availability = flashText(card, 'button', 'Show tracking availability', 'flash-comparison-availability');
@@ -662,7 +685,7 @@ function renderFlashComparison() {
             };
             continue;
         }
-        flashText(card, 'p', `0 — ${flashNumber(scale)} ${['pass', 'availability'].includes(metric) ? '%' : metric === 'fit' ? 'ms' : 'mm'}`, 'flash-chart-scale');
+        flashText(card, 'p', `0 — ${flashNumber(scale)} ${percentage ? '%' : metric === 'fit' ? 'ms' : 'mm'}`, 'flash-chart-scale');
         methods.forEach((method, index) => {
             const data = flashMethodMetrics(item, role, method);
             const value = data?.[metric];
@@ -762,9 +785,9 @@ function drawFlashExperimentScene(rebuild = false) {
             document.getElementById('flash-scene-surface').value === 'expanded';
         for (const [role, object] of Object.entries(state.packet.objects)) {
             descriptions.push({layer: 'estimate', color: 0xffa84b, pose: object.pose,
-                points: expanded ? object.surface : object.initial_surface, reference: object.reference});
+                points: expanded ? object.surface : object.initial_surface, axisPoints: object.axis_points});
             descriptions.push({layer: 'labelled', color: 0x34e5a1, pose: object.labelled_pose,
-                points: object.labelled_surface, reference: object.reference});
+                points: object.labelled_surface, axisPoints: object.axis_points});
             const groupPoints = object.group_tracks?.display_camera_xyz || object.group_tracks?.camera_xyz;
             const links = flashExperiments.data.frames[state.packet.frame].objects[role].group_tracks?.[state.packet.method]?.links;
             if (state.packet.method.startsWith('group_') && flashGroupVisible(role) && groupPoints?.length) {
@@ -810,7 +833,7 @@ async function requestFlashExperimentScene() {
         const bitmap = await createImageBitmap(new Blob([buffer.slice(depthStart + packet.depth_bytes)], {type: 'image/png'}));
         if (generation !== state.generation || !state.enabled || identity !== flashExperiments.selected ||
             method !== document.getElementById('flash-experiment-method').value) { bitmap.close(); return; }
-        const module = await import('/static/rgbd_scene.js?v=5');
+        const module = await import('/static/rgbd_scene.js?v=6');
         if (generation !== state.generation || !state.enabled || identity !== flashExperiments.selected ||
             method !== document.getElementById('flash-experiment-method').value) { bitmap.close(); return; }
         if (!state.viewer) state.viewer = module.createRgbdScene(document.getElementById('flash-experiment-scene'));
@@ -825,7 +848,8 @@ async function requestFlashExperimentScene() {
             : 'Initial measured surface moved using the dataset’s labelled poses. A partial observation, not a complete ground-truth mesh.';
         document.getElementById('flash-scene-label').disabled = !labelled;
         const errors = Object.entries(packet.objects).filter(([, obj]) => obj.error).map(([role, obj]) =>
-            `${Object.keys(packet.objects).length > 1 ? role + ': ' : ''}${obj.error.point_mm.toFixed(1)} mm / ${obj.error.angle_deg.toFixed(1)}°`);
+            `${Object.keys(packet.objects).length > 1 ? role + ': ' : ''}${obj.error.point_mm.toFixed(1)} mm / ${obj.error.angle_deg.toFixed(1)}°` +
+            (obj.surface_error ? ` · Surface: ${obj.surface_error.median_mm.toFixed(1)} mm` : ''));
         const missing = Object.entries(packet.objects).filter(([, obj]) => !obj.pose).map(([role]) => role);
         note.textContent = `3D frame ${frame + 1}` + (errors.length ? ` · Error: ${errors.join(' · ')}` : '') +
             (missing.length ? ` · No tracker pose: ${missing.join(', ')}` : '') +
@@ -865,6 +889,17 @@ async function showFlashPipelineSettings() {
         const data = await response.json();
         if (!dialog.isConnected) return;
         status.textContent = 'Settings from this recording. Changes take effect only after rerunning this scene. Saved masks are reused; SAM and robot-control settings are not executed by this benchmark.';
+        const matcherLabel = document.createElement('label');
+        matcherLabel.append('Surface matcher ');
+        const matcher = document.createElement('select');
+        matcher.setAttribute('aria-label', 'Surface matcher');
+        for (const [value, text] of Object.entries(data.matchers)) {
+            const option = document.createElement('option');
+            option.value = value; option.textContent = text; matcher.append(option);
+        }
+        matcher.value = data.settings.config.shape.registration.backend;
+        matcherLabel.append(matcher); dialog.append(matcherLabel);
+        flashText(dialog, 'p', 'Select the 3D surface fitting algorithm, then rerun. UFM/LK image matching and depth rejection remain separate.');
         const label = document.createElement('label');
         const toggle = document.createElement('input'); toggle.type = 'checkbox';
         toggle.checked = !!data.settings.surface_experiment?.uncertainty?.enabled;
@@ -880,6 +915,13 @@ async function showFlashPipelineSettings() {
         const editor = document.createElement('textarea');
         editor.setAttribute('aria-label', 'Pipeline configuration JSON');
         editor.value = JSON.stringify(data.settings, null, 2); dialog.append(editor);
+        matcher.onchange = () => {
+            try {
+                const value = JSON.parse(editor.value);
+                value.config.shape.registration.backend = matcher.value;
+                editor.value = JSON.stringify(value, null, 2);
+            } catch (error) { status.textContent = error.message; }
+        };
         toggle.onchange = mode.onchange = () => {
             try {
                 const value = JSON.parse(editor.value);
@@ -890,7 +932,9 @@ async function showFlashPipelineSettings() {
         };
         editor.oninput = () => {
             try {
-                const value = JSON.parse(editor.value).surface_experiment?.uncertainty;
+                const settings = JSON.parse(editor.value);
+                const value = settings.surface_experiment?.uncertainty;
+                matcher.value = settings.config.shape.registration.backend;
                 toggle.checked = !!value?.enabled; mode.value = value?.mode || 'selection';
             }
             catch (_) { /* Preserve unfinished JSON while editing. */ }

@@ -1,0 +1,68 @@
+{
+  "scope": "Clear gamepad placement interval, initialized at frame 510; shared UFM, groups, Kalman and growth. Does not establish whole-clip or corpus performance.",
+  "clear_interval": [
+    {
+      "backend": "small_gicp",
+      "source_run": "/home/feit/.cache/flash-tracker-restart/library-fixed-20261105/small_gicp/000/flash-demo-gamepad-cube",
+      "reference_frame": 510,
+      "frames": 118,
+      "available": 118,
+      "median_feature_error_mm": 0.5745740984759737,
+      "p95_feature_error_mm": 0.848640011002181,
+      "within_5mm": 118
+    },
+    {
+      "backend": "open3d_plane",
+      "source_run": "/home/feit/.cache/flash-tracker-restart/library-fixed-20261105/open3d_plane/000/flash-demo-gamepad-cube",
+      "reference_frame": 510,
+      "frames": 118,
+      "available": 118,
+      "median_feature_error_mm": 0.4845527888825427,
+      "p95_feature_error_mm": 0.8385055595237974,
+      "within_5mm": 118
+    },
+    {
+      "backend": "open3d_color",
+      "source_run": "/home/feit/.cache/flash-tracker-restart/library-fixed-20261105/open3d_color/000/flash-demo-gamepad-cube",
+      "reference_frame": 510,
+      "frames": 118,
+      "available": 118,
+      "median_feature_error_mm": 0.4878223309534097,
+      "p95_feature_error_mm": 0.8374538849511943,
+      "within_5mm": 118
+    }
+  ],
+  "mutations": [
+    {
+      "mutation": "include_hidden_source_surface",
+      "backend": "small_gicp",
+      "case": "hidden_back_surface_control",
+      "depth_error_mm": 6.000288698324405,
+      "existing_test_fails": true
+    },
+    {
+      "mutation": "include_hidden_source_surface",
+      "backend": "open3d_plane",
+      "case": "hidden_back_surface_control",
+      "depth_error_mm": 5.999999999772521,
+      "existing_test_fails": true
+    },
+    {
+      "mutation": "remove_retained_appearance_ranking",
+      "backend": "open3d_plane",
+      "frame": 540,
+      "geometry_accepted": true,
+      "feature_error_mm": 37.569654131636106,
+      "existing_test_fails": true
+    },
+    {
+      "mutation": "stop_when_only_input_survives",
+      "backend": "open3d_color",
+      "frame": 627,
+      "geometry_accepted": true,
+      "feature_error_mm": 5.117817897610749,
+      "existing_test_fails": true
+    }
+  ],
+  "ui_job": "rebuild-20261105-204927-e7658376"
+}

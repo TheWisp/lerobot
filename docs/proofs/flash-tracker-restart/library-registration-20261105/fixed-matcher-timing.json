@@ -1,0 +1,130 @@
+{
+  "scope": "One sequential run per matcher, identical 118 gamepad placement frames, two objects, saved masks. First initialization frame excluded; first library solve/loading is included. No simultaneous benchmark or test run. Does not measure segmentation, acquisition, rendering or full-demo occlusion.",
+  "artifact_root": "/home/feit/.cache/flash-tracker-restart/matcher-timing-20261105-214614",
+  "results": [
+    {
+      "backend": "baseline",
+      "processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 35.5436039972119,
+        "steady_ms": {
+          "median": 225.43100995244458,
+          "p90": 278.9057943969965
+        },
+        "max_ms": 428.2579960417934,
+        "slower_than_source_interval": 117,
+        "intervals": 117
+      },
+      "input_sha256": "09789572f8c3b30cc61951ab4ed51c49a500ee3c4713757751e11ba4c2652a04",
+      "accuracy": {
+        "reference_frame": 510,
+        "frames": 118,
+        "available": 118,
+        "median_feature_error_mm": 0.7032432011287337,
+        "p95_feature_error_mm": 0.9347367108963459,
+        "within_5mm": 118
+      },
+      "mean_processing_ms": 231.50948946051793,
+      "processing_fps": 4.319477367127718,
+      "slowest_frame": 608,
+      "shared_ufm_median_ms": 40.31509696505964
+    },
+    {
+      "backend": "small_gicp",
+      "processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 32.091731030959636,
+        "steady_ms": {
+          "median": 162.51787199871615,
+          "p90": 184.99404897447675
+        },
+        "max_ms": 372.3874959978275,
+        "slower_than_source_interval": 117,
+        "intervals": 117
+      },
+      "input_sha256": "09789572f8c3b30cc61951ab4ed51c49a500ee3c4713757751e11ba4c2652a04",
+      "accuracy": {
+        "reference_frame": 510,
+        "frames": 118,
+        "available": 118,
+        "median_feature_error_mm": 0.5745740984759973,
+        "p95_feature_error_mm": 0.8486400110022934,
+        "within_5mm": 118
+      },
+      "mean_processing_ms": 165.7656564254863,
+      "processing_fps": 6.032612674806451,
+      "slowest_frame": 606,
+      "shared_ufm_median_ms": 40.39315599948168
+    },
+    {
+      "backend": "open3d_plane",
+      "processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 31.6792749799788,
+        "steady_ms": {
+          "median": 158.09499198803678,
+          "p90": 175.97869442543015
+        },
+        "max_ms": 627.2780749714002,
+        "slower_than_source_interval": 117,
+        "intervals": 117
+      },
+      "input_sha256": "09789572f8c3b30cc61951ab4ed51c49a500ee3c4713757751e11ba4c2652a04",
+      "accuracy": {
+        "reference_frame": 510,
+        "frames": 118,
+        "available": 118,
+        "median_feature_error_mm": 0.4845527888825427,
+        "p95_feature_error_mm": 0.8385055595237867,
+        "within_5mm": 118
+      },
+      "mean_processing_ms": 163.30153041650564,
+      "processing_fps": 6.123641324422795,
+      "slowest_frame": 511,
+      "shared_ufm_median_ms": 40.28537799604237
+    },
+    {
+      "backend": "open3d_color",
+      "processing": {
+        "method": "group_growing",
+        "masks": "recorded",
+        "includes": "segmentation if computed, shared matching, observation preparation, pose/group/map updates",
+        "excludes": "disk input/output, scoring, playback, camera capture and display",
+        "startup": "models warmed before run except lazy SAM loading in first_frame_ms; steady excludes first frame",
+        "first_frame_ms": 31.490073073655367,
+        "steady_ms": {
+          "median": 155.22381401387975,
+          "p90": 170.62536060111597
+        },
+        "max_ms": 635.5306300101802,
+        "slower_than_source_interval": 117,
+        "intervals": 117
+      },
+      "input_sha256": "09789572f8c3b30cc61951ab4ed51c49a500ee3c4713757751e11ba4c2652a04",
+      "accuracy": {
+        "reference_frame": 510,
+        "frames": 118,
+        "available": 118,
+        "median_feature_error_mm": 0.48782233095337746,
+        "p95_feature_error_mm": 0.8374538849512145,
+        "within_5mm": 118
+      },
+      "mean_processing_ms": 160.6700148440412,
+      "processing_fps": 6.223936687692957,
+      "slowest_frame": 511,
+      "shared_ufm_median_ms": 40.257288957946
+    }
+  ]
+}

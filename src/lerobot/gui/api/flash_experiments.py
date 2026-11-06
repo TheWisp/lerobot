@@ -141,13 +141,18 @@ def _cancel_rebuild():
 
 def _settings(identity):
     from benchmarks.flash_pipeline_settings import catalog, from_recording
+    from lerobot.policies.flash.surface_registration import MATCHERS
 
     items = [item for item in _list() if item["id"] == identity]
     if not items:
         raise HTTPException(404, "Scene is unavailable")
     item = items[0]
     provenance = json.loads((Path(item["source_run"]).parent / "provenance.json").read_text())
-    return {"settings": from_recording(provenance, item["methods"]), "options": catalog()}
+    return {
+        "settings": from_recording(provenance, item["methods"]),
+        "options": catalog(),
+        "matchers": MATCHERS,
+    }
 
 
 def _start_rebuild(*, force=False, identity=None, settings=None):

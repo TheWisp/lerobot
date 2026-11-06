@@ -25,10 +25,10 @@ def test_coarse_fit_keeps_measured_geometry_and_full_validation(simplify_trees):
     assert coarse.reference is fit.reference
     assert coarse.observation is fit.observation
     assert coarse.reverse_fits[0][1].observation is source
-    original_refine = WholeSurfaceFit.refine
+    original_refine = WholeSurfaceFit._solve
     with RefinementTrial(256, 4, simplify_trees=simplify_trees) as trial:
         pose, detail = fit.correct(initial)
-    assert WholeSurfaceFit.refine is original_refine
+    assert WholeSurfaceFit._solve is original_refine
     assert trial.calls
     assert detail["fit_reference_points"] == len(queries)
     assert detail["fit_target_points"] == len(target_queries)
@@ -49,11 +49,11 @@ def test_coarse_fit_keeps_measured_geometry_and_full_validation(simplify_trees):
 
 
 def test_experimental_adapter_is_removed_even_when_run_fails():
-    original = WholeSurfaceFit.refine
+    original = WholeSurfaceFit._solve
     with pytest.raises(RuntimeError, match="interrupted trial"):
         with RefinementTrial(256, 4):
             raise RuntimeError("interrupted trial")
-    assert WholeSurfaceFit.refine is original
+    assert WholeSurfaceFit._solve is original
 
 
 def test_coarse_plane_proposal_cannot_replace_a_better_recorded_ring_seed():

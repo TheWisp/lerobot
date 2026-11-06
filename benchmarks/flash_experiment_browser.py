@@ -25,8 +25,9 @@ import numpy as np
 from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_flow_paths import FlowPaths
 from lerobot.gui.flash_group_overlay import GroupOverlay
+from lerobot.gui.flash_pose_overlay import reference_axes
 from lerobot.policies.flash.surface_grounding import project
-from lerobot.policies.flash.surface_observation import initial_landmarks, move, spatial_sample
+from lerobot.policies.flash.surface_observation import move, spatial_sample
 
 METHODS = {
     "ufm_chain": "Pose from UFM matches",
@@ -97,10 +98,8 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
         references = {}
         for role in saved.files:
             ref = saved[role]
-            anchors, basis = initial_landmarks(ref)
-            length = np.linalg.norm(np.ptp(ref, axis=0)) / 3
             references[role] = np.concatenate(
-                (anchors[:1], anchors[0] + basis.T * length, ref[spatial_sample(ref, DISPLAY_SURFACE_POINTS)])
+                (reference_axes(ref), ref[spatial_sample(ref, DISPLAY_SURFACE_POINTS)])
             )
     methods = dict(METHODS)
     if any("ufm_retained_reference" in obj for obj in rows[0]["objects"].values()):
@@ -261,6 +260,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
         (temporary / "overlays.json").write_text(json.dumps(data, separators=(",", ":"), allow_nan=False))
         manifest = {
             "id": identity,
+            "surface_registration": summary.get("surface_registration", {"backend": "scipy"}),
             "shared_matching": shared,
             "name": case.get("display_name", case["id"].replace("_", " "))
             + (" (deformable control)" if "deformable" in case.get("tags", []) else "")

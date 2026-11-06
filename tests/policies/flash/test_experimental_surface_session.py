@@ -282,7 +282,8 @@ def test_growth_checks_previous_rays_without_removing_hidden_back_surface(monkey
 @pytest.mark.parametrize("surface_priority", [False, True])
 def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(monkeypatch, surface_priority):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
-    # Isolate the retained-view veto even when overlap is deliberately permissive.
+    # Even a mocked solver cannot publish a pose contradicted by scene depth,
+    # or use repeated failures to confirm new geometry.
     tracker = GrowingSurfaceSession(
         prepare.shape_config,
         GrowingSurfaceConfig(
@@ -295,11 +296,10 @@ def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(mo
     initial = tracker.store.points.copy()
     # A fit can overlap the old plane while placing a new strip 20 mm in front
     # of a depth view that already ruled that space out. Repeat the bad fit.
-    monkeypatch.setattr(ImageConditionedFit, "correct", lambda self, seed: (np.eye(4), {}))
+    monkeypatch.setattr(ImageConditionedFit, "correct", lambda self, seed, **_: (np.eye(4), {}))
     monkeypatch.setattr(
         ImageConditionedFit, "correct_surface_first", lambda self, seed, previous, **_: (np.eye(4), {})
     )
-    rejected = []
     for i in (1, 2, 3):
         new_depth = depth.copy()
         new_depth[20:35, 25:76] = np.linspace(0.98, 1.0, 15)[:, None]
@@ -307,18 +307,16 @@ def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(mo
         # previously hidden. It must not survive a mostly contradicted patch.
         new_depth[49:61, 30:40] = np.linspace(1.0, 1.012, 12)[:, None]
         result = tracker.update(prepare.prepare(rgb, new_depth, mask, k, i), i / 10)
-        assert result["status"] == "observed_candidate"
-        rejected.append(result["diagnostics"]["growth"]["contradicted_by_retained_views"])
-    # Measurements within the configured depth noise budget may still be added.
-    assert tracker.store.points[:, 2].min() >= initial[:, 2].min() - prepare.shape_config.depth_tolerance_m
-    assert tracker.store.points[:, 2].max() <= initial[:, 2].max() + prepare.shape_config.depth_tolerance_m
-    assert all(count > 0 for count in rejected)
-    # A newly seen surface behind the old front surface is allowed and confirmed.
-    for i in (4, 5, 6):
-        new_depth = depth.copy()
-        new_depth[20:35, 25:76] = np.linspace(1.02, 1.0, 15)[:, None]
-        result = tracker.update(prepare.prepare(rgb, new_depth, mask, k, i), i / 10)
-    assert tracker.store.points[:, 2].max() > 1.015
+        assert result["status"] == "lost"
+        assert result["camera_from_reference"] is None
+        assert result["diagnostics"]["fit"]["reason"] == "measured_empty_space_conflict"
+        np.testing.assert_array_equal(tracker.store.points, initial)
+        assert tracker.store.version == 1
+        assert tracker.connected_frame == 0
+    # A valid observation can recover; rejection is not a permanent latch.
+    result = tracker.update(prepare.prepare(rgb, depth, mask, k, 4), 0.4)
+    assert result["status"] == "observed_candidate"
+    assert tracker.connected_frame == 4
 
 
 @pytest.mark.parametrize("surface_priority", [False, True])
@@ -336,7 +334,7 @@ def test_no_overlap_does_not_reset_coordinate_origin(monkeypatch, surface_priori
     # and prohibit the coarse-start branch only for this fit-rejection boundary.
     from lerobot.policies.flash import experimental_surface_session as module
 
-    monkeypatch.setattr(module.ImageConditionedFit, "correct", lambda self, seed: (seed, {}))
+    monkeypatch.setattr(module.ImageConditionedFit, "correct", lambda self, seed, **_: (seed, {}))
     monkeypatch.setattr(
         module.ImageConditionedFit, "correct_surface_first", lambda self, seed, previous, **_: (seed, {})
     )
@@ -344,7 +342,8 @@ def test_no_overlap_does_not_reset_coordinate_origin(monkeypatch, surface_priori
     new["step"] = None
     result = tracker.update(new, 0.1)
     assert result["status"] == "lost"
-    assert result["diagnostics"]["reason"] == "insufficient_surface_overlap"
+    assert result["diagnostics"]["reason"] == "no_observation_compatible_candidate"
+    assert result["diagnostics"]["fit"]["reason"] == "measured_empty_space_conflict"
     np.testing.assert_array_equal(tracker.reference, old)
     assert tracker.connected_frame == 0
     assert tracker.store.version == 1
@@ -444,7 +443,7 @@ def test_visible_surface_corrects_wrong_group_prediction(monkeypatch):
     pose = np.asarray(result["camera_from_reference"])
     assert np.median(np.linalg.norm(move(tracker.reference, pose) - tracker.reference, axis=1)) < 0.005
     assert result["diagnostics"]["hint_disagreement_mm"] > 15
-    assert result["diagnostics"]["group_comparison"]["verdict"] == "candidate_favored"
+    assert result["diagnostics"]["group_comparison"]["observation_check"]["accepted"]
 
 
 @pytest.mark.parametrize(
@@ -460,18 +459,18 @@ def test_shared_object_matches_contribute_once_to_real_fit_residual(monkeypatch,
     current["shared_matches"] = shared
     evidence = PointEvidence(points(), points(), "object_point_group", kind, 0.005)
     hint = PoseHint(np.eye(4), "object_point_group", 0.1, 0.0, 0, (evidence,))
-    original = ImageConditionedFit.correct
+    original = ImageConditionedFit._solve
     checked = []
 
-    def check(self, seed):
+    def check(self, seed, limit):
         # Cross the caller -> actual objective boundary. Both evidence sets
         # would otherwise append a residual for the SAME point identities.
         assert self.image_weight == weight
         assert self.point_evidence == (evidence,)
         checked.append(True)
-        return original(self, seed)
+        return original(self, seed, limit)
 
-    monkeypatch.setattr(ImageConditionedFit, "correct", check)
+    monkeypatch.setattr(ImageConditionedFit, "_solve", check)
     tracker.update(current, 0.1, hint=hint)
     assert checked
 
@@ -498,7 +497,7 @@ def test_ambiguous_surface_fit_cannot_change_group_anchor_or_grow_model(monkeypa
     flip = np.diag([-1.0, -1.0, 1.0, 1.0])
     center = tracker.reference.mean(axis=0)
     flip[:3, 3] = center - flip[:3, :3] @ center
-    monkeypatch.setattr(ImageConditionedFit, "correct", lambda *_: (flip, {}))
+    monkeypatch.setattr(ImageConditionedFit, "correct", lambda *_, **__: (flip, {}))
     hint = PoseHint(np.eye(4), "environment_point_group", 0.1, 0.0, 0)
     frame = RGBDFrame(1, rgb, depth, k, 1.0, np.eye(4), 0.1, 0.1, "test")
     prepared = prepare.prepare(rgb, depth, mask, k, 1)
@@ -648,11 +647,13 @@ def test_tracking_can_accept_a_pose_without_accepting_surface_growth(monkeypatch
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
     initial = tracker.store.points.copy()
     # Accept a known pose at the fitter boundary. Actual RGB-D cleanup and both
-    # downstream acceptance paths run on a continuous surface with partial overlap.
+    # downstream acceptance paths run. Disagreement is below the pose tolerance
+    # but above the stricter growth tolerance, not the old 12 mm protrusion.
     pose = transform(x=0.001)
     monkeypatch.setattr(ImageConditionedFit, "correct_surface_first", lambda *_, **__: (pose.copy(), {}))
     changed = depth.copy()
-    changed[20:61, 25:76] = np.linspace(1.012, 1.0, 41)[:, None]
+    offset = (tracker.config.growth_agreement_m + prepare.shape_config.depth_tolerance_m) / 2
+    changed[mask] += offset
     for i in (1, 2, 3):
         result = tracker.update(prepare.prepare(rgb, changed, mask, k, i), i / 10)
         assert result["status"] == "observed_candidate"

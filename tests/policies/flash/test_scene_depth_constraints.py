@@ -37,9 +37,9 @@ def test_background_contradiction_is_not_diluted_by_hidden_model_points():
     source, current, k = scene()
     wrong = np.eye(4)
     wrong[0, 3] = 8 * 0.4 / k[0, 0]
-    _, old = check(source, current, k, wrong, enabled=False)
+    _, without_search_penalty = check(source, current, k, wrong, enabled=False)
     fit, new = check(source, current, k, wrong)
-    assert old["accepted"], "Control no longer reproduces the recorded failure mechanism"
+    assert not without_search_penalty["accepted"]
     assert not new["accepted"]
     assert check(source, current, k, np.eye(4))[1]["accepted"]
     assert fit.score(wrong) > fit.score(np.eye(4))
@@ -59,6 +59,31 @@ def test_coherent_protrusion_cannot_hide_below_global_outlier_fraction():
     assert result["scene_depth_outlier_fraction"] < 0.25
     assert not result["accepted"]
     assert result["scene_depth_coherent_protrusion"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("allowance", [0.25, 0.99])
+def test_measured_empty_space_is_mandatory_even_with_generous_outlier_allowance(enabled, allowance):
+    source, current, k = scene()
+    fit = WholeSurfaceFit(source["obs"]["points"], current, k, ShapeConfig(scene_depth_constraints=enabled))
+    wrong = np.eye(4)
+    wrong[0, 3] = 7 * 0.4 / k[0, 0]
+    gate = PoseUncertaintyConfig(max_visible_outlier_fraction=allowance)
+    assert not check_surface_contradiction(fit, wrong, gate)["accepted"]
+    assert check_surface_contradiction(fit, np.eye(4), gate)["accepted"]
+
+
+def test_surface_in_front_of_measured_depth_conflicts_even_inside_the_mask():
+    source, _, k = scene()
+    reference = source["obs"]["points"].copy()
+    # A narrow saved patch floats in front of the observed face, entirely
+    # inside the object's outline. Most of the cloud still agrees perfectly.
+    strip = reference[:, 0] > np.quantile(reference[:, 0], 0.9)
+    reference[strip, 2] -= 0.008
+    fit = WholeSurfaceFit(reference, source, k, ShapeConfig())
+    assert not check_surface_contradiction(
+        fit, np.eye(4), PoseUncertaintyConfig(max_visible_outlier_fraction=0.99)
+    )["accepted"]
 
 
 def test_isolated_wrong_map_point_does_not_reject_correct_pose():
@@ -87,7 +112,8 @@ def test_missing_depth_or_nearer_occluder_is_not_empty_space(background):
     assert result["accepted"]
 
 
-def test_surface_filter_preserves_scene_readings_and_missing_depth():
+@pytest.mark.parametrize("enabled", [False, True])
+def test_surface_filter_preserves_scene_readings_and_missing_depth(enabled):
     source, current, k = scene()
     depth = current["depth"].copy()
     depth[30:70, 76:79] = 0  # Unresolved thin occluder / sensor hole.
@@ -95,7 +121,7 @@ def test_surface_filter_preserves_scene_readings_and_missing_depth():
 
     config = SurfaceObservationConfig(filtered_depth_for_fitting=True)
     filtered = SurfaceTrackingSession(
-        None, observation_config=config, shape_config=ShapeConfig(scene_depth_constraints=True)
+        None, observation_config=config, shape_config=ShapeConfig(scene_depth_constraints=enabled)
     ).prepare(np.zeros((*depth.shape, 3), np.uint8), depth, current["mask"], k, 0)["current"]
     np.testing.assert_array_equal(filtered["scene_depth"], depth)
     assert filtered["depth"][35, 65] == 0  # Trimmed for precise correspondence.
@@ -154,7 +180,7 @@ def test_recorded_gamepad_wrong_pose_is_rejected_without_growing_surface():
                 fit, data["recorded_pose"], PoseUncertaintyConfig(max_visible_outlier_fraction=0.25)
             )
         )
-    assert checks[0]["accepted"]
+    assert not checks[0]["accepted"]
     assert not checks[1]["accepted"]
     report = replay(
         "gamepad_271", shape_changes={"scene_depth_constraints": True}, filter_factory=StrictPoseKalmanFilter

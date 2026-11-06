@@ -297,7 +297,44 @@
             <div class="main run-main-split" id="run-main">
                 <section id="flash-experiment-view" aria-label="Tracker experiment playback">
                     <h2 id="flash-experiment-title">Tracking experiments</h2>
+                    <div class="flash-experiment-tools"><button type="button" onclick="showFlashLive()">Live camera</button></div>
                     <div id="flash-experiment-detail">Select a recording from the list.</div>
+                    <section id="flash-live-panel" hidden aria-label="Live tracking inspector">
+                        <div class="flash-experiment-tools">
+                            <button type="button" onclick="hideFlashLive()">← Recordings</button>
+                            <select id="flash-live-camera" aria-label="Live RGB-D camera"><option value="">Auto camera</option></select>
+                            <button id="flash-live-start" type="button" onclick="startFlashLive()">Open camera</button>
+                            <button id="flash-live-stop" type="button" onclick="stopFlashLive()" disabled>Stop camera</button>
+                            <label>Pose calculation <select id="flash-live-method">
+                                <option value="conditioned_fixed">Depth + mask fit, image assisted</option>
+                                <option value="conditioned_growing">Depth + mask fit — growing surface</option>
+                                <option value="group_fixed">Depth + mask fit + groups</option>
+                                <option value="group_growing">Depth + mask fit + groups — growing surface</option>
+                            </select></label>
+                            <label>Image matching <select id="flash-live-matching"><option value="lk">LK</option><option value="ufm">UFM</option></select></label>
+                            <label>Surface matcher <select id="flash-live-matcher" aria-label="Live surface matcher"></select></label>
+                        </div>
+                        <div class="flash-experiment-tools">
+                            <input id="flash-live-name" placeholder="Object name" aria-label="Live object name">
+                            <button id="flash-live-select" type="button" onclick="controlFlashLive('select')" disabled>Track by name</button>
+                            <button id="flash-live-freeze" type="button" onclick="controlFlashLive('freeze')" disabled>Freeze and click</button>
+                            <button id="flash-live-clear" type="button" onclick="controlFlashLive('clear')" disabled>Clear object</button>
+                            <button id="flash-live-3d" type="button" onclick="toggleFlashLive3D()" aria-pressed="false">3D scene</button>
+                            <button type="button" onclick="flashLive.viewer?.reset()">Camera view</button>
+                            <label><input id="flash-live-mask" type="checkbox" checked onchange="drawFlashLive()">Mask (2D)</label>
+                            <label><input id="flash-live-surface" type="checkbox" checked onchange="drawFlashLive()">Surface + axes</label>
+                            <label><input id="flash-live-groups" type="checkbox" checked onchange="drawFlashLive()">Groups</label>
+                        </div>
+                        <details><summary>Shared pipeline settings</summary>
+                            <p>Shared pipeline defaults. Stop the camera to change settings. Selecting an object starts fresh tracking.</p>
+                            <textarea id="flash-live-config" aria-label="Live pipeline settings" style="width:100%;height:200px;font-family:monospace"></textarea>
+                        </details>
+                        <p id="flash-live-status" role="status"></p><p id="flash-live-objects"></p>
+                        <div style="height:58vh;min-height:240px;position:relative;background:#101923">
+                            <canvas id="flash-live-image" onclick="clickFlashLive(event)" aria-label="Live image; freeze to select an object" style="width:100%;height:100%;object-fit:contain"></canvas>
+                            <canvas id="flash-live-scene" hidden aria-label="Live 3D scene; drag to orbit" style="width:100%;height:100%"></canvas>
+                        </div>
+                    </section>
                     <div id="flash-experiment-playback">
                     <div class="flash-experiment-tools">
                         <button type="button" id="flash-experiment-rerun-scene" onclick="rebuildFlashExamples(true)" disabled>Rerun this scene</button>
@@ -345,6 +382,8 @@
                             <option value="pass">Frames within accuracy limits (%) ↑</option>
                             <option value="median">Median point error (mm) ↓</option>
                             <option value="p90">90th percentile point error (mm) ↓</option>
+                            <option value="surface">Surface distance (mm, secondary) ↓</option>
+                            <option value="surfaceWithin">Surface points within 10 mm (%, secondary) ↑</option>
                             <option value="availability">Frames with a pose (%) ↑</option>
                             <option value="fit">Additional processing time (ms) ↓</option>
                         </select></label>
@@ -865,8 +904,9 @@ nebius iam auth-public-key generate \
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=27"></script>
     <script src="/static/flash_live_tracking.js?v=12"></script>
-    <script src="/static/run.js?v=191"></script>
-    <script src="/static/flash_experiments.js?v=30"></script>
+    <script src="/static/run.js?v=193"></script>
+    <script src="/static/flash_experiments.js?v=33"></script>
+    <script src="/static/flash_live.js?v=3"></script>
     <script src="/static/flash_demo_editor.js?v=41"></script>
     <script src="/static/flash_recorded_editor.js?v=7"></script>
     <script src="/static/flash_observation_editor.js?v=6"></script>

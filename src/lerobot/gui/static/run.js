@@ -218,7 +218,7 @@ async function toggleFlashSceneView() {
                 option.textContent = role;
                 select.append(option);
             }
-            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=32');
+            const {createFlashSceneView} = await import('/static/flash_scene_view.js?v=33');
             const reprocessed = Object.fromEntries(Object.entries(
                 flashReplay?.reprocessed_scene_geometry?.points_object_m || {}).map(([role, points]) => [
                 role, {positions_object_m: points.flat(), colors_rgb: points.map(() => [180, 190, 200]), indices: []},
@@ -320,7 +320,7 @@ function showFlashLiveSetup() {
 
 async function showFlashReview() {
     if (_isRunning && _runCommand === 'flash') return;
-    if (_isRunning && _runCommand === 'flash_tracking') await flashTrackingStop();
+    if (_isRunning && ['flash_tracking','flash_surface_live'].includes(_runCommand)) await flashTrackingStop();
     flashUiMode = 'review';
     _flashUpdateWorkspace();
     await Promise.all([_loadFlashDatasets(), _loadFlashRecordings()]);
@@ -4432,6 +4432,7 @@ async function pollRunStatus() {
         updateRunUI(status.running, status.command);
         await flashObservationProcessComplete(status);
         if (status.running && status.command === 'flash_tracking' && selectedWorkflow === 'flash' && flashUiMode !== 'tracking') await showFlashTracking();
+        if (status.running && status.command === 'flash_surface_live' && selectedWorkflow === 'flash' && !flashLive.visible) await showFlashLive();
         if (status.running && status.command === 'flash' && selectedWorkflow === 'flash') startFlashTelemetry();
         else if (!status.running) stopFlashTelemetry();
 

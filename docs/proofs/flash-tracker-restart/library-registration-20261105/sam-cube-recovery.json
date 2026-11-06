@@ -1,0 +1,7560 @@
+{
+  "case": {
+    "id": "flash-demo-gamepad-cube",
+    "kind": "flash_prepared_demo",
+    "domain": "FLASH rig demonstrations (diagnostic; no independent labels)",
+    "artifact_root": "~/.cache/huggingface/lerobot/demos/pick_place",
+    "evidence_dir": "~/.cache/huggingface/lerobot/demos/pick_place/flash/v1/prepared/flash-gamepad-cube-20261028-depth-audit-v11/scene-evidence",
+    "expected_frames": 628,
+    "tags": [
+      "rigid",
+      "manipulation",
+      "occlusion",
+      "diagnostic-only"
+    ],
+    "roles": [
+      "gamepad",
+      "cube"
+    ],
+    "mask_evidence_dir": "/home/feit/.cache/huggingface/lerobot/demos/pick_place/flash/v1/preparation-cache/flash-gamepad-cube-20261031-gripper-scene-2ddfef845654.scene-evidence"
+  },
+  "rows": [
+    {
+      "frame": 0,
+      "ms": 1650.941280007828,
+      "areas": {
+        "gamepad": 6028,
+        "cube": 2422
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 1,
+      "ms": 25.669538998045027,
+      "areas": {
+        "gamepad": 6049,
+        "cube": 2374
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 2,
+      "ms": 23.84758403059095,
+      "areas": {
+        "gamepad": 6071,
+        "cube": 2388
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 3,
+      "ms": 22.472276003099978,
+      "areas": {
+        "gamepad": 6057,
+        "cube": 2414
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 4,
+      "ms": 22.436428989749402,
+      "areas": {
+        "gamepad": 6054,
+        "cube": 2425
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 5,
+      "ms": 23.097328026778996,
+      "areas": {
+        "gamepad": 6079,
+        "cube": 2416
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 6,
+      "ms": 22.910667001269758,
+      "areas": {
+        "gamepad": 6084,
+        "cube": 2407
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 7,
+      "ms": 22.404477989766747,
+      "areas": {
+        "gamepad": 6094,
+        "cube": 2401
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 8,
+      "ms": 22.80461898772046,
+      "areas": {
+        "gamepad": 6097,
+        "cube": 2407
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 9,
+      "ms": 22.728667012415826,
+      "areas": {
+        "gamepad": 6087,
+        "cube": 2412
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 10,
+      "ms": 22.895379981491715,
+      "areas": {
+        "gamepad": 6105,
+        "cube": 2403
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 11,
+      "ms": 23.08083703974262,
+      "areas": {
+        "gamepad": 6096,
+        "cube": 2402
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 12,
+      "ms": 22.513913980219513,
+      "areas": {
+        "gamepad": 6090,
+        "cube": 2399
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 13,
+      "ms": 22.98246300779283,
+      "areas": {
+        "gamepad": 6091,
+        "cube": 2394
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 14,
+      "ms": 22.475973004475236,
+      "areas": {
+        "gamepad": 6108,
+        "cube": 2387
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 15,
+      "ms": 22.4582789815031,
+      "areas": {
+        "gamepad": 6096,
+        "cube": 2385
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 16,
+      "ms": 22.58133003488183,
+      "areas": {
+        "gamepad": 6116,
+        "cube": 2395
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 17,
+      "ms": 23.70709099341184,
+      "areas": {
+        "gamepad": 6120,
+        "cube": 2397
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 18,
+      "ms": 22.89183298125863,
+      "areas": {
+        "gamepad": 6135,
+        "cube": 2391
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 19,
+      "ms": 22.404659015592188,
+      "areas": {
+        "gamepad": 6114,
+        "cube": 2402
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 20,
+      "ms": 22.60700799524784,
+      "areas": {
+        "gamepad": 6104,
+        "cube": 2387
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 21,
+      "ms": 22.629751008935273,
+      "areas": {
+        "gamepad": 6121,
+        "cube": 2408
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 22,
+      "ms": 22.604263038374484,
+      "areas": {
+        "gamepad": 6099,
+        "cube": 2405
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 23,
+      "ms": 23.214917979203165,
+      "areas": {
+        "gamepad": 6111,
+        "cube": 2407
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 24,
+      "ms": 22.65856502344832,
+      "areas": {
+        "gamepad": 6110,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 25,
+      "ms": 22.782898042351007,
+      "areas": {
+        "gamepad": 6117,
+        "cube": 2401
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 26,
+      "ms": 22.78031304012984,
+      "areas": {
+        "gamepad": 6122,
+        "cube": 2406
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 27,
+      "ms": 22.418826003558934,
+      "areas": {
+        "gamepad": 6101,
+        "cube": 2391
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 28,
+      "ms": 22.573977010324597,
+      "areas": {
+        "gamepad": 6126,
+        "cube": 2394
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 29,
+      "ms": 22.39758602809161,
+      "areas": {
+        "gamepad": 6116,
+        "cube": 2401
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 30,
+      "ms": 22.62380998581648,
+      "areas": {
+        "gamepad": 6116,
+        "cube": 2407
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 31,
+      "ms": 22.65603101113811,
+      "areas": {
+        "gamepad": 6120,
+        "cube": 2399
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 32,
+      "ms": 22.59423502255231,
+      "areas": {
+        "gamepad": 6121,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 33,
+      "ms": 22.535223979502916,
+      "areas": {
+        "gamepad": 6125,
+        "cube": 2401
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 34,
+      "ms": 22.410298988688737,
+      "areas": {
+        "gamepad": 6113,
+        "cube": 2392
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 35,
+      "ms": 22.557254997082055,
+      "areas": {
+        "gamepad": 6108,
+        "cube": 2384
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 36,
+      "ms": 22.487784968689084,
+      "areas": {
+        "gamepad": 6137,
+        "cube": 2398
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 37,
+      "ms": 22.332224005367607,
+      "areas": {
+        "gamepad": 6144,
+        "cube": 2386
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 38,
+      "ms": 22.591718996409327,
+      "areas": {
+        "gamepad": 6124,
+        "cube": 2405
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 39,
+      "ms": 22.346809972077608,
+      "areas": {
+        "gamepad": 6117,
+        "cube": 2416
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 40,
+      "ms": 22.540634032338858,
+      "areas": {
+        "gamepad": 6122,
+        "cube": 2404
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 41,
+      "ms": 22.431669989600778,
+      "areas": {
+        "gamepad": 6128,
+        "cube": 2403
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 42,
+      "ms": 22.333286004140973,
+      "areas": {
+        "gamepad": 6122,
+        "cube": 2407
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 43,
+      "ms": 22.49613095773384,
+      "areas": {
+        "gamepad": 6117,
+        "cube": 2386
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 44,
+      "ms": 22.21787895541638,
+      "areas": {
+        "gamepad": 6125,
+        "cube": 2395
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 45,
+      "ms": 22.183143999427557,
+      "areas": {
+        "gamepad": 6111,
+        "cube": 2397
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 46,
+      "ms": 22.11369399446994,
+      "areas": {
+        "gamepad": 6148,
+        "cube": 2413
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 47,
+      "ms": 21.930760995019227,
+      "areas": {
+        "gamepad": 6138,
+        "cube": 2391
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 48,
+      "ms": 22.141175984870642,
+      "areas": {
+        "gamepad": 6113,
+        "cube": 2405
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 49,
+      "ms": 21.881167020183057,
+      "areas": {
+        "gamepad": 6132,
+        "cube": 2401
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 50,
+      "ms": 23.262126022018492,
+      "areas": {
+        "gamepad": 6125,
+        "cube": 2411
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 51,
+      "ms": 24.189655028749257,
+      "areas": {
+        "gamepad": 6129,
+        "cube": 2377
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 52,
+      "ms": 23.834490042645484,
+      "areas": {
+        "gamepad": 6118,
+        "cube": 2398
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 53,
+      "ms": 23.91428896225989,
+      "areas": {
+        "gamepad": 6136,
+        "cube": 2394
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 54,
+      "ms": 23.408169974572957,
+      "areas": {
+        "gamepad": 6104,
+        "cube": 2385
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 55,
+      "ms": 23.26887904200703,
+      "areas": {
+        "gamepad": 6128,
+        "cube": 2388
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 56,
+      "ms": 22.611286025494337,
+      "areas": {
+        "gamepad": 6142,
+        "cube": 2388
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 57,
+      "ms": 22.515908000059426,
+      "areas": {
+        "gamepad": 6112,
+        "cube": 2381
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 58,
+      "ms": 22.560771962162107,
+      "areas": {
+        "gamepad": 6116,
+        "cube": 2391
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 59,
+      "ms": 22.282139980234206,
+      "areas": {
+        "gamepad": 6122,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 60,
+      "ms": 22.757230035495013,
+      "areas": {
+        "gamepad": 6108,
+        "cube": 2421
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 61,
+      "ms": 22.513733012601733,
+      "areas": {
+        "gamepad": 6100,
+        "cube": 2408
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 62,
+      "ms": 22.25196297513321,
+      "areas": {
+        "gamepad": 6111,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 63,
+      "ms": 22.507882036734372,
+      "areas": {
+        "gamepad": 6126,
+        "cube": 2401
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 64,
+      "ms": 22.3250089911744,
+      "areas": {
+        "gamepad": 6134,
+        "cube": 2404
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 65,
+      "ms": 22.61266903951764,
+      "areas": {
+        "gamepad": 6106,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 66,
+      "ms": 22.607920051086694,
+      "areas": {
+        "gamepad": 6120,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 67,
+      "ms": 22.636253968812525,
+      "areas": {
+        "gamepad": 6118,
+        "cube": 2392
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 68,
+      "ms": 22.64698297949508,
+      "areas": {
+        "gamepad": 6106,
+        "cube": 2383
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 69,
+      "ms": 22.7383739547804,
+      "areas": {
+        "gamepad": 6113,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 70,
+      "ms": 22.65087002888322,
+      "areas": {
+        "gamepad": 6132,
+        "cube": 2386
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 71,
+      "ms": 22.781985986512154,
+      "areas": {
+        "gamepad": 6118,
+        "cube": 2401
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 72,
+      "ms": 22.63338799821213,
+      "areas": {
+        "gamepad": 6100,
+        "cube": 2395
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 73,
+      "ms": 22.593081986997277,
+      "areas": {
+        "gamepad": 6123,
+        "cube": 2397
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 74,
+      "ms": 22.722002991940826,
+      "areas": {
+        "gamepad": 6114,
+        "cube": 2381
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 75,
+      "ms": 22.79226598329842,
+      "areas": {
+        "gamepad": 6136,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 76,
+      "ms": 22.671027982141823,
+      "areas": {
+        "gamepad": 6126,
+        "cube": 2389
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 77,
+      "ms": 22.50351500697434,
+      "areas": {
+        "gamepad": 6117,
+        "cube": 2382
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 78,
+      "ms": 22.799689031671733,
+      "areas": {
+        "gamepad": 6130,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 79,
+      "ms": 22.546313994098455,
+      "areas": {
+        "gamepad": 6111,
+        "cube": 2388
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 80,
+      "ms": 22.78085402213037,
+      "areas": {
+        "gamepad": 6123,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 81,
+      "ms": 23.072199954185635,
+      "areas": {
+        "gamepad": 6116,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 82,
+      "ms": 23.040571017190814,
+      "areas": {
+        "gamepad": 6107,
+        "cube": 2397
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 83,
+      "ms": 22.922219010069966,
+      "areas": {
+        "gamepad": 6141,
+        "cube": 2403
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 84,
+      "ms": 22.208690992556512,
+      "areas": {
+        "gamepad": 6113,
+        "cube": 2396
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 85,
+      "ms": 22.566832951270044,
+      "areas": {
+        "gamepad": 6094,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 86,
+      "ms": 23.194489011075348,
+      "areas": {
+        "gamepad": 6120,
+        "cube": 2409
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 87,
+      "ms": 22.790040995460004,
+      "areas": {
+        "gamepad": 6122,
+        "cube": 2403
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 88,
+      "ms": 22.978774970397353,
+      "areas": {
+        "gamepad": 6120,
+        "cube": 2388
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 89,
+      "ms": 22.649007034488022,
+      "areas": {
+        "gamepad": 6125,
+        "cube": 2392
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 90,
+      "ms": 22.946224024053663,
+      "areas": {
+        "gamepad": 6126,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 91,
+      "ms": 22.712896985467523,
+      "areas": {
+        "gamepad": 6114,
+        "cube": 2399
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 92,
+      "ms": 22.467988019343466,
+      "areas": {
+        "gamepad": 6132,
+        "cube": 2389
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 93,
+      "ms": 23.103108047507703,
+      "areas": {
+        "gamepad": 6134,
+        "cube": 2396
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 94,
+      "ms": 23.10339902760461,
+      "areas": {
+        "gamepad": 6113,
+        "cube": 2399
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 95,
+      "ms": 22.769282979425043,
+      "areas": {
+        "gamepad": 6127,
+        "cube": 2398
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 96,
+      "ms": 22.863178979605436,
+      "areas": {
+        "gamepad": 6133,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 97,
+      "ms": 22.67894399119541,
+      "areas": {
+        "gamepad": 6102,
+        "cube": 2404
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 98,
+      "ms": 22.75418397039175,
+      "areas": {
+        "gamepad": 6136,
+        "cube": 2402
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 99,
+      "ms": 22.755737008992583,
+      "areas": {
+        "gamepad": 6130,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 100,
+      "ms": 22.893966000992805,
+      "areas": {
+        "gamepad": 6121,
+        "cube": 2397
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 101,
+      "ms": 22.85830897744745,
+      "areas": {
+        "gamepad": 6137,
+        "cube": 2406
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 102,
+      "ms": 22.59641798445955,
+      "areas": {
+        "gamepad": 6125,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 103,
+      "ms": 23.02010200219229,
+      "areas": {
+        "gamepad": 6112,
+        "cube": 2389
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 104,
+      "ms": 22.62582298135385,
+      "areas": {
+        "gamepad": 6092,
+        "cube": 2392
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 105,
+      "ms": 22.94708602130413,
+      "areas": {
+        "gamepad": 6060,
+        "cube": 2378
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 106,
+      "ms": 22.90423499653116,
+      "areas": {
+        "gamepad": 5973,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 107,
+      "ms": 22.658344998490065,
+      "areas": {
+        "gamepad": 5946,
+        "cube": 2399
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 108,
+      "ms": 23.037285020109266,
+      "areas": {
+        "gamepad": 6104,
+        "cube": 2397
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 109,
+      "ms": 22.706855030264705,
+      "areas": {
+        "gamepad": 6124,
+        "cube": 2387
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 110,
+      "ms": 23.013300029560924,
+      "areas": {
+        "gamepad": 6128,
+        "cube": 2399
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 111,
+      "ms": 23.304455971810967,
+      "areas": {
+        "gamepad": 6094,
+        "cube": 2395
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 112,
+      "ms": 22.943639021832496,
+      "areas": {
+        "gamepad": 6048,
+        "cube": 2405
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 113,
+      "ms": 22.72590104257688,
+      "areas": {
+        "gamepad": 5857,
+        "cube": 2405
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 114,
+      "ms": 22.93238800484687,
+      "areas": {
+        "gamepad": 5882,
+        "cube": 2404
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 115,
+      "ms": 23.00826000282541,
+      "areas": {
+        "gamepad": 5936,
+        "cube": 2411
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 116,
+      "ms": 24.569817003794014,
+      "areas": {
+        "gamepad": 6019,
+        "cube": 2397
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 117,
+      "ms": 23.53672101162374,
+      "areas": {
+        "gamepad": 6078,
+        "cube": 2406
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 118,
+      "ms": 23.96635600598529,
+      "areas": {
+        "gamepad": 6085,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 119,
+      "ms": 23.45357503509149,
+      "areas": {
+        "gamepad": 6148,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 120,
+      "ms": 24.50874203350395,
+      "areas": {
+        "gamepad": 6141,
+        "cube": 2409
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 121,
+      "ms": 24.408364959526807,
+      "areas": {
+        "gamepad": 6175,
+        "cube": 2416
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 122,
+      "ms": 23.52794399484992,
+      "areas": {
+        "gamepad": 6171,
+        "cube": 2405
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 123,
+      "ms": 23.97051395382732,
+      "areas": {
+        "gamepad": 6184,
+        "cube": 2407
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 124,
+      "ms": 23.513095977250487,
+      "areas": {
+        "gamepad": 6183,
+        "cube": 2398
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 125,
+      "ms": 23.93829298671335,
+      "areas": {
+        "gamepad": 6005,
+        "cube": 2402
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 126,
+      "ms": 23.60765403136611,
+      "areas": {
+        "gamepad": 5914,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 127,
+      "ms": 23.417958000209183,
+      "areas": {
+        "gamepad": 5854,
+        "cube": 2412
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 128,
+      "ms": 23.471357999369502,
+      "areas": {
+        "gamepad": 5229,
+        "cube": 2384
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 129,
+      "ms": 22.634468972682953,
+      "areas": {
+        "gamepad": 5067,
+        "cube": 2412
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 130,
+      "ms": 22.765755013097078,
+      "areas": {
+        "gamepad": 4958,
+        "cube": 2411
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 131,
+      "ms": 22.68672699574381,
+      "areas": {
+        "gamepad": 4937,
+        "cube": 2417
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 132,
+      "ms": 22.449231997597963,
+      "areas": {
+        "gamepad": 5160,
+        "cube": 2412
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 133,
+      "ms": 22.809477988630533,
+      "areas": {
+        "gamepad": 5158,
+        "cube": 2392
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 134,
+      "ms": 23.703081998974085,
+      "areas": {
+        "gamepad": 4820,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 135,
+      "ms": 23.407659027725458,
+      "areas": {
+        "gamepad": 4781,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 136,
+      "ms": 22.780593018978834,
+      "areas": {
+        "gamepad": 4763,
+        "cube": 2401
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 137,
+      "ms": 22.68205798463896,
+      "areas": {
+        "gamepad": 4905,
+        "cube": 2395
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 138,
+      "ms": 22.47380802873522,
+      "areas": {
+        "gamepad": 4883,
+        "cube": 2391
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 139,
+      "ms": 22.190316987689584,
+      "areas": {
+        "gamepad": 4951,
+        "cube": 2399
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 140,
+      "ms": 22.354203974828124,
+      "areas": {
+        "gamepad": 5228,
+        "cube": 2408
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 141,
+      "ms": 22.572883986867964,
+      "areas": {
+        "gamepad": 5106,
+        "cube": 2399
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 142,
+      "ms": 23.7799669848755,
+      "areas": {
+        "gamepad": 5124,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 143,
+      "ms": 23.158721975050867,
+      "areas": {
+        "gamepad": 5106,
+        "cube": 2411
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 144,
+      "ms": 22.28715899400413,
+      "areas": {
+        "gamepad": 4995,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 145,
+      "ms": 22.418023960199207,
+      "areas": {
+        "gamepad": 4959,
+        "cube": 2392
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 146,
+      "ms": 22.16642099665478,
+      "areas": {
+        "gamepad": 4548,
+        "cube": 2407
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 147,
+      "ms": 23.85217195842415,
+      "areas": {
+        "gamepad": 4604,
+        "cube": 2405
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 148,
+      "ms": 23.492317995987833,
+      "areas": {
+        "gamepad": 4342,
+        "cube": 2407
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 149,
+      "ms": 23.146179039031267,
+      "areas": {
+        "gamepad": 4262,
+        "cube": 2407
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 150,
+      "ms": 41.12291702767834,
+      "areas": {
+        "gamepad": 4133,
+        "cube": 2372
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 151,
+      "ms": 24.09084001556039,
+      "areas": {
+        "gamepad": 3873,
+        "cube": 2410
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 152,
+      "ms": 24.068076978437603,
+      "areas": {
+        "gamepad": 3597,
+        "cube": 2406
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 153,
+      "ms": 25.120949954725802,
+      "areas": {
+        "gamepad": 3518,
+        "cube": 2406
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 154,
+      "ms": 23.27171398792416,
+      "areas": {
+        "gamepad": 3466,
+        "cube": 2426
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 155,
+      "ms": 23.034139012452215,
+      "areas": {
+        "gamepad": 3407,
+        "cube": 2387
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 156,
+      "ms": 23.28796498477459,
+      "areas": {
+        "gamepad": 3348,
+        "cube": 2441
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 157,
+      "ms": 23.804111988283694,
+      "areas": {
+        "gamepad": 3197,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 158,
+      "ms": 23.52154196705669,
+      "areas": {
+        "gamepad": 3048,
+        "cube": 2383
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 159,
+      "ms": 23.739290016237646,
+      "areas": {
+        "gamepad": 2942,
+        "cube": 2381
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 160,
+      "ms": 23.30216096015647,
+      "areas": {
+        "gamepad": 2885,
+        "cube": 2382
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 161,
+      "ms": 23.279168002773076,
+      "areas": {
+        "gamepad": 2738,
+        "cube": 2381
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 162,
+      "ms": 23.336415004450828,
+      "areas": {
+        "gamepad": 2626,
+        "cube": 2399
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 163,
+      "ms": 23.498518974520266,
+      "areas": {
+        "gamepad": 2544,
+        "cube": 2383
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 164,
+      "ms": 23.478531977161765,
+      "areas": {
+        "gamepad": 2380,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 165,
+      "ms": 23.388953995890915,
+      "areas": {
+        "gamepad": 2265,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 166,
+      "ms": 23.32755899988115,
+      "areas": {
+        "gamepad": 2165,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 167,
+      "ms": 22.895649017300457,
+      "areas": {
+        "gamepad": 2030,
+        "cube": 2398
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 168,
+      "ms": 22.18575804727152,
+      "areas": {
+        "gamepad": 1839,
+        "cube": 2383
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 169,
+      "ms": 22.19768997747451,
+      "areas": {
+        "gamepad": 1557,
+        "cube": 2389
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 170,
+      "ms": 22.425166971515864,
+      "areas": {
+        "gamepad": 1077,
+        "cube": 2379
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 171,
+      "ms": 22.20839000074193,
+      "areas": {
+        "gamepad": 826,
+        "cube": 2380
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 172,
+      "ms": 22.411401034332812,
+      "areas": {
+        "gamepad": 554,
+        "cube": 2384
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 173,
+      "ms": 51.05937202461064,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2384
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 174,
+      "ms": 25.239061971660703,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2369
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 175,
+      "ms": 23.369698028545827,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2379
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 176,
+      "ms": 22.85467099864036,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2419
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 177,
+      "ms": 22.761496948078275,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2370
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 178,
+      "ms": 46.049160009715706,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2378
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 179,
+      "ms": 23.012607998680323,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2377
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 180,
+      "ms": 22.386635013390332,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2379
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 181,
+      "ms": 22.581439989153296,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2372
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 182,
+      "ms": 22.671729035209864,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2386
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 183,
+      "ms": 45.754769002087414,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2381
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 184,
+      "ms": 23.172748973593116,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2400
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 185,
+      "ms": 23.521502036601305,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2376
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 186,
+      "ms": 22.876723029185086,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2372
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 187,
+      "ms": 22.597839997615665,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2376
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 188,
+      "ms": 46.10723000951111,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2384
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 189,
+      "ms": 23.017677012830973,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2374
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 190,
+      "ms": 22.8070430457592,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2382
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 191,
+      "ms": 22.75757002644241,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2372
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 192,
+      "ms": 22.72615098627284,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2387
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 193,
+      "ms": 46.17467598291114,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2369
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 194,
+      "ms": 23.18064303835854,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2364
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 195,
+      "ms": 22.98012701794505,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2382
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 196,
+      "ms": 22.694702027365565,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2394
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 197,
+      "ms": 22.72581000579521,
+      "areas": {
+        "gamepad": 187,
+        "cube": 2370
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 198,
+      "ms": 22.948728990741074,
+      "areas": {
+        "gamepad": 244,
+        "cube": 2386
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 199,
+      "ms": 22.719649015925825,
+      "areas": {
+        "gamepad": 286,
+        "cube": 2378
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 200,
+      "ms": 23.061519023030996,
+      "areas": {
+        "gamepad": 307,
+        "cube": 2367
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 201,
+      "ms": 23.07426300831139,
+      "areas": {
+        "gamepad": 244,
+        "cube": 2366
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 202,
+      "ms": 23.063963977620006,
+      "areas": {
+        "gamepad": 296,
+        "cube": 2369
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 203,
+      "ms": 23.017827013973147,
+      "areas": {
+        "gamepad": 281,
+        "cube": 2364
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 204,
+      "ms": 22.56201399723068,
+      "areas": {
+        "gamepad": 246,
+        "cube": 2370
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 205,
+      "ms": 22.903773991856724,
+      "areas": {
+        "gamepad": 303,
+        "cube": 2376
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 206,
+      "ms": 22.942817013245076,
+      "areas": {
+        "gamepad": 259,
+        "cube": 2376
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 207,
+      "ms": 46.09515599440783,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2415
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 208,
+      "ms": 22.997450025286525,
+      "areas": {
+        "gamepad": 0,
+        "cube": 2367
+      },
+      "iou": {
+        "gamepad": 0.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 209,
+      "ms": 22.7269220049493,
+      "areas": {
+        "gamepad": 796,
+        "cube": 2363
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 210,
+      "ms": 23.213443986605853,
+      "areas": {
+        "gamepad": 939,
+        "cube": 2371
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 211,
+      "ms": 22.75991498026997,
+      "areas": {
+        "gamepad": 935,
+        "cube": 2363
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 212,
+      "ms": 22.81555801164359,
+      "areas": {
+        "gamepad": 953,
+        "cube": 2401
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 213,
+      "ms": 22.79292599996552,
+      "areas": {
+        "gamepad": 964,
+        "cube": 2372
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 214,
+      "ms": 22.99451403087005,
+      "areas": {
+        "gamepad": 906,
+        "cube": 2388
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 215,
+      "ms": 22.925764962565154,
+      "areas": {
+        "gamepad": 879,
+        "cube": 2391
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 216,
+      "ms": 22.791402996517718,
+      "areas": {
+        "gamepad": 950,
+        "cube": 2370
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 217,
+      "ms": 23.81291799247265,
+      "areas": {
+        "gamepad": 944,
+        "cube": 2378
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 218,
+      "ms": 22.987861011642963,
+      "areas": {
+        "gamepad": 926,
+        "cube": 2370
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 219,
+      "ms": 23.01468199584633,
+      "areas": {
+        "gamepad": 931,
+        "cube": 2383
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 220,
+      "ms": 22.860523022245616,
+      "areas": {
+        "gamepad": 911,
+        "cube": 2363
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 221,
+      "ms": 22.827190987300128,
+      "areas": {
+        "gamepad": 849,
+        "cube": 2376
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 222,
+      "ms": 22.713256999850273,
+      "areas": {
+        "gamepad": 945,
+        "cube": 2365
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 223,
+      "ms": 23.248059034813195,
+      "areas": {
+        "gamepad": 951,
+        "cube": 2370
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 224,
+      "ms": 23.089902999345213,
+      "areas": {
+        "gamepad": 972,
+        "cube": 2361
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 225,
+      "ms": 22.614061017520726,
+      "areas": {
+        "gamepad": 912,
+        "cube": 2359
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 226,
+      "ms": 22.906158003024757,
+      "areas": {
+        "gamepad": 762,
+        "cube": 2363
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 227,
+      "ms": 22.83014601562172,
+      "areas": {
+        "gamepad": 677,
+        "cube": 2376
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 228,
+      "ms": 22.652732965070754,
+      "areas": {
+        "gamepad": 800,
+        "cube": 2363
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 229,
+      "ms": 22.84167695324868,
+      "areas": {
+        "gamepad": 931,
+        "cube": 2362
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 230,
+      "ms": 22.732973971869797,
+      "areas": {
+        "gamepad": 928,
+        "cube": 2355
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 231,
+      "ms": 23.15894200000912,
+      "areas": {
+        "gamepad": 927,
+        "cube": 2413
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 232,
+      "ms": 23.707540007308125,
+      "areas": {
+        "gamepad": 865,
+        "cube": 2357
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 233,
+      "ms": 23.313871992286295,
+      "areas": {
+        "gamepad": 868,
+        "cube": 2343
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 234,
+      "ms": 23.4189199982211,
+      "areas": {
+        "gamepad": 909,
+        "cube": 2405
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 235,
+      "ms": 23.077129037119448,
+      "areas": {
+        "gamepad": 821,
+        "cube": 2365
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 236,
+      "ms": 23.8579330034554,
+      "areas": {
+        "gamepad": 842,
+        "cube": 2352
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 237,
+      "ms": 23.779624956659973,
+      "areas": {
+        "gamepad": 905,
+        "cube": 2361
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 238,
+      "ms": 24.14818695979193,
+      "areas": {
+        "gamepad": 912,
+        "cube": 2402
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 239,
+      "ms": 23.739200027193874,
+      "areas": {
+        "gamepad": 953,
+        "cube": 2367
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 240,
+      "ms": 23.871097015216947,
+      "areas": {
+        "gamepad": 947,
+        "cube": 2420
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 241,
+      "ms": 24.135492043569684,
+      "areas": {
+        "gamepad": 917,
+        "cube": 2371
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 242,
+      "ms": 23.62038701539859,
+      "areas": {
+        "gamepad": 923,
+        "cube": 2365
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 243,
+      "ms": 23.62274198094383,
+      "areas": {
+        "gamepad": 899,
+        "cube": 2367
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 244,
+      "ms": 23.782200005371124,
+      "areas": {
+        "gamepad": 913,
+        "cube": 2391
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 245,
+      "ms": 23.221359006129205,
+      "areas": {
+        "gamepad": 901,
+        "cube": 2364
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 246,
+      "ms": 23.28569901874289,
+      "areas": {
+        "gamepad": 959,
+        "cube": 2360
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 247,
+      "ms": 22.723936999682337,
+      "areas": {
+        "gamepad": 977,
+        "cube": 2358
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 248,
+      "ms": 22.53024303354323,
+      "areas": {
+        "gamepad": 960,
+        "cube": 2376
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 249,
+      "ms": 22.461545013356954,
+      "areas": {
+        "gamepad": 960,
+        "cube": 2374
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 250,
+      "ms": 23.144865001086146,
+      "areas": {
+        "gamepad": 1041,
+        "cube": 2377
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 251,
+      "ms": 24.143847986124456,
+      "areas": {
+        "gamepad": 1093,
+        "cube": 2370
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 252,
+      "ms": 22.96664100140333,
+      "areas": {
+        "gamepad": 1115,
+        "cube": 2402
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 253,
+      "ms": 22.53956103231758,
+      "areas": {
+        "gamepad": 1143,
+        "cube": 2377
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 254,
+      "ms": 22.899095027241856,
+      "areas": {
+        "gamepad": 1184,
+        "cube": 2383
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 255,
+      "ms": 24.59672698751092,
+      "areas": {
+        "gamepad": 1147,
+        "cube": 2378
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 256,
+      "ms": 23.33145501324907,
+      "areas": {
+        "gamepad": 1113,
+        "cube": 2367
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 257,
+      "ms": 23.22639903286472,
+      "areas": {
+        "gamepad": 1074,
+        "cube": 2372
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 258,
+      "ms": 23.14055699389428,
+      "areas": {
+        "gamepad": 1192,
+        "cube": 2375
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 259,
+      "ms": 22.616003989242017,
+      "areas": {
+        "gamepad": 1387,
+        "cube": 2375
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 260,
+      "ms": 22.62608299497515,
+      "areas": {
+        "gamepad": 1572,
+        "cube": 2392
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 261,
+      "ms": 23.612993012648076,
+      "areas": {
+        "gamepad": 1588,
+        "cube": 2403
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 262,
+      "ms": 22.96028903219849,
+      "areas": {
+        "gamepad": 1515,
+        "cube": 2442
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 263,
+      "ms": 22.866123006679118,
+      "areas": {
+        "gamepad": 1528,
+        "cube": 2377
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 264,
+      "ms": 22.583534009754658,
+      "areas": {
+        "gamepad": 1541,
+        "cube": 2384
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 265,
+      "ms": 22.579315991606563,
+      "areas": {
+        "gamepad": 1461,
+        "cube": 2384
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 266,
+      "ms": 22.718216001521796,
+      "areas": {
+        "gamepad": 1144,
+        "cube": 2367
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 267,
+      "ms": 22.82783098053187,
+      "areas": {
+        "gamepad": 1107,
+        "cube": 2369
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 268,
+      "ms": 22.98446500208229,
+      "areas": {
+        "gamepad": 1081,
+        "cube": 2383
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 269,
+      "ms": 22.747139970306307,
+      "areas": {
+        "gamepad": 1173,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 270,
+      "ms": 22.761025989893824,
+      "areas": {
+        "gamepad": 1454,
+        "cube": 2420
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 271,
+      "ms": 22.812743030954152,
+      "areas": {
+        "gamepad": 1682,
+        "cube": 2383
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 272,
+      "ms": 22.630231047514826,
+      "areas": {
+        "gamepad": 1878,
+        "cube": 2367
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 273,
+      "ms": 23.16117601003498,
+      "areas": {
+        "gamepad": 1794,
+        "cube": 2363
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 274,
+      "ms": 23.074031982105225,
+      "areas": {
+        "gamepad": 1807,
+        "cube": 2367
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 275,
+      "ms": 22.643084987066686,
+      "areas": {
+        "gamepad": 2054,
+        "cube": 2341
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 276,
+      "ms": 22.54545100731775,
+      "areas": {
+        "gamepad": 2134,
+        "cube": 2376
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 277,
+      "ms": 22.93755696155131,
+      "areas": {
+        "gamepad": 2035,
+        "cube": 2346
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 278,
+      "ms": 23.06754101300612,
+      "areas": {
+        "gamepad": 2020,
+        "cube": 2319
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 279,
+      "ms": 22.80335599789396,
+      "areas": {
+        "gamepad": 1901,
+        "cube": 2338
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 280,
+      "ms": 22.73389499168843,
+      "areas": {
+        "gamepad": 2031,
+        "cube": 2334
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 281,
+      "ms": 22.72351598367095,
+      "areas": {
+        "gamepad": 2466,
+        "cube": 2363
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 282,
+      "ms": 22.80705200973898,
+      "areas": {
+        "gamepad": 2504,
+        "cube": 2373
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 283,
+      "ms": 22.944219002965838,
+      "areas": {
+        "gamepad": 2612,
+        "cube": 2380
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 284,
+      "ms": 22.875369992107153,
+      "areas": {
+        "gamepad": 2467,
+        "cube": 2374
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 285,
+      "ms": 23.674668977037072,
+      "areas": {
+        "gamepad": 2723,
+        "cube": 2416
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 286,
+      "ms": 23.132222006097436,
+      "areas": {
+        "gamepad": 2776,
+        "cube": 2395
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 287,
+      "ms": 22.9921989957802,
+      "areas": {
+        "gamepad": 2893,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 288,
+      "ms": 22.85860903793946,
+      "areas": {
+        "gamepad": 2884,
+        "cube": 2381
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 289,
+      "ms": 23.077870020642877,
+      "areas": {
+        "gamepad": 2778,
+        "cube": 2367
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 290,
+      "ms": 22.92206702986732,
+      "areas": {
+        "gamepad": 3041,
+        "cube": 2383
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 291,
+      "ms": 23.030551034025848,
+      "areas": {
+        "gamepad": 3009,
+        "cube": 2385
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 292,
+      "ms": 23.69778195861727,
+      "areas": {
+        "gamepad": 3174,
+        "cube": 2389
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 293,
+      "ms": 24.75390100153163,
+      "areas": {
+        "gamepad": 3288,
+        "cube": 2390
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 294,
+      "ms": 23.898268002085388,
+      "areas": {
+        "gamepad": 3338,
+        "cube": 2389
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 295,
+      "ms": 23.51653197547421,
+      "areas": {
+        "gamepad": 3382,
+        "cube": 2384
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 296,
+      "ms": 23.461008036974818,
+      "areas": {
+        "gamepad": 3365,
+        "cube": 2393
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 297,
+      "ms": 23.074242984876037,
+      "areas": {
+        "gamepad": 3349,
+        "cube": 2384
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 298,
+      "ms": 23.048965027555823,
+      "areas": {
+        "gamepad": 3343,
+        "cube": 2423
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 299,
+      "ms": 23.11920700594783,
+      "areas": {
+        "gamepad": 3323,
+        "cube": 2399
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 300,
+      "ms": 40.609973948448896,
+      "areas": {
+        "gamepad": 3295,
+        "cube": 2372
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 301,
+      "ms": 23.46918301191181,
+      "areas": {
+        "gamepad": 3351,
+        "cube": 2379
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 302,
+      "ms": 23.918966006021947,
+      "areas": {
+        "gamepad": 3336,
+        "cube": 2407
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 303,
+      "ms": 23.558399989269674,
+      "areas": {
+        "gamepad": 3014,
+        "cube": 2401
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 304,
+      "ms": 23.665811982937157,
+      "areas": {
+        "gamepad": 3067,
+        "cube": 2340
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 305,
+      "ms": 23.111864051315933,
+      "areas": {
+        "gamepad": 2890,
+        "cube": 2288
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 306,
+      "ms": 23.02749501541257,
+      "areas": {
+        "gamepad": 3135,
+        "cube": 2281
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 307,
+      "ms": 22.992189042270184,
+      "areas": {
+        "gamepad": 3132,
+        "cube": 2258
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 308,
+      "ms": 22.960680013056844,
+      "areas": {
+        "gamepad": 2929,
+        "cube": 2188
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 309,
+      "ms": 23.037965002004057,
+      "areas": {
+        "gamepad": 2962,
+        "cube": 2185
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 310,
+      "ms": 23.03249400574714,
+      "areas": {
+        "gamepad": 3058,
+        "cube": 2180
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 311,
+      "ms": 23.68515799753368,
+      "areas": {
+        "gamepad": 2956,
+        "cube": 2200
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 312,
+      "ms": 24.052085995208472,
+      "areas": {
+        "gamepad": 2679,
+        "cube": 2118
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 313,
+      "ms": 23.651716008316725,
+      "areas": {
+        "gamepad": 2794,
+        "cube": 1941
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 314,
+      "ms": 23.413477989379317,
+      "areas": {
+        "gamepad": 2525,
+        "cube": 1580
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 315,
+      "ms": 23.13472598325461,
+      "areas": {
+        "gamepad": 2685,
+        "cube": 1720
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 316,
+      "ms": 23.183838988188654,
+      "areas": {
+        "gamepad": 2522,
+        "cube": 1872
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 317,
+      "ms": 23.03432795451954,
+      "areas": {
+        "gamepad": 2926,
+        "cube": 1459
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 318,
+      "ms": 23.244802956469357,
+      "areas": {
+        "gamepad": 2564,
+        "cube": 1174
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 319,
+      "ms": 23.316435981541872,
+      "areas": {
+        "gamepad": 2475,
+        "cube": 956
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 320,
+      "ms": 23.192924971226603,
+      "areas": {
+        "gamepad": 2207,
+        "cube": 952
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 321,
+      "ms": 23.839286994189024,
+      "areas": {
+        "gamepad": 2362,
+        "cube": 1136
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 322,
+      "ms": 23.85167096508667,
+      "areas": {
+        "gamepad": 2957,
+        "cube": 1026
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 323,
+      "ms": 23.73983000870794,
+      "areas": {
+        "gamepad": 2990,
+        "cube": 686
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 324,
+      "ms": 23.841009999159724,
+      "areas": {
+        "gamepad": 3292,
+        "cube": 682
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 325,
+      "ms": 23.172045999672264,
+      "areas": {
+        "gamepad": 3063,
+        "cube": 770
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 326,
+      "ms": 23.527161974925548,
+      "areas": {
+        "gamepad": 3243,
+        "cube": 792
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 327,
+      "ms": 22.955871012527496,
+      "areas": {
+        "gamepad": 3186,
+        "cube": 816
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 328,
+      "ms": 23.12069002073258,
+      "areas": {
+        "gamepad": 3160,
+        "cube": 779
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 329,
+      "ms": 23.792880005203187,
+      "areas": {
+        "gamepad": 3181,
+        "cube": 826
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 330,
+      "ms": 23.344489047303796,
+      "areas": {
+        "gamepad": 3162,
+        "cube": 737
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 331,
+      "ms": 24.096750013995916,
+      "areas": {
+        "gamepad": 3117,
+        "cube": 578
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 332,
+      "ms": 23.601411026902497,
+      "areas": {
+        "gamepad": 3134,
+        "cube": 575
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 333,
+      "ms": 23.373472969979048,
+      "areas": {
+        "gamepad": 3276,
+        "cube": 620
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 334,
+      "ms": 22.964206989854574,
+      "areas": {
+        "gamepad": 3397,
+        "cube": 496
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 335,
+      "ms": 23.398560006171465,
+      "areas": {
+        "gamepad": 3423,
+        "cube": 379
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 336,
+      "ms": 23.03550997748971,
+      "areas": {
+        "gamepad": 3240,
+        "cube": 409
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 337,
+      "ms": 22.810006979852915,
+      "areas": {
+        "gamepad": 3201,
+        "cube": 389
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 338,
+      "ms": 22.76925096521154,
+      "areas": {
+        "gamepad": 3394,
+        "cube": 422
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 339,
+      "ms": 22.967622964642942,
+      "areas": {
+        "gamepad": 3335,
+        "cube": 427
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 340,
+      "ms": 23.075805976986885,
+      "areas": {
+        "gamepad": 3238,
+        "cube": 404
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 341,
+      "ms": 23.574881022796035,
+      "areas": {
+        "gamepad": 3335,
+        "cube": 420
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 342,
+      "ms": 23.86978396680206,
+      "areas": {
+        "gamepad": 3339,
+        "cube": 422
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 343,
+      "ms": 23.59134203288704,
+      "areas": {
+        "gamepad": 3304,
+        "cube": 436
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 344,
+      "ms": 23.42004096135497,
+      "areas": {
+        "gamepad": 3234,
+        "cube": 420
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 345,
+      "ms": 23.249941994436085,
+      "areas": {
+        "gamepad": 2849,
+        "cube": 248
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 346,
+      "ms": 23.172838031314313,
+      "areas": {
+        "gamepad": 2876,
+        "cube": 106
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 347,
+      "ms": 23.009030031971633,
+      "areas": {
+        "gamepad": 2564,
+        "cube": 128
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 348,
+      "ms": 22.832639049738646,
+      "areas": {
+        "gamepad": 2575,
+        "cube": 225
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 349,
+      "ms": 22.885749000124633,
+      "areas": {
+        "gamepad": 2583,
+        "cube": 281
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 350,
+      "ms": 23.635394987650216,
+      "areas": {
+        "gamepad": 2578,
+        "cube": 131
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 351,
+      "ms": 24.316500988788903,
+      "areas": {
+        "gamepad": 2554,
+        "cube": 151
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 352,
+      "ms": 24.749792995862663,
+      "areas": {
+        "gamepad": 2526,
+        "cube": 157
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 353,
+      "ms": 23.27784401131794,
+      "areas": {
+        "gamepad": 2491,
+        "cube": 137
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 354,
+      "ms": 23.75329501228407,
+      "areas": {
+        "gamepad": 2519,
+        "cube": 126
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 355,
+      "ms": 24.001650977879763,
+      "areas": {
+        "gamepad": 2599,
+        "cube": 119
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 356,
+      "ms": 23.613873985596,
+      "areas": {
+        "gamepad": 2509,
+        "cube": 137
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 357,
+      "ms": 23.210318002384156,
+      "areas": {
+        "gamepad": 2474,
+        "cube": 129
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 358,
+      "ms": 23.166496015619487,
+      "areas": {
+        "gamepad": 2530,
+        "cube": 127
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 359,
+      "ms": 23.140597040764987,
+      "areas": {
+        "gamepad": 2506,
+        "cube": 123
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 360,
+      "ms": 22.851985995657742,
+      "areas": {
+        "gamepad": 2488,
+        "cube": 130
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 361,
+      "ms": 23.25616398593411,
+      "areas": {
+        "gamepad": 2503,
+        "cube": 129
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 362,
+      "ms": 23.543150979094207,
+      "areas": {
+        "gamepad": 2601,
+        "cube": 133
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 363,
+      "ms": 23.278424981981516,
+      "areas": {
+        "gamepad": 2499,
+        "cube": 126
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 364,
+      "ms": 23.517504043411463,
+      "areas": {
+        "gamepad": 2674,
+        "cube": 131
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 365,
+      "ms": 24.284170009195805,
+      "areas": {
+        "gamepad": 2699,
+        "cube": 132
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 366,
+      "ms": 23.680799000430852,
+      "areas": {
+        "gamepad": 2796,
+        "cube": 137
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 367,
+      "ms": 23.415122006554157,
+      "areas": {
+        "gamepad": 2724,
+        "cube": 110
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 368,
+      "ms": 23.570994031615555,
+      "areas": {
+        "gamepad": 2951,
+        "cube": 303
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 369,
+      "ms": 23.20649102330208,
+      "areas": {
+        "gamepad": 2301,
+        "cube": 696
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 370,
+      "ms": 22.86926901433617,
+      "areas": {
+        "gamepad": 2311,
+        "cube": 873
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 371,
+      "ms": 23.583717993460596,
+      "areas": {
+        "gamepad": 2354,
+        "cube": 835
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 372,
+      "ms": 23.239672009367496,
+      "areas": {
+        "gamepad": 2386,
+        "cube": 772
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 373,
+      "ms": 23.170612985268235,
+      "areas": {
+        "gamepad": 2372,
+        "cube": 852
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 374,
+      "ms": 23.81031197728589,
+      "areas": {
+        "gamepad": 2354,
+        "cube": 863
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 375,
+      "ms": 23.21495598880574,
+      "areas": {
+        "gamepad": 2450,
+        "cube": 821
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 376,
+      "ms": 23.49892898928374,
+      "areas": {
+        "gamepad": 2327,
+        "cube": 783
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 377,
+      "ms": 23.324281035456806,
+      "areas": {
+        "gamepad": 2430,
+        "cube": 830
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 378,
+      "ms": 23.468362051062286,
+      "areas": {
+        "gamepad": 2439,
+        "cube": 815
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 379,
+      "ms": 23.276430962141603,
+      "areas": {
+        "gamepad": 2472,
+        "cube": 784
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 380,
+      "ms": 23.949814029037952,
+      "areas": {
+        "gamepad": 2324,
+        "cube": 800
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 381,
+      "ms": 23.89083302114159,
+      "areas": {
+        "gamepad": 2363,
+        "cube": 812
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 382,
+      "ms": 23.595470003783703,
+      "areas": {
+        "gamepad": 2450,
+        "cube": 832
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 383,
+      "ms": 23.675189004279673,
+      "areas": {
+        "gamepad": 2451,
+        "cube": 759
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 384,
+      "ms": 23.46648700768128,
+      "areas": {
+        "gamepad": 2544,
+        "cube": 623
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 385,
+      "ms": 23.518446017988026,
+      "areas": {
+        "gamepad": 2709,
+        "cube": 384
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 386,
+      "ms": 24.0655509987846,
+      "areas": {
+        "gamepad": 2670,
+        "cube": 389
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 387,
+      "ms": 23.775937967002392,
+      "areas": {
+        "gamepad": 2712,
+        "cube": 369
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 388,
+      "ms": 23.631306015886366,
+      "areas": {
+        "gamepad": 2702,
+        "cube": 384
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 389,
+      "ms": 23.532963008619845,
+      "areas": {
+        "gamepad": 2998,
+        "cube": 270
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 390,
+      "ms": 23.315313970670104,
+      "areas": {
+        "gamepad": 2977,
+        "cube": 250
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 391,
+      "ms": 23.314452031627297,
+      "areas": {
+        "gamepad": 2813,
+        "cube": 251
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 392,
+      "ms": 23.122181999497116,
+      "areas": {
+        "gamepad": 2863,
+        "cube": 249
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 393,
+      "ms": 22.388107026927173,
+      "areas": {
+        "gamepad": 2973,
+        "cube": 238
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 394,
+      "ms": 22.221072984393686,
+      "areas": {
+        "gamepad": 2920,
+        "cube": 260
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 395,
+      "ms": 22.163144021760672,
+      "areas": {
+        "gamepad": 2929,
+        "cube": 264
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 396,
+      "ms": 22.84873998723924,
+      "areas": {
+        "gamepad": 2936,
+        "cube": 270
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 397,
+      "ms": 23.97248602937907,
+      "areas": {
+        "gamepad": 2972,
+        "cube": 274
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 398,
+      "ms": 23.550204990897328,
+      "areas": {
+        "gamepad": 3002,
+        "cube": 265
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 399,
+      "ms": 23.440669989213347,
+      "areas": {
+        "gamepad": 3052,
+        "cube": 272
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 400,
+      "ms": 23.35990802384913,
+      "areas": {
+        "gamepad": 2987,
+        "cube": 263
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 401,
+      "ms": 23.15375197213143,
+      "areas": {
+        "gamepad": 3045,
+        "cube": 267
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 402,
+      "ms": 22.286735998932272,
+      "areas": {
+        "gamepad": 3053,
+        "cube": 262
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 403,
+      "ms": 22.87615096429363,
+      "areas": {
+        "gamepad": 3043,
+        "cube": 262
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 404,
+      "ms": 22.147825977299362,
+      "areas": {
+        "gamepad": 3043,
+        "cube": 262
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 405,
+      "ms": 21.991773042827845,
+      "areas": {
+        "gamepad": 3046,
+        "cube": 267
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 406,
+      "ms": 22.30183396022767,
+      "areas": {
+        "gamepad": 3016,
+        "cube": 269
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 407,
+      "ms": 22.23945700097829,
+      "areas": {
+        "gamepad": 3034,
+        "cube": 265
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 408,
+      "ms": 22.701353998854756,
+      "areas": {
+        "gamepad": 3057,
+        "cube": 267
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 409,
+      "ms": 22.26281102048233,
+      "areas": {
+        "gamepad": 3035,
+        "cube": 263
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 410,
+      "ms": 21.979049022775143,
+      "areas": {
+        "gamepad": 3047,
+        "cube": 261
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 411,
+      "ms": 21.953952964395285,
+      "areas": {
+        "gamepad": 3012,
+        "cube": 269
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 412,
+      "ms": 22.198700986336917,
+      "areas": {
+        "gamepad": 3053,
+        "cube": 254
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 413,
+      "ms": 22.25287299370393,
+      "areas": {
+        "gamepad": 3032,
+        "cube": 263
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 414,
+      "ms": 22.855922987218946,
+      "areas": {
+        "gamepad": 3009,
+        "cube": 257
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 415,
+      "ms": 23.147258965764195,
+      "areas": {
+        "gamepad": 3040,
+        "cube": 253
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 416,
+      "ms": 23.527643003035337,
+      "areas": {
+        "gamepad": 2991,
+        "cube": 261
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 417,
+      "ms": 23.387239023577422,
+      "areas": {
+        "gamepad": 3073,
+        "cube": 248
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 418,
+      "ms": 23.487305967137218,
+      "areas": {
+        "gamepad": 3028,
+        "cube": 248
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 419,
+      "ms": 23.71055498952046,
+      "areas": {
+        "gamepad": 3020,
+        "cube": 264
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 420,
+      "ms": 25.589206954464316,
+      "areas": {
+        "gamepad": 3037,
+        "cube": 256
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 421,
+      "ms": 23.808258993085474,
+      "areas": {
+        "gamepad": 3030,
+        "cube": 250
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 422,
+      "ms": 23.323650006204844,
+      "areas": {
+        "gamepad": 3033,
+        "cube": 261
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 423,
+      "ms": 23.718440032098442,
+      "areas": {
+        "gamepad": 3058,
+        "cube": 263
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 424,
+      "ms": 23.406644992064685,
+      "areas": {
+        "gamepad": 3026,
+        "cube": 259
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 425,
+      "ms": 22.70152303390205,
+      "areas": {
+        "gamepad": 3083,
+        "cube": 222
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 426,
+      "ms": 22.92728697648272,
+      "areas": {
+        "gamepad": 3241,
+        "cube": 124
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 1.0
+      }
+    },
+    {
+      "frame": 427,
+      "ms": 48.268038022797555,
+      "areas": {
+        "gamepad": 3615,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 428,
+      "ms": 23.34028104087338,
+      "areas": {
+        "gamepad": 3819,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 429,
+      "ms": 22.29874802287668,
+      "areas": {
+        "gamepad": 3703,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 430,
+      "ms": 22.096638975199312,
+      "areas": {
+        "gamepad": 3669,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 431,
+      "ms": 22.162493027281016,
+      "areas": {
+        "gamepad": 3842,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 432,
+      "ms": 45.811443007551134,
+      "areas": {
+        "gamepad": 3802,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 433,
+      "ms": 22.802233055699617,
+      "areas": {
+        "gamepad": 3825,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 434,
+      "ms": 22.16371602844447,
+      "areas": {
+        "gamepad": 3894,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 435,
+      "ms": 22.185085981618613,
+      "areas": {
+        "gamepad": 3793,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 436,
+      "ms": 22.11980300489813,
+      "areas": {
+        "gamepad": 3767,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 437,
+      "ms": 45.47660402022302,
+      "areas": {
+        "gamepad": 3835,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 438,
+      "ms": 22.966931050177664,
+      "areas": {
+        "gamepad": 3856,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 439,
+      "ms": 22.185435984283686,
+      "areas": {
+        "gamepad": 3547,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 440,
+      "ms": 22.20474201021716,
+      "areas": {
+        "gamepad": 3234,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 441,
+      "ms": 22.53144496353343,
+      "areas": {
+        "gamepad": 3154,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 442,
+      "ms": 45.740648987703025,
+      "areas": {
+        "gamepad": 3163,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 443,
+      "ms": 22.511027054861188,
+      "areas": {
+        "gamepad": 3238,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 444,
+      "ms": 22.0547309727408,
+      "areas": {
+        "gamepad": 3134,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 445,
+      "ms": 22.067986021284014,
+      "areas": {
+        "gamepad": 3150,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 446,
+      "ms": 21.94870199309662,
+      "areas": {
+        "gamepad": 3228,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 447,
+      "ms": 45.5825729877688,
+      "areas": {
+        "gamepad": 3115,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 448,
+      "ms": 22.74064696393907,
+      "areas": {
+        "gamepad": 3178,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 449,
+      "ms": 22.19013503054157,
+      "areas": {
+        "gamepad": 3128,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 450,
+      "ms": 63.33664298290387,
+      "areas": {
+        "gamepad": 3143,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 451,
+      "ms": 19.750331004615873,
+      "areas": {
+        "gamepad": 3126,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 452,
+      "ms": 19.237380009144545,
+      "areas": {
+        "gamepad": 3149,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 453,
+      "ms": 19.0964859793894,
+      "areas": {
+        "gamepad": 3125,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 454,
+      "ms": 19.008040020707995,
+      "areas": {
+        "gamepad": 3137,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 455,
+      "ms": 42.35986201092601,
+      "areas": {
+        "gamepad": 3134,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 456,
+      "ms": 20.499736012425274,
+      "areas": {
+        "gamepad": 3156,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996831432192649,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 457,
+      "ms": 19.27410898497328,
+      "areas": {
+        "gamepad": 3112,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 458,
+      "ms": 19.083030987530947,
+      "areas": {
+        "gamepad": 3134,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9993622448979592,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 459,
+      "ms": 19.10055399639532,
+      "areas": {
+        "gamepad": 3075,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 460,
+      "ms": 42.18497400870547,
+      "areas": {
+        "gamepad": 3085,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996759559300065,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 461,
+      "ms": 19.758976995944977,
+      "areas": {
+        "gamepad": 3045,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 462,
+      "ms": 19.269430020358413,
+      "areas": {
+        "gamepad": 3023,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 463,
+      "ms": 19.17628600494936,
+      "areas": {
+        "gamepad": 3058,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 464,
+      "ms": 19.073742965701967,
+      "areas": {
+        "gamepad": 3046,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 465,
+      "ms": 42.3630679724738,
+      "areas": {
+        "gamepad": 3045,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996717005909389,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 466,
+      "ms": 19.892407988663763,
+      "areas": {
+        "gamepad": 3073,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 467,
+      "ms": 19.26804700633511,
+      "areas": {
+        "gamepad": 3037,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 468,
+      "ms": 19.081656995695084,
+      "areas": {
+        "gamepad": 3045,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 469,
+      "ms": 19.191333034541458,
+      "areas": {
+        "gamepad": 3027,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.999669749009247,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 470,
+      "ms": 42.15541901066899,
+      "areas": {
+        "gamepad": 3059,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 471,
+      "ms": 20.101930014789104,
+      "areas": {
+        "gamepad": 3029,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996699669966996,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 472,
+      "ms": 19.22173995990306,
+      "areas": {
+        "gamepad": 3021,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 473,
+      "ms": 19.08994297264144,
+      "areas": {
+        "gamepad": 3037,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 474,
+      "ms": 19.077620992902666,
+      "areas": {
+        "gamepad": 3037,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 475,
+      "ms": 41.938140988349915,
+      "areas": {
+        "gamepad": 3052,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 476,
+      "ms": 20.302816992625594,
+      "areas": {
+        "gamepad": 3057,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 477,
+      "ms": 19.62767099030316,
+      "areas": {
+        "gamepad": 3092,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996766892984158,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 478,
+      "ms": 19.390496949199587,
+      "areas": {
+        "gamepad": 3039,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 479,
+      "ms": 19.44302604533732,
+      "areas": {
+        "gamepad": 3123,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 480,
+      "ms": 42.29631298221648,
+      "areas": {
+        "gamepad": 3290,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 481,
+      "ms": 19.733961031306535,
+      "areas": {
+        "gamepad": 3673,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 482,
+      "ms": 20.41938598267734,
+      "areas": {
+        "gamepad": 3865,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 483,
+      "ms": 19.722508965060115,
+      "areas": {
+        "gamepad": 3857,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 484,
+      "ms": 19.433056993875653,
+      "areas": {
+        "gamepad": 3741,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 485,
+      "ms": 42.31186298420653,
+      "areas": {
+        "gamepad": 3793,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9997364259356879,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 486,
+      "ms": 19.778885005507618,
+      "areas": {
+        "gamepad": 3958,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9997473471450228,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 487,
+      "ms": 19.666915002744645,
+      "areas": {
+        "gamepad": 3788,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9997360781208762,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 488,
+      "ms": 19.143273995723575,
+      "areas": {
+        "gamepad": 3615,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9997233748271093,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 489,
+      "ms": 19.27605300443247,
+      "areas": {
+        "gamepad": 3569,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9997198094704399,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 490,
+      "ms": 42.920071980915964,
+      "areas": {
+        "gamepad": 3395,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 491,
+      "ms": 19.521371985320002,
+      "areas": {
+        "gamepad": 4037,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 492,
+      "ms": 19.890533993020654,
+      "areas": {
+        "gamepad": 4512,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9995568358076667,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 493,
+      "ms": 19.52038996387273,
+      "areas": {
+        "gamepad": 5146,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 494,
+      "ms": 19.440600997768342,
+      "areas": {
+        "gamepad": 6002,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 495,
+      "ms": 42.788524995557964,
+      "areas": {
+        "gamepad": 6018,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 496,
+      "ms": 20.272611000109464,
+      "areas": {
+        "gamepad": 6014,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 497,
+      "ms": 19.467871985398233,
+      "areas": {
+        "gamepad": 6010,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 498,
+      "ms": 19.232250982895494,
+      "areas": {
+        "gamepad": 6022,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 499,
+      "ms": 19.30648903362453,
+      "areas": {
+        "gamepad": 6052,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 500,
+      "ms": 42.63989697210491,
+      "areas": {
+        "gamepad": 6034,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998342724560823,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 501,
+      "ms": 20.33762203063816,
+      "areas": {
+        "gamepad": 6101,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 502,
+      "ms": 19.33789800386876,
+      "areas": {
+        "gamepad": 6024,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 503,
+      "ms": 19.179471011739224,
+      "areas": {
+        "gamepad": 6029,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 504,
+      "ms": 19.36730300076306,
+      "areas": {
+        "gamepad": 6008,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 505,
+      "ms": 42.865870986133814,
+      "areas": {
+        "gamepad": 5995,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 506,
+      "ms": 19.775208027567714,
+      "areas": {
+        "gamepad": 5990,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996662216288384,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 507,
+      "ms": 19.370359019376338,
+      "areas": {
+        "gamepad": 5994,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9994997498749375,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 508,
+      "ms": 19.275741011369973,
+      "areas": {
+        "gamepad": 5968,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996649916247906,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 509,
+      "ms": 19.017717975657433,
+      "areas": {
+        "gamepad": 5949,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 510,
+      "ms": 42.64887404860929,
+      "areas": {
+        "gamepad": 5918,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 511,
+      "ms": 19.768895988818258,
+      "areas": {
+        "gamepad": 5962,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 512,
+      "ms": 19.423940044362098,
+      "areas": {
+        "gamepad": 5932,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 513,
+      "ms": 19.159273011609912,
+      "areas": {
+        "gamepad": 5918,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 514,
+      "ms": 19.09556402824819,
+      "areas": {
+        "gamepad": 5909,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998307952622674,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 515,
+      "ms": 44.91579195018858,
+      "areas": {
+        "gamepad": 5909,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 516,
+      "ms": 19.93914501508698,
+      "areas": {
+        "gamepad": 5902,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 517,
+      "ms": 19.472089945338666,
+      "areas": {
+        "gamepad": 5916,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996619908737536,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 518,
+      "ms": 19.300777988974005,
+      "areas": {
+        "gamepad": 5906,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 519,
+      "ms": 19.263257971033454,
+      "areas": {
+        "gamepad": 5892,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 520,
+      "ms": 42.73363301763311,
+      "areas": {
+        "gamepad": 5908,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 521,
+      "ms": 19.846271025016904,
+      "areas": {
+        "gamepad": 5892,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 522,
+      "ms": 19.997644994873554,
+      "areas": {
+        "gamepad": 5898,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998304510003391,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 523,
+      "ms": 19.267807016149163,
+      "areas": {
+        "gamepad": 5901,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 524,
+      "ms": 19.18107399251312,
+      "areas": {
+        "gamepad": 5892,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998303071440693,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 525,
+      "ms": 43.00639301072806,
+      "areas": {
+        "gamepad": 5885,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998300764655905,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 526,
+      "ms": 19.697712967172265,
+      "areas": {
+        "gamepad": 5906,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 527,
+      "ms": 19.334480981342494,
+      "areas": {
+        "gamepad": 5881,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 528,
+      "ms": 19.244202005211264,
+      "areas": {
+        "gamepad": 5908,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998307379823967,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 529,
+      "ms": 19.137271970976144,
+      "areas": {
+        "gamepad": 5910,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998308238876671,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 530,
+      "ms": 42.75524301920086,
+      "areas": {
+        "gamepad": 5901,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998305371970853,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 531,
+      "ms": 19.661205005832016,
+      "areas": {
+        "gamepad": 5908,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 532,
+      "ms": 19.584028981626034,
+      "areas": {
+        "gamepad": 5897,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.999830422248601,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 533,
+      "ms": 19.13376501761377,
+      "areas": {
+        "gamepad": 5901,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998305371970853,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 534,
+      "ms": 19.09276796504855,
+      "areas": {
+        "gamepad": 5903,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998305946129087,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 535,
+      "ms": 42.690431990195066,
+      "areas": {
+        "gamepad": 5894,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 536,
+      "ms": 19.54786101123318,
+      "areas": {
+        "gamepad": 5911,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 537,
+      "ms": 20.062276045791805,
+      "areas": {
+        "gamepad": 5910,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998307952622674,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 538,
+      "ms": 19.29920504335314,
+      "areas": {
+        "gamepad": 5899,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998304797423292,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 539,
+      "ms": 20.163715991657227,
+      "areas": {
+        "gamepad": 5885,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 540,
+      "ms": 44.55172998132184,
+      "areas": {
+        "gamepad": 5889,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 541,
+      "ms": 19.884873006958514,
+      "areas": {
+        "gamepad": 5882,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 542,
+      "ms": 20.189814968034625,
+      "areas": {
+        "gamepad": 5878,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 543,
+      "ms": 19.73596401512623,
+      "areas": {
+        "gamepad": 5890,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 544,
+      "ms": 19.479703973047435,
+      "areas": {
+        "gamepad": 5890,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 545,
+      "ms": 42.71791299106553,
+      "areas": {
+        "gamepad": 5897,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 546,
+      "ms": 19.62976501090452,
+      "areas": {
+        "gamepad": 5890,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.999830220713073,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 547,
+      "ms": 19.72438197117299,
+      "areas": {
+        "gamepad": 5895,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 548,
+      "ms": 19.24885099288076,
+      "areas": {
+        "gamepad": 5900,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 549,
+      "ms": 19.27778503159061,
+      "areas": {
+        "gamepad": 5892,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 550,
+      "ms": 43.258405989035964,
+      "areas": {
+        "gamepad": 5879,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 551,
+      "ms": 19.60995700210333,
+      "areas": {
+        "gamepad": 5899,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 552,
+      "ms": 20.45166597235948,
+      "areas": {
+        "gamepad": 5885,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998300764655905,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 553,
+      "ms": 19.310988020151854,
+      "areas": {
+        "gamepad": 5891,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 554,
+      "ms": 19.215479027479887,
+      "areas": {
+        "gamepad": 5884,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 555,
+      "ms": 42.86299500381574,
+      "areas": {
+        "gamepad": 5884,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998300475866757,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 556,
+      "ms": 19.78252100525424,
+      "areas": {
+        "gamepad": 5870,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 557,
+      "ms": 19.783322990406305,
+      "areas": {
+        "gamepad": 5898,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 558,
+      "ms": 19.37027898384258,
+      "areas": {
+        "gamepad": 5884,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 559,
+      "ms": 19.33604496298358,
+      "areas": {
+        "gamepad": 5906,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 560,
+      "ms": 42.944979039020836,
+      "areas": {
+        "gamepad": 5866,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996591683708248,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 561,
+      "ms": 19.765308999922127,
+      "areas": {
+        "gamepad": 5878,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 562,
+      "ms": 19.44554998772219,
+      "areas": {
+        "gamepad": 5877,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 563,
+      "ms": 19.394524046219885,
+      "areas": {
+        "gamepad": 5882,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996600951733514,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 564,
+      "ms": 19.176085013896227,
+      "areas": {
+        "gamepad": 5885,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 565,
+      "ms": 42.82337997574359,
+      "areas": {
+        "gamepad": 5903,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998305946129087,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 566,
+      "ms": 19.69647000078112,
+      "areas": {
+        "gamepad": 5881,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 567,
+      "ms": 19.834329024888575,
+      "areas": {
+        "gamepad": 5888,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 568,
+      "ms": 19.371110014617443,
+      "areas": {
+        "gamepad": 5892,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 569,
+      "ms": 19.256475963629782,
+      "areas": {
+        "gamepad": 5904,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 570,
+      "ms": 42.778406001161784,
+      "areas": {
+        "gamepad": 5918,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 571,
+      "ms": 19.55119799822569,
+      "areas": {
+        "gamepad": 5896,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998303934871099,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 572,
+      "ms": 19.757303991355002,
+      "areas": {
+        "gamepad": 5893,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 573,
+      "ms": 19.887927977833897,
+      "areas": {
+        "gamepad": 5911,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998308238876671,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 574,
+      "ms": 19.15476401336491,
+      "areas": {
+        "gamepad": 5894,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 575,
+      "ms": 43.98553795181215,
+      "areas": {
+        "gamepad": 5882,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 576,
+      "ms": 20.172392018139362,
+      "areas": {
+        "gamepad": 5899,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 577,
+      "ms": 19.69307300169021,
+      "areas": {
+        "gamepad": 5898,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996609020006781,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 578,
+      "ms": 19.670261011924595,
+      "areas": {
+        "gamepad": 5879,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 579,
+      "ms": 20.33697097795084,
+      "areas": {
+        "gamepad": 5896,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 580,
+      "ms": 43.20494498824701,
+      "areas": {
+        "gamepad": 5902,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996611892258174,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 581,
+      "ms": 20.5502409953624,
+      "areas": {
+        "gamepad": 5909,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 582,
+      "ms": 20.99562605144456,
+      "areas": {
+        "gamepad": 5905,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998306519898391,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 583,
+      "ms": 20.11620596749708,
+      "areas": {
+        "gamepad": 5889,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 584,
+      "ms": 20.324998011346906,
+      "areas": {
+        "gamepad": 5894,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 585,
+      "ms": 45.05555401556194,
+      "areas": {
+        "gamepad": 5916,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 586,
+      "ms": 20.33822296652943,
+      "areas": {
+        "gamepad": 5886,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 587,
+      "ms": 20.25284297997132,
+      "areas": {
+        "gamepad": 5893,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 588,
+      "ms": 19.963369995821267,
+      "areas": {
+        "gamepad": 5894,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 589,
+      "ms": 19.469593942631036,
+      "areas": {
+        "gamepad": 5892,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 590,
+      "ms": 42.81240899581462,
+      "areas": {
+        "gamepad": 5896,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.999830422248601,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 591,
+      "ms": 19.745993020478636,
+      "areas": {
+        "gamepad": 5906,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 592,
+      "ms": 20.639116992242634,
+      "areas": {
+        "gamepad": 5910,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 593,
+      "ms": 20.60158597305417,
+      "areas": {
+        "gamepad": 5877,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 594,
+      "ms": 19.5250780088827,
+      "areas": {
+        "gamepad": 5910,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 595,
+      "ms": 42.85231401445344,
+      "areas": {
+        "gamepad": 5908,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 596,
+      "ms": 19.63208895176649,
+      "areas": {
+        "gamepad": 5899,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 597,
+      "ms": 19.43365699844435,
+      "areas": {
+        "gamepad": 5905,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 598,
+      "ms": 19.33517202269286,
+      "areas": {
+        "gamepad": 5909,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998307666271788,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 599,
+      "ms": 19.276442006230354,
+      "areas": {
+        "gamepad": 5917,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998309954368768,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 600,
+      "ms": 58.676936954725534,
+      "areas": {
+        "gamepad": 5867,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 601,
+      "ms": 19.142772012855858,
+      "areas": {
+        "gamepad": 5923,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 602,
+      "ms": 19.701800018083304,
+      "areas": {
+        "gamepad": 5950,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 603,
+      "ms": 19.336856028530747,
+      "areas": {
+        "gamepad": 5973,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998325799430772,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 604,
+      "ms": 19.16516403434798,
+      "areas": {
+        "gamepad": 6020,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 605,
+      "ms": 42.6310189650394,
+      "areas": {
+        "gamepad": 6007,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 606,
+      "ms": 19.48982197791338,
+      "areas": {
+        "gamepad": 6000,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 607,
+      "ms": 19.642487983219326,
+      "areas": {
+        "gamepad": 6007,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998335552596538,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 608,
+      "ms": 20.087282988242805,
+      "areas": {
+        "gamepad": 5995,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998332221480988,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 609,
+      "ms": 19.932702998630702,
+      "areas": {
+        "gamepad": 6011,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 610,
+      "ms": 43.06738794548437,
+      "areas": {
+        "gamepad": 5992,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.999833138661772,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 611,
+      "ms": 19.98522103531286,
+      "areas": {
+        "gamepad": 5999,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 612,
+      "ms": 20.037399022839963,
+      "areas": {
+        "gamepad": 6002,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 613,
+      "ms": 19.322540028952062,
+      "areas": {
+        "gamepad": 6011,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 614,
+      "ms": 19.494983018375933,
+      "areas": {
+        "gamepad": 5997,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 615,
+      "ms": 43.18818397587165,
+      "areas": {
+        "gamepad": 6031,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 616,
+      "ms": 19.684337021317333,
+      "areas": {
+        "gamepad": 6009,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 617,
+      "ms": 19.51950800139457,
+      "areas": {
+        "gamepad": 6005,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 618,
+      "ms": 19.33250797446817,
+      "areas": {
+        "gamepad": 6020,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 619,
+      "ms": 19.137310970108956,
+      "areas": {
+        "gamepad": 6013,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9998337213169272,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 620,
+      "ms": 43.016762007027864,
+      "areas": {
+        "gamepad": 6010,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 621,
+      "ms": 19.671243033371866,
+      "areas": {
+        "gamepad": 6009,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 622,
+      "ms": 19.533553975634277,
+      "areas": {
+        "gamepad": 6002,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 623,
+      "ms": 19.392700982280076,
+      "areas": {
+        "gamepad": 6001,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 624,
+      "ms": 19.587556016631424,
+      "areas": {
+        "gamepad": 5996,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 0.9996664999166249,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 625,
+      "ms": 43.7974960077554,
+      "areas": {
+        "gamepad": 5999,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 626,
+      "ms": 19.883509958162904,
+      "areas": {
+        "gamepad": 5991,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    },
+    {
+      "frame": 627,
+      "ms": 19.61955602746457,
+      "areas": {
+        "gamepad": 5994,
+        "cube": 0
+      },
+      "iou": {
+        "gamepad": 1.0,
+        "cube": 0.0
+      }
+    }
+  ],
+  "elapsed": 20.76505902898498
+}

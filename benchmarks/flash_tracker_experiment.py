@@ -1,8 +1,8 @@
-"""Small offline ablation: identical UFM motion, with and without surface correction.
+"""Recorded RGB-D input, archival and scoring around the shared frame session.
 
-Uses the archived core directly. These are candidate poses, without publication
-gates or gripper prediction. Optional scene groups supply recorded motion hints.
-Fit residuals are not accuracy.
+Comparison methods select image-only or surface/group estimation. Live camera
+debugging uses the same core; annotations are read only after inference for scoring.
+Fit residuals are not accuracy. This runner does not control a robot.
 Run with python -m benchmarks.flash_tracker_experiment --help.
 """
 
@@ -15,168 +15,29 @@ import importlib.metadata
 import json
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import asdict
-from functools import partial
 from itertools import islice
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from benchmarks.flash_experiment_groups import GroupConfig, GroupHints
+from benchmarks.flash_experiment_groups import GroupConfig
 from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_experiment_labels import load_pose_labels
-from benchmarks.flash_flow_paths import DenseFlow, FlowPaths
 from benchmarks.flash_full_pose_score import score_transforms, summarize
-from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig, GrowingSurfaceSession
-from lerobot.policies.flash.scene_groups import ScenePointTracker
-from lerobot.policies.flash.shared_image_tracking import SharedFrameTracker, SharedMatchingConfig
+from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
+from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
-from lerobot.policies.flash.surface_correspondence import crop_pair, measured_pairs, robust_fit, ufm_pairs
-from lerobot.policies.flash.surface_observation import prepare_surface_frame
-from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession, load_ufm
+from lerobot.policies.flash.surface_frame_session import (
+    MotionChain as MotionChain,
+    RetainedMotionReference as RetainedMotionReference,
+    SurfaceFrameSession,
+    match_record as match_record,
+)
+from lerobot.policies.flash.surface_tracking import load_ufm
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
-
-
-class MotionChain:
-    """A failed link cannot silently become a stationary measurement."""
-
-    def __init__(self):
-        self.pose = None
-        self.broken = False
-
-    def update(self, prepared):
-        if prepared["status"] is not None:
-            # prepare() keeps the last usable image in this case. A future
-            # correspondence can still bridge to it, but this frame is unknown.
-            return None
-        if self.broken:
-            return None
-        if self.pose is None:
-            self.pose = np.eye(4)
-        elif prepared["step"] is None:
-            # prepare() advanced its image even though this pair did not fit.
-            self.broken = True
-            return None
-        else:
-            self.pose = prepared["step"] @ self.pose
-        return self.pose.copy()
-
-
-class RetainedMotionReference:
-    """Experiment: retry from the last connected image after a missed match.
-
-    This is a recovery hypothesis, not a pose acceptance rule. Long-gap UFM
-    correspondences can still be wrong; the labelled cases measure that risk.
-    """
-
-    def __init__(self, matcher, config, *, record_correspondences=False, shared_matching=None):
-        self.matcher, self.config = matcher, config
-        self.shared_matching = shared_matching
-        self.record_correspondences = record_correspondences
-        self.evidence = None
-        self.paths = FlowPaths()
-        self.reference = None
-        self.reference_frame = None
-        self.pose = np.eye(4)
-
-    def update(self, prepared, previous):
-        self.evidence = None
-        diagnostics = {"reference_frame": self.reference_frame, "extra_match_ms": 0.0}
-        if prepared["status"] is not None:
-            return None, diagnostics
-        current = prepared["current"]
-        if self.reference is not None:
-            step = prepared["step"]
-            evidence = prepared.get("correspondences")
-            if self.reference is not previous:
-                started = time.perf_counter()
-                a, b, crop = crop_pair(self.reference, current, self.config)
-                evidence = {} if self.record_correspondences else None
-                kwargs = {"evidence": evidence} if evidence is not None else {}
-                if self.shared_matching is not None:
-                    source, target = self.shared_matching.pairs(
-                        self.reference, current, prepared["intrinsics"], evidence=evidence
-                    )
-                else:
-                    source, target = ufm_pairs(
-                        self.matcher,
-                        a,
-                        b,
-                        crop,
-                        self.reference,
-                        current,
-                        prepared["intrinsics"],
-                        self.config,
-                        **kwargs,
-                    )
-                step, inliers, residual = robust_fit(source, target, self.config)
-                diagnostics.update(
-                    extra_match_ms=(time.perf_counter() - started) * 1000,
-                    matches=len(source),
-                    inliers=inliers,
-                    residual_mm=float(residual * 1000) if np.isfinite(residual) else None,
-                )
-            if evidence is not None:
-                self.evidence = match_record(
-                    evidence,
-                    self.reference,
-                    current,
-                    prepared["intrinsics"],
-                    step,
-                    self.config,
-                    paths=self.paths,
-                )
-            if step is None:
-                return None, diagnostics
-            self.pose = step @ self.pose
-        self.reference = current
-        self.reference_frame = prepared["frame_id"]
-        return self.pose.copy(), diagnostics
-
-
-def match_record(evidence, source, target, intrinsics, step, config, *, paths=None):
-    """Save measured matches and fit agreement; never synthesize matches from a pose."""
-    stages = evidence["stage"].copy()
-    rows = np.flatnonzero(stages == 3)
-    if step is not None and len(rows):
-        a, b = measured_pairs(
-            source, target, evidence["source_uv"][rows], evidence["target_uv"][rows], intrinsics
-        )
-        if len(a) != len(rows):
-            raise ValueError("captured correspondence filter disagrees with the estimator")
-        errors = np.linalg.norm(a @ step[:3, :3].T + step[:3, 3] - b, axis=1)
-        stages[rows[errors < config.ransac_distance_m]] = 4
-    record = {
-        "source_frame": source["frame_id"],
-        "target_frame": target["frame_id"],
-        "source_uv": np.round(evidence["source_uv"], 3).tolist(),
-        "target_uv": np.round(evidence["target_uv"], 3).tolist(),
-        "stage": stages.tolist(),
-        "fit_available": step is not None,
-    }
-    if "track_ids" in evidence:
-        record["backend"] = evidence["backend"]
-        record["track_ids"] = evidence["track_ids"].tolist()
-        record["paths"] = [
-            [int(i), int((i * 137) % 280), *np.round(a, 3).tolist(), *np.round(b, 3).tolist(), int(s)]
-            for i, a, b, s in zip(
-                evidence["track_ids"], evidence["source_uv"], evidence["target_uv"], stages, strict=True
-            )
-        ]
-        record["path_sampling"] = "shared_point_identities"
-    elif paths is not None and "flow" in evidence:
-        crop = evidence["crop"]
-        field = (
-            DenseFlow(record, evidence["flow"], crop[:2], crop[2] / config.input_size_px)
-            if len(stages)
-            else None
-        )
-        record["paths"] = paths.update(record, field=field)
-        record["path_sampling"] = "full_ufm_output"
-    return record
 
 
 def quantiles(values):
@@ -187,7 +48,7 @@ def quantiles(values):
     )
 
 
-def score_case(case, rows, references, reference_frames):
+def score_case(case, rows, references, reference_frames, *, run=None):
     """Only this function reads pose annotations, after all inference finishes."""
     labels, provenance = load_pose_labels(case, rows)
     report = {
@@ -228,6 +89,17 @@ def score_case(case, rows, references, reference_frames):
                 relative_truth = truth[first:] @ np.linalg.inv(truth[first])
                 error = score_transforms(transforms, available, relative_truth, references[role])
                 metrics["pose_error"] = summarize(available, *error)
+                from benchmarks.flash_surface_score import score_surface_trace
+
+                metrics["surface_error"] = score_surface_trace(
+                    case.get("evaluation_surfaces", {}).get(role),
+                    truth[first:],
+                    details[first:],
+                    name,
+                    references[role],
+                    run=run,
+                    role=role,
+                )
                 errors[name] = error[0]
             result["methods"][name] = metrics
         if truth is not None and "ufm_chain" in errors and "surface_corrected" in errors:
@@ -281,6 +153,8 @@ def code_snapshot(output):
         repo / "benchmarks/flash_experiment_inputs.py",
         repo / "benchmarks/flash_experiment_labels.py",
         repo / "benchmarks/flash_full_pose_score.py",
+        repo / "benchmarks/flash_surface_score.py",
+        repo / "src/lerobot/gui/flash_pose_overlay.py",
         repo / "benchmarks/flash_flow_paths.py",
         repo / "benchmarks/flash_experiment_browser.py",
         repo / "benchmarks/flash_rebuild_examples.py",
@@ -330,109 +204,67 @@ def run_case(
 ):
     if max_frames is not None and (type(max_frames) is not int or max_frames < 1):
         raise ValueError("max_frames must be a positive integer")
-    if single_method is not None:
-        if surface_methods is not None or retain_motion_reference:
-            raise ValueError("single_method cannot also select comparison methods or a retry baseline")
-        surface_methods = [single_method]
     output.mkdir(parents=True, exist_ok=False)
-    shared = SharedFrameTracker(shared_matching_config, model) if shared_matching_config else None
-    sessions = {
-        role: SurfaceTrackingSession(
-            model,
-            observation_config=config.observation,
-            shape_config=config.shape,
-            motion_config=config.motion,
-            fit_kernels=kernels,
-            search_pool=search_pool,
-            record_correspondences=record_correspondences,
-            shared_matching=shared,
-        )
-        for role in case["roles"]
-    }
-    chains = {role: MotionChain() for role in sessions}
-    paths = {role: FlowPaths() for role in sessions}
-    retained = {
-        role: RetainedMotionReference(
-            model, config.motion, record_correspondences=record_correspondences, shared_matching=shared
-        )
-        for role in sessions
-    }
-    if group_experiment is not None and surface_experiment is None:
-        raise ValueError("group variants require the surface experiment")
-    variants = [("conditioned_fixed", False), ("conditioned_growing", True)]
-    if group_experiment is not None:
-        variants += [("group_fixed", False), ("group_growing", True)]
-    if surface_methods is not None:
-        if not surface_experiment or not surface_methods or set(surface_methods) - {n for n, _ in variants}:
-            raise ValueError("surface_methods must select configured surface experiments")
-        variants = [(name, grow) for name, grow in variants if name in surface_methods]
-    candidates = (
-        {
-            name: {
-                role: GrowingSurfaceSession(
-                    config.shape,
-                    GrowingSurfaceConfig(
-                        **{
-                            **asdict(surface_experiment),
-                            "grow": grow,
-                            "retain_unobserved_pose": name.startswith("group_"),
-                        }
-                    ),
-                    fit_kernels=kernels,
-                    search_pool=search_pool,
-                )
-                for role in sessions
-            }
-            for name, grow in variants
-        }
-        if surface_experiment is not None
-        else {}
+    engine = SurfaceFrameSession(
+        case["roles"],
+        model,
+        config,
+        kernels,
+        search_pool,
+        retain_motion_reference=retain_motion_reference,
+        record_correspondences=record_correspondences,
+        surface_experiment=surface_experiment,
+        group_experiment=group_experiment,
+        shared_matching_config=shared_matching_config,
+        surface_methods=surface_methods,
+        single_method=single_method,
+        parallel_objects=parallel_objects,
     )
-    scene_tracker = ScenePointTracker() if group_experiment is not None and shared is None else None
-    groups = {
-        name: {
-            role: GroupHints(
-                group_experiment,
-                shared_image_points=shared is not None,
-                uncertainty_config=surface_experiment.uncertainty,
-            )
-            for role in sessions
-        }
-        for name in candidates
-        if name.startswith("group_")
-    }
-    digest, rows, references, reference_frames = hashlib.sha256(), [], {}, {}
+    shared = engine.shared
+    digest, rows = hashlib.sha256(), []
+    references, reference_frames = engine.references, engine.reference_frames
     started = time.perf_counter()
     (output / "case.json").write_text(json.dumps(case, indent=2) + "\n")
+
+    def archive_surface(name, role, track, details):
+        # Original sampled camera measurements and their placement are
+        # separate from derived clouds, so an addition can be undone.
+        archive = output / "surface_patches" / name / role
+        for event in details["map_events"]:
+            if event["event"] not in ("pending", "added"):
+                continue
+            patch = track.store.patches[event["frame"]]
+            archive.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                archive / f"{patch.frame:06d}.npz",
+                measured=patch.measured,
+                camera_from_reference=patch.camera_from_reference,
+                fitted_map_version=patch.fitted_map_version,
+            )
+        if details["map_version_after"] != details["map_version_used"]:
+            models = output / "surface_models" / name / role
+            models.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(models / f"{track.store.version:06d}.npz", points=track.store.points)
+
     # A JSONL survives a stopped process. summary.json exists only after completion.
     with (
         (output / "frames.jsonl").open("w", buffering=1) as journal,
         (
             gzip.open(output / "correspondences.jsonl.gz", "wt") if record_correspondences else nullcontext()
         ) as match_journal,
-        (
-            ThreadPoolExecutor(max_workers=min(config.surface_object_workers, len(sessions)))
-            if parallel_objects
-            and shared is not None
-            and single_method is not None
-            and config.parallel_surface_objects
-            and len(sessions) > 1
-            else nullcontext(None)
-        ) as object_pool,
+        engine,
     ):
         for frame, masks in islice(samples(case), max_frames):
             # Disk decoding and output serialization are outside this timer.
             # A supplied live mask source is inside it; saved masks cost zero.
-            frame_started = time.perf_counter()
             mask_started = time.perf_counter()
             if mask_source is not None:
                 measured_masks = mask_source.masks(frame)
                 masks = {
-                    role: measured_masks.get(role, np.zeros(frame.depth.shape, bool)) for role in sessions
+                    role: measured_masks.get(role, np.zeros(frame.depth.shape, bool))
+                    for role in engine.sessions
                 }
             mask_ms = (time.perf_counter() - mask_started) * 1000 if mask_source else 0.0
-            excluded_s = 0.0
-            hash_started = time.perf_counter()
             for value in (
                 frame.rgb,
                 frame.depth,
@@ -442,208 +274,12 @@ def run_case(
             ):
                 a = np.asarray(value)
                 digest.update(str((a.shape, a.dtype)).encode() + a.tobytes())
-            excluded_s += time.perf_counter() - hash_started
-            row = {"frame": frame.frame_id, "time_s": frame.source_time_s, "mask_ms": mask_ms, "objects": {}}
-            if shared is not None:
-                scene = shared.update(frame, masks)
-                row["shared_matching"] = dict(shared.diagnostics)
-                row["scene_point_tracking_ms"] = shared.diagnostics["total_ms"]
-            if scene_tracker is not None:
-                begin = time.perf_counter()
-                scene = scene_tracker.update(frame)
-                row["scene_point_tracking_ms"] = (time.perf_counter() - begin) * 1000
-            depth_m = frame.depth.astype(np.float32) * frame.depth_m_per_unit
-            frame_filters = prepare_surface_frame(depth_m, asdict(config.observation))
-            match_row = {"frame": frame.frame_id, "objects": {}}
-
-            def process_role(
-                role_session,
-                frame=frame,
-                masks=masks,
-                scene=scene if shared is not None or scene_tracker is not None else None,
-                depth_m=depth_m,
-                frame_filters=frame_filters,
-            ):
-                role, session = role_session
-                new_reference = new_reference_frame = None
-                excluded_role_s = 0.0
-                begin = time.perf_counter()
-                previous = session.previous
-                prepared = session.prepare(
-                    frame.rgb,
-                    depth_m,
-                    masks[role],
-                    frame.intrinsics,
-                    frame.frame_id,
-                    frame_filters=frame_filters,
-                )
-                prepare_ms = (time.perf_counter() - begin) * 1000
-                pair = None
-                if prepared.get("correspondences") is not None:
-                    pair = match_record(
-                        prepared["correspondences"],
-                        previous,
-                        prepared["current"],
-                        frame.intrinsics,
-                        prepared["step"],
-                        config.motion,
-                        paths=paths[role],
-                    )
-                match_object = {"pair": pair}
-                if role not in references and prepared["status"] is None:
-                    new_reference = prepared["current"]["obs"]["points"].copy()
-                    new_reference_frame = frame.frame_id
-                object_row = {
-                    "prepare_ms": prepare_ms,
-                }
-                if single_method is None:
-                    chain = chains[role].update(prepared)
-                    begin = time.perf_counter()
-                    fitted = session.finish(prepared)
-                    finish_ms = (time.perf_counter() - begin) * 1000
-                    object_row.update(
-                        ufm_chain=chain.tolist() if chain is not None else None,
-                        surface_corrected=fitted.get("camera_from_reference"),
-                        status=fitted["status"],
-                        motion_chain_broken=chains[role].broken,
-                        finish_ms=finish_ms,
-                        diagnostics=fitted["diagnostics"],
-                    )
-                if retain_motion_reference:
-                    retry_pose, retry_diagnostics = retained[role].update(prepared, previous)
-                    match_object["retry"] = retained[role].evidence
-                    object_row.update(
-                        ufm_retained_reference=retry_pose.tolist() if retry_pose is not None else None,
-                        retained_reference_diagnostics=retry_diagnostics,
-                    )
-                for name, tracks in candidates.items():
-                    begin = time.perf_counter()
-                    track = tracks[role]
-                    candidate_input = prepared
-                    # A missed frame cannot silently become the source of the next
-                    # motion estimate. Retry from this track's connected image.
-                    if (
-                        prepared["status"] is None
-                        and track.connected_observation is not None
-                        and prepared.get("match_source_frame") != track.connected_frame
-                    ):
-                        candidate_input = dict(prepared)
-                        old = track.connected_observation
-                        current = prepared["current"]
-                        if shared is not None:
-                            source, target = shared.pairs(old, current, prepared["intrinsics"])
-                        else:
-                            a, b, crop = crop_pair(old, current, config.motion)
-                            source, target = ufm_pairs(
-                                model, a, b, crop, old, current, prepared["intrinsics"], config.motion
-                            )
-                        step, _, _ = robust_fit(source, target, config.motion)
-                        candidate_input.update(
-                            step=step, point_pairs=(source, target), match_source_frame=track.connected_frame
-                        )
-                    hint = None
-                    if name in groups:
-                        hint, group_details = groups[name][role].predict(
-                            frame,
-                            scene,
-                            masks,
-                            role,
-                            track.reference_frame,
-                            **({"object_usable": prepared["current"]["usable"]} if shared else {}),
-                            observation=prepared["current"] if prepared["status"] is None else None,
-                            shape_config=config.shape,
-                            reference_views=track._fit_views(),
-                            surface_reference=track.store.points
-                            if track.config.partial_surface_matching
-                            else None,
-                        )
-                    candidate_check = (
-                        partial(
-                            groups[name][role].compare_candidate,
-                            frame,
-                            masks[role],
-                            hint,
-                            observation=prepared["current"] if track.config.surface_priority else None,
-                            shape_config=config.shape,
-                            reference_views=track._fit_views(),
-                        )
-                        if hint is not None
-                        else None
-                    )
-                    result = track.update(
-                        candidate_input,
-                        frame.source_time_s,
-                        hint=hint,
-                        candidate_check=candidate_check,
-                        base_from_camera=frame.base_from_camera,
-                    )
-                    details = result["diagnostics"]
-                    if name in groups:
-                        groups[name][role].observe(
-                            frame,
-                            scene,
-                            masks,
-                            role,
-                            result,
-                            track.reference,
-                            **({"object_usable": prepared["current"]["usable"]} if shared else {}),
-                        )
-                        details["group"] = group_details
-                    object_row.update(
-                        {
-                            name: result["camera_from_reference"],
-                            name + "_ms": (time.perf_counter() - begin) * 1000,
-                            name + "_status": result["status"],
-                            name + "_details": details,
-                        }
-                    )
-                    if not record_surfaces:
-                        continue
-                    archive_started = time.perf_counter()
-                    # Original sampled camera measurements and their placement are
-                    # separate from derived clouds, so an addition can be undone.
-                    archive = output / "surface_patches" / name / role
-                    for event in details["map_events"]:
-                        if event["event"] not in ("pending", "added"):
-                            continue
-                        patch = track.store.patches[event["frame"]]
-                        archive.mkdir(parents=True, exist_ok=True)
-                        np.savez_compressed(
-                            archive / f"{patch.frame:06d}.npz",
-                            measured=patch.measured,
-                            camera_from_reference=patch.camera_from_reference,
-                            fitted_map_version=patch.fitted_map_version,
-                        )
-                    if details["map_version_after"] != details["map_version_used"]:
-                        models = output / "surface_models" / name / role
-                        models.mkdir(parents=True, exist_ok=True)
-                        np.savez_compressed(
-                            models / f"{track.store.version:06d}.npz", points=track.store.points
-                        )
-                    excluded_role_s += time.perf_counter() - archive_started
-                return role, object_row, match_object, new_reference, new_reference_frame, excluded_role_s
-
-            role_results = (
-                object_pool.map(process_role, sessions.items())
-                if object_pool is not None
-                else map(process_role, sessions.items())
+            row, match_row = engine.step(
+                frame,
+                masks,
+                mask_ms=mask_ms,
+                archive_callback=archive_surface if record_surfaces else None,
             )
-            for (
-                role,
-                object_row,
-                match_object,
-                new_reference,
-                new_reference_frame,
-                excluded_role_s,
-            ) in role_results:
-                row["objects"][role] = object_row
-                match_row["objects"][role] = match_object
-                if new_reference is not None:
-                    references[role] = new_reference
-                    reference_frames[role] = new_reference_frame
-                excluded_s += excluded_role_s
-
-            row["processing_ms"] = (time.perf_counter() - frame_started - excluded_s) * 1000
             if match_journal is not None:
                 match_journal.write(json.dumps(match_row, allow_nan=False, separators=(",", ":")) + "\n")
             journal.write(json.dumps(row, allow_nan=False) + "\n")
@@ -652,7 +288,7 @@ def run_case(
                 progress(frame.frame_id + 1, case["expected_frames"])
             if frame.frame_id % 50 == 0:
                 print(f"{case['id']}: {frame.frame_id + 1}/{case['expected_frames']}", flush=True)
-    report = score_case(case, rows, references, reference_frames)
+    report = score_case(case, rows, references, reference_frames, run=output)
     report.update(input_sha256=digest.hexdigest(), offline_wall_s=time.perf_counter() - started)
     report["processing"] = {
         "method": single_method or "all_comparisons",
@@ -670,6 +306,7 @@ def run_case(
         "intervals": len(rows) - 1,
     }
     report["surface_experiment"] = asdict(surface_experiment) if surface_experiment else None
+    report["surface_registration"] = asdict(config.shape.registration)
     if shared is not None:
         report["shared_matching"] = {
             "config": asdict(shared.config),

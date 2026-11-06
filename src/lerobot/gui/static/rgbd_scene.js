@@ -105,6 +105,17 @@ function disposeLayer(group) {
     group.clear();
 }
 
+export function createPoseAxes(points) {
+    const [origin, ...ends] = points;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(ends.flatMap(end => [...origin, ...end]), 3));
+    const colors = [0xff6969, 0x6fe08a, 0x75a8ff].map(value => new THREE.Color(value));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors.flatMap(color => [...color.toArray(), ...color.toArray()]), 3));
+    const axes = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({vertexColors: true, depthTest: false}));
+    axes.userData.axis = true;
+    return axes;
+}
+
 export function createRgbdScene(canvas) {
     const renderer = new THREE.WebGLRenderer({canvas, antialias: true, preserveDrawingBuffer: true});
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -177,15 +188,11 @@ export function createRgbdScene(canvas) {
                     size: description.pointSize ?? 2.0, sizeAttenuation: false}));
             }
             object.add(surface);
-            const reference = description.reference || description.points;
-            const center = new THREE.Vector3();
-            for (const p of reference) center.add(new THREE.Vector3(...p));
-            center.divideScalar(reference.length);
             geometry.computeBoundingSphere();
-            if (description.axes !== false) {
-                const axes = new THREE.AxesHelper(Math.max(0.01, geometry.boundingSphere.radius * 0.6));
-                axes.position.copy(center); axes.userData.axis = true; axes.visible = options.axes;
-                axes.material.depthTest = false; object.add(axes);
+            if (description.axes !== false && description.axisPoints) {
+                const axes = createPoseAxes(description.axisPoints);
+                axes.visible = options.axes;
+                object.add(axes);
             }
             object.matrix.copy(opticalToView).multiply(new THREE.Matrix4().set(...description.pose.flat()));
             object.matrixAutoUpdate = false;

@@ -39,7 +39,7 @@ def rescore(run: Path, *, evaluation: dict | None = None, browser_export: Path |
     with np.load(run / "reference_points.npz", allow_pickle=False) as data:
         references = {role: data[role].copy() for role in data.files}
     first = {role: value["reference_frame"] for role, value in previous["roles"].items()}
-    result = {**previous, **score_case(case, rows, references, first)}
+    result = {**previous, **score_case(case, rows, references, first, run=run)}
     history = run / "score-history" / uuid.uuid4().hex
     history.mkdir(parents=True)
     for name in ("case.json", "summary.json"):
@@ -49,6 +49,7 @@ def rescore(run: Path, *, evaluation: dict | None = None, browser_export: Path |
         "flash_tracker_experiment.py",
         "flash_experiment_labels.py",
         "flash_full_pose_score.py",
+        "flash_surface_score.py",
         "flash_rescore_experiment.py",
     ):
         source = Path(__file__).with_name(name)

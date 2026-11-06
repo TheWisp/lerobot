@@ -2802,7 +2802,8 @@ Only a farther, reliable reading can contradict a proposed object surface in
 front of it. Earlier red-dot illustrations showed disagreement with recorded
 depth, **not proven physical conflict**: a thin wire can be missed by the sensor.
 
-Opt-in `shape.scene_depth_constraints` preserves scene depth separately from
+**Historical implementation; the validation opt-out was removed on November 5
+(see “Mandatory depth rejection” below).** Opt-in `shape.scene_depth_constraints` preserved scene depth separately from
 the trimmed points used for matching. It takes the nearest depth within the
 existing 2 px alignment tolerance; a hole makes that neighborhood unknown.
 It adds metric depth disagreement to fitting and checks contradictions against
@@ -3535,3 +3536,413 @@ plugin entry points in the isolated dependency set conflicted during startup.
 
 [Measured results, settings and local artifact paths](runtime-baseline-20261104/coarse-to-fine.json).
 [Open3D's multiscale ICP reference](https://www.open3d.org/docs/latest/tutorial/t_pipelines/t_icp_registration.html).
+
+### Public registration libraries and a small neural model (November 5)
+
+**Experimental only; no default or server change.** Unlike the previous coarse
+initializer experiment, `benchmarks.flash_library_registration` replaces every
+local solve with small_gicp GICP, Open3D point-to-plane ICP, or Open3D colored ICP.
+All use 6 mm → 3 mm voxels, up to 20 iterations per level. Candidate generation,
+full depth/mask rejection, Kalman and growth checks remain unchanged. The
+objectives differ: UFM/groups still supply guesses and ranking evidence, but
+their residuals are not optimized inside these library solvers. Colored ICP
+uses RGB measured in the last accepted view, with depth/visibility checks.
+
+| Full clip    | Current fitter | small_gicp | Open3D geometry | Open3D geometry + color |
+| ------------ | -------------: | ---------: | --------------: | ----------------------: |
+| Dowel/ring   |         265 ms |      99 ms |          102 ms |                  102 ms |
+| Gamepad/cube |         221 ms |      91 ms |           85 ms |                   88 ms |
+| Tomato can   |         261 ms |      93 ms |           93 ms |                   95 ms |
+| Mustard      |         136 ms |      70 ms |           71 ms |                   78 ms |
+
+Median processing time, all objects, **recorded masks**. One full timing run
+per variant; SAM, capture, display, disk and scoring are excluded. Input hashes
+match. The fresh baseline reproduces every pose, status and surface update from
+the committed baseline. These results do not establish live end-to-end 10 fps.
+
+small_gicp is the strongest candidate, but not a universal improvement:
+
+- Mustard: frames within the existing 10 mm / 10° labelled budget increase
+  **121→164 / 180**; missing poses decrease **11→7**.
+- Dowel: missing poses increase **5→23 / 712**; gamepad **9→60 / 627**.
+  Open3D geometry/color miss 405/153 gamepad frames. Availability is not accuracy:
+  neither demo has full pose truth, and the current fitter is not ground truth.
+- At gamepad frame 271 (12 s), small_gicp's fitted candidates put about 49% of
+  evaluated model points in measured free space. All candidates fail geometry
+  checks before Kalman. A low cloud-matching cost does not imply compatibility
+  with the whole depth/mask image. This supports investigating visibility-aware
+  correspondence selection inside the fast solver, not relaxing acceptance.
+- Tomato: comparing the moved initial measured surface to the labelled **full
+  mesh** gives median per-frame surface distances of **2.64→3.12 mm** for current
+  versus small_gicp. Their large late surface errors remain (90th percentile
+  **16.68→15.62 mm**). Raw rotation errors alone exaggerate symmetry differences.
+  Open3D's lower errors exclude 32 missing frames and are not a fair overall win.
+
+![Same gamepad frame, initial measured surface and axes; current upper left,
+small_gicp upper right, Open3D geometry lower left, color lower right. This is a
+pose comparison, not a display of the growing map.](library-registration-20261105/gamepad-17s.jpg)
+
+**Small neural model: feasible, not yet a sequential tracker.** Released
+[BUFFER-X](https://github.com/MIT-SPARK/BUFFER-X) 3DMatch weights load and run:
+907,607 parameters, Lite early exit, no training on our clips. Tested four
+rendered box pairs, eleven recorded consecutive pairs, and six known-motion
+asymmetric controls, each in raw metres and with a common scale normalization.
+Typical pair times are 24–89 ms after startup (first calls 290–548 ms); this is
+pair registration, not the full pipeline. Asymmetric controls recover motion
+within 1.56 mm / 2.46°; these are clean synthetic controls, not measured real-world
+accuracy. Symmetric boxes can receive a different but similarly fitting
+orientation. Recorded-pair nearest-surface error is not independent ground truth.
+Continuous tracking, occlusion recovery and downstream acceptance remain untested
+for this model. `benchmarks.flash_neural_registration` preserves weights/revision,
+configuration and both scaling trials; labels are used only after inference.
+
+Verification: six initial adapter tests plus the existing focused suite gave
+81 passes and three pre-existing expected failures. After discovering that the
+frozen baseline did not supply reference RGB to the color adapter, its invalid
+zero-solve run was excluded and rerun. Eight final adapter tests pass, including
+the actual session-to-fitter RGB path; reintroducing the missing-RGB bug fails
+that test. No production fitting or dependency files changed. Optional libraries
+are isolated from the server; `benchmarks/__init__.py` prevents small_gicp's
+installed `benchmarks` package from shadowing these local experiment commands.
+
+[Results, versions, hashes, tests and local videos](library-registration-20261105/results.json).
+Public implementations: [small_gicp](https://github.com/koide3/small_gicp),
+[Open3D](https://www.open3d.org/docs/latest/tutorial/pipelines/colored_pointcloud_registration.html).
+
+### Clear post-placement gamepad: correctness before library speed (November 5)
+
+The user's video review exposed a gap in the previous tests: correct transform
+direction on synthetic geometry and rejection of very large offsets did not
+establish recovery after a real occlusion. The faster libraries remain experiments.
+
+![After placement: green is the observed mask, orange the moved initial measured surface.](library-registration-20261105/placement/clear-comparison.jpg)
+
+Measured **all 118 frames from 22.61–27.82 s**, after the gripper clears the gamepad.
+The mask remains on the correct object. Five visible white controls supply
+independent image/depth annotations, used only for evaluation. Identical round
+buttons may permute; the D-pad may not. These are point errors, **not full 6D
+ground truth** or a verdict on rotations that leave the measured shape unchanged.
+[Annotation images](library-registration-20261105/placement/annotations.jpg).
+
+| Method                | Continued from full clip: median / p95 point error | Available | Fresh start after placement: median / p95 |
+| --------------------- | -------------------------------------------------: | --------: | ----------------------------------------: |
+| Existing fitter       |                                     4.24 / 4.53 mm |   118/118 |                            0.69 / 0.94 mm |
+| small_gicp            |                                     3.79 / 7.87 mm |   118/118 |                            0.85 / 1.21 mm |
+| Open3D point-to-plane |                                   36.79 / 36.89 mm |    14/118 |                            0.74 / 1.01 mm |
+| Open3D colored        |                                   31.12 / 31.32 mm |   118/118 |                            0.70 / 0.99 mm |
+
+Fresh starts retain the actual shared UFM, group, Kalman and growing-map pipeline,
+same settings and all 118 consecutive frames; all four return 118 poses. Resetting
+after placement is a **diagnostic control, not an automatic recovery solution**.
+Errors in the continued runs include accumulated history. Missing poses are counted
+separately, not scored as correct. GICP's median point error alone hides its poorer
+outline alignment: at frame 540, initial-surface outline IoU is 0.70 versus 0.84
+for the baseline. The color result is 0.53. This outline comparison is appropriate
+for this same fully visible face, not a general full-coverage rule for partial maps.
+
+What the controlled checks establish:
+
+- Transform direction and metre units are correct. The libraries can track this
+  clear interval from a clean initialization. They are local refiners, however;
+  our adapter does not add global recovery when the previous alignment is wrong.
+  Raising iterations from 20 to 100 does not repair the recorded wrong starts.
+- Replacing the local solver also removes mask and UFM residuals from its objective;
+  downstream checks still run, but are not equivalent to enforcing those constraints
+  while searching. At frame 540, wrong GICP/color refinements have 24.0%/23.4%
+  measured-point disagreement and pass the frozen recipe's 25% allowance.
+- The frozen default recipe has the stronger surrounding-depth check **off**.
+  Enabling it rejects these wrong results, but also rejects the baseline at both
+  checkpoints. This is not evidence for promoting that setting without further
+  investigation. No acceptance threshold was relaxed or tightened for this case.
+- Point-to-plane can also diverge on the almost flat face even from a good seed;
+  the coarse 6 mm level worsens that control. Finer sampling helps some pairs but
+  does not solve recovery. Color can abort with no correspondences, returning its
+  initial guess. **Correction to the earlier solve-count evidence:** prepared
+  clouds were counted as completed library solves. Diagnostics now distinguish
+  attempted/successful levels and no-correspondence failures. Restoring the old
+  counting makes the new regression test fail. This does not fix pose accuracy.
+
+The portable fixture preserves real RGB-D, masks, pre-fit maps and seeds at clear
+checkpoints, plus evaluation annotations for the full interval. Tests call the
+actual library adapter and common geometry check. **11 pass / 9 fail**, no xfail:
+the failures cover recovery, accepted wrong fits, and a point-to-plane clean-pair
+failure. Separate adapter tests: **9 pass**. No production estimator or hosted
+results changed. [Results and controlled ablations](library-registration-20261105/placement/summary.json).
+
+Reproduce checkpoints: `FLASH_RUN_PLACEMENT_TESTS=1 uv run pytest tests/policies/flash/test_gamepad_placement_integration.py`.
+Run only the clear interval through the complete pipeline:
+`python -m benchmarks.flash_gamepad_placement --fresh-replay open3d_color --source-run <gamepad-run-folder> --output <new-folder>`.
+Score existing full/clear runs: same command with `--score-run <folder> --output <report.json>`.
+Optional library/UFM dependencies use the isolated environment recorded in the
+library experiment; no GPU or UFM is needed for the small checkpoint tests.
+
+### Mandatory depth rejection — 2026-11-05
+
+The no-protrusion rule was optional, and the weighted/no-Kalman path could publish
+a candidate without it. Validation now uses scene depth regardless of the search
+cost setting, checks the full stored cloud, and rejects a connected contradictory
+patch both outside and inside the mask. The existing tolerances still allow
+missing depth, nearer occluders and isolated bad samples. Texture/coverage scores
+cannot override this rejection; rejected candidates cannot grow the surface.
+The shared surface backend uses the same check. No new setting or matcher.
+
+Regression tests include the recorded GICP/color gamepad poses without requiring
+those libraries, both Kalman settings, the shared backend, and real-motion/unknown-
+depth controls. Restoring each of five defects makes its test fail. The combined
+focused run is **198 passed, 14 failed**, with no expected failures or skips:
+all rejection tests pass, but five partial-fit/recovery controls and nine recorded
+placement recovery/clean-fit checks fail. Some previously accepted near-correct
+fits now fail the stricter check; a mandatory veto alone does not make the search
+find a valid replacement. Temporarily enabling the extra search cost did not fix
+all controls, so that default was left unchanged. **Not a completed tracking fix
+or a promotion of the library matchers.** Hosted recordings were not regenerated.
+
+### Repair the existing fitter first — 2026-11-05
+
+The 14 failures above split into **7 existing-fitter failures** (five partial-view
+controls and two recorded gamepad recovery checkpoints) and **7 experimental
+library failures**. They are test cases, not 14 separate scenes. Library work is
+parked while repairing the existing fitter.
+
+Two search defects were exposed by mandatory depth rejection:
+
+- The solver could visit a depth-compatible pose but return a later protruding
+  pose with a lower numerical cost. It now retains the lowest-cost compatible
+  iterate. Validation runs in cost order after solving, avoiding a depth check
+  for every numerical derivative in the usual successful case.
+- If every iterate protrudes, one bounded correction uses measured nearest-point
+  pairs, keeping their visibility fixed during each rigid update. It then
+  recomputes those pairs. Hidden/unknown points add no pairs; contradicted points
+  are pulled toward the observed object, never toward the background. Retained
+  views do not multiply a point's weight. The corrected pose must still pass
+  the same depth rejection and downstream acceptance/Kalman checks.
+
+No object-specific settings, reference labels, new matcher option, tolerance
+relaxation or Kalman bypass. Correction uses the existing iteration/distance
+limits and reports its iteration count separately. The seven original failing
+tests pass with their original error limits. Removing correction restores five
+failures; removing retention restores the sequential tracking failure. The
+recorded baseline checkpoints now run without the optional-library test flag.
+
+The wider suite also exposed five older test expectations incompatible with
+mandatory depth rejection; they fail with the pre-repair fitter too. Four mocked
+fits now assert rejection before map growth, an unchanged reference/map, and
+recovery on valid input. The tracking-versus-growth test now supplies disagreement
+between the existing 3 mm growth and 5 mm pose tolerances, rather than a 12 mm
+protrusion. The runtime thresholds did not change.
+
+This is checkpoint and controlled-sequence evidence, not a new full-demo score
+or a real-time performance claim. Hosted recordings have not been regenerated.
+Final expanded check: **290 passed, 7 failed, 2 skipped**. All seven failures are
+the parked library fits (GICP: two recovery; point-to-plane: two recovery and one
+clean start; colored ICP: two recovery). The two opt-in full-video/UFM integration
+tests were not run; recorded baseline checkpoint tests did run. Accelerated and
+NumPy path comparisons, rejection, Kalman, surface growth and recovery controls
+pass. Ruff and whitespace checks pass. Changes remain local and uncommitted.
+
+### 2026-11-05 — Consolidate search and geometry validation
+
+`WholeSurfaceFit.search` now owns numerical starts, corrective iterations, the
+shared work budget and cached geometry checks. Solvers supply candidate poses;
+invalid low-cost candidates cannot replace valid ones. Both numerical and
+corrective intermediate poses remain eligible. No valid candidate returns no
+measured pose. Manual reference review can still inspect rejected attempts,
+now with an explicit `geometry_accepted` field.
+
+`check_pose` reads geometry directly rather than decoding the optimizer's error
+array. Tracking uses the same configured checks with uncertainty on or off and
+after Kalman changes a pose. Overlap is checked before committing a measurement;
+a non-conflicting prediction can survive insufficient overlap without growing
+the surface. Growth keeps its stricter thresholds. The surface-priority benchmark
+no longer asks the group adapter for another geometry decision. Archived weighted
+comparisons and their explicit veto remain available. Library/coarse experiments
+now replace the numerical proposer, not the search/acceptance owner.
+
+Validation on the local working tree: **372 passed, 7 failed, 2 skipped** across
+surface, session, Kalman, group, live-backend, recorded gamepad placement and
+registration-adapter tests. The seven failures are the same parked optional
+library fits listed above; the two skipped tests require full recorded UFM runs.
+All four baseline gamepad placement checkpoints pass. Deliberately skipping
+geometry validation, discarding valid numerical iterates, or discarding valid
+corrective iterates each makes its new regression test fail.
+
+Six before/after ray-cast box fits (20/40/60 degrees, exact/perturbed starting
+pose), measured serially with two BLAS threads and three repeats per case:
+four returned identical poses. The other two changed median point error from
+2.064 to 2.204 mm and 2.121 to 2.169 mm; angular error improved slightly, and all
+remain below the existing 5 mm / 1 degree bounds. Median times before → after:
+0.370→0.366, 0.547→0.601, 0.380→0.379, 0.327→0.359, 0.363→0.361,
+0.410→0.447 seconds. Retaining and scoring corrective alternatives adds roughly
+9–10% on these perturbed cases; this refactor is not a speed improvement.
+No full-corpus or full-demo regeneration was performed for this refactor.
+
+### 2026-11-05 — Full replay check of the search refactor
+
+Replayed both complete FLASH demos and mustard, yellow block, Laval clock,
+DexYCB drill and tomato can: **1,942 frames per version**, identical input hashes
+and settings, shared UFM/groups/Kalman/growing surface. The baseline is the local
+pre-refactor snapshot, including the preceding depth-rejection repairs, not HEAD
+or the older hosted recordings. No tracker code or thresholds changed during this
+comparison. [Measured results](library-registration-20261105/refactor-replays.json).
+
+- Gamepad: after placement, all 118 independently annotated frames now have mean
+  button error below 5 mm; median 38.94 → 2.63 mm. The former end assignment was
+  reversed despite a plausible outline. Carrying remains unstable, with losses
+  around 10–12 s. The pre-grasp maximum remains 1.78 mm / 8.27° in both versions.
+- Dowel: missing frames 47 → 28; visually stable after release, without independent
+  pose labels. This is not proof of accurate hidden-point or axial orientation.
+- Mustard: missing frames 11 → 2 and returns a pose at the end; median labelled
+  point error worsens 5.64 → 8.90 mm (rotation 3.11 → 8.19°).
+- Yellow block: missing frames 15 → 18; the final pose is lost after the refactor.
+- Clock: mostly lost in both, with no final recovery (29 → 31 available / 202).
+- Drill: broadly unchanged, median labelled point error 10.18 → 10.45 mm.
+- Tomato: median labelled error unchanged, final orientation disagreement worse.
+  Both surfaces look plausible; these pose errors are not symmetry-aware.
+
+All **3,008 returned object poses**, including predictions and the full grown map,
+pass the existing conservative coherent-depth-protrusion check. This establishes
+that rejection invariant, not pose correctness. The runs were concurrent and do
+not provide isolated performance measurements; difficult searches remain slow.
+**Mixed result: not a regression-free or fully correct tracker.**
+
+Artifacts, source snapshots, settings, full comparison videos and depth audits:
+`~/.cache/flash-tracker-restart/refactor-validation-20261105/`. The seven existing
+browser slots were refreshed as `Refactor validation 2026-11-05`; the demo slots
+are the shared-UFM variants. Prior exports remain intact. No default or commit
+was promoted by this replay check.
+
+### 2026-11-05 — Repair and expose the optional library matchers
+
+FLASH → Pipeline settings → **Surface matcher** now selects SciPy (unchanged
+default), small_gicp GICP, Open3D point-to-plane, or Open3D geometry + color.
+Rerun computes that choice; saved playback names the actual matcher. The native
+solvers use the shared search, geometry rejection, Kalman and growth checks.
+The checkpoint harness previously called their local solver directly; it now
+uses the same search as runtime. Its independent button annotations and 5 mm
+error limit are unchanged, and are never supplied to fitting.
+
+The local library solve excludes hidden source surfaces from correspondences,
+keeps its point-to-point intermediate, and can correct the starting pose when
+the later solve slides away. Initial measured colors remain attached to the
+stored surface; the latest connected view supplies previously unseen colors.
+Normalized RGB correlation helps rank valid candidates without treating
+exposure changes as different object texture. This is an experimental ranking
+cost, not a confidence probability, and never overrides depth rejection.
+
+All seven previous optional-library checkpoint failures pass. Removing appearance
+ranking restores a 37.57 mm wrong end assignment; preventing correction when only
+the input survives restores the 5.12 mm colored-ICP failure. In a separate
+two-face control, matching the hidden back to the visible front introduces a
+6 mm depth error. These mutations fail the corresponding regression tests.
+The production backend tests also forbid any fallback to SciPy least-squares.
+
+Replayed frames 510–627 of the gamepad demo, starting fresh at 510, with shared
+UFM/groups/Kalman/growth. Each library produced **118/118 poses within 5 mm** of
+the independent visible controls. Median / p95 errors: GICP 0.575 / 0.849 mm;
+point-to-plane 0.485 / 0.839 mm; geometry + color 0.488 / 0.837 mm.
+[Evidence](library-registration-20261105/fixed-matchers.json).
+These are clear-view results, not proof of occlusion recovery or superiority
+across the corpus. Timings overlapped other tests and are not a fair speed
+comparison. The original fitter remains default.
+
+Real worker tests run each backend from saved settings through export. The live
+9102 GUI also completed a small_gicp rerun of `Synthetic plane-tilt-textured`,
+and its result panel reports that backend. Other hosted scenes were not all
+regenerated. Changes remain local and uncommitted.
+
+Final focused regression run: **367 passed** across matching, geometry/search,
+surface growth, Kalman/groups, recorded placement, native acceleration, settings
+and GUI reruns. No expected-failure exemptions or relaxed error limits. Ruff
+and whitespace checks pass.
+
+Subsequent isolated timing comparison: one sequential run per matcher on the
+same 118 clear-placement frames, two objects, identical input hashes and saved
+masks. Median / p90 processing time: SciPy 225 / 279 ms, GICP 163 / 185 ms,
+Open3D point-to-plane 158 / 176 ms, Open3D geometry + color 155 / 171 ms.
+All four retain 118/118 poses within 5 mm. This includes shared UFM, group
+prediction, fitting, Kalman and growth; excludes segmentation, capture, disk
+I/O and display. First initialization frame is excluded; first native-library
+loading/solve is included. **About 6 FPS here, not the 10 FPS target.** These
+are one-segment measurements, not full-demo or corpus results.
+[Timing evidence](library-registration-20261105/fixed-matcher-timing.json).
+
+### 2026-11-06 — Shared live session, display alignment and cube recovery
+
+Recorded experiments and the new **Live camera** view call the same
+`SurfaceFrameSession.step`; only acquisition, masks and output storage differ.
+Tests compare poses, surfaces, groups and covariance for both LK/UFM and all four
+surface methods. An additional eight-frame real gamepad replay is identical to
+the pre-extraction loop, excluding timing. The camera view supports text or frozen
+click selection and the shared 2D/3D scene renderer. Poses are drawn over their
+processed RGB-D frame, never a newer preview. Robot execution is not connected
+to this new frame session yet.
+
+Fresh-session defaults are **LK + SciPy + groups + growing surface + Kalman**,
+with the current geometry checks and no Kalman reset on conflict. Older recordings
+keep their saved settings. A first live comparison accidentally used older
+geometry settings and measured 4.6 FPS; that result is **not comparable** to the
+current pipeline and is not used to justify the default.
+
+Fair live measurement: one stationary gamepad, RealSense D435, 1280×720 RGB-D,
+40 processed frames per backend, identical settings except LK/UFM. Median LK:
+**1.65 FPS**, 583 ms processing (24 ms SAM, 11 ms shared matching), 24 ms display
+packing, 618 ms frame age. UFM: **1.12 FPS**, 872 ms processing (24 ms SAM,
+34 ms shared matching), 24 ms display, 907 ms age. These independently calculated
+medians do not sum exactly. These are separate live captures of the same scene,
+not identical recorded frames; different matches also change the fitting search.
+Latest-frame scheduling drops backlog; camera capture
+at 30 Hz is not tracking at 30 Hz. This static test establishes neither dynamic
+accuracy nor the 10 FPS target. Surface fitting still dominates.
+[Settings and timings](library-registration-20261105/live-camera-timing.json).
+
+The image and 3D views previously used different display gizmos: initial-surface
+axes versus generic XYZ axes. Both now use the same fixed initial-surface axes;
+pose coordinates have not changed. A new secondary surface score measures distance
+from the estimated partial surface to the complete labelled model, without point
+identity. Missing backside coverage is not penalized. It complements, not replaces,
+pose error. Only examples with an attached complete evaluation model can be scored;
+no initial partial observation is passed off as a complete model. Blue-pitcher
+re-scoring is hosted without rerunning its estimates.
+
+Cube-to-hole was a **SAM recovery defect**, not a fitter/Kalman defect. The tracker
+returned no cube pixels but a nonzero score; periodic reseeding treated it as
+healthy. Detection could also offer the gamepad as the missing green cube. Ported
+`fix/sam3-occlusion-identity`'s empty-mask/ownership checks while preserving this
+branch's detection-correction support (issue #270). No pixels now means lost;
+recovery excludes a region already held by another concept. This overlap rule can
+still be imperfect for heavily overlapping semantic concepts; it is not a general
+identity recognizer. The first sealed revision `80d90b783` also retained empty
+masks; it was not inherently protected.
+
+Recomputed SAM on all 628 gamepad-demo frames: masks before occlusion (0–425)
+are identical, and the hidden cube has no mask in frames 428–627, rather than
+moving onto the tape-roll hole. Reappearance is covered by a controlled recovery
+test; this recording does not expose the cube again. Its shared-LK tracking result
+is being regenerated for the browser; older cached variants retain old masks.
+[Segmentation evidence](library-registration-20261105/sam-cube-recovery.json).
+
+Mutation checks restore each empty-mask, ownership, CLI-launch, axes and late-list
+response bug and make its named test fail. Real-camera name and frozen-click
+selection both selected the gamepad. No robot movement was commanded. The final focused run passed 383 tests,
+including the optional recorded-placement cases; no expected-failure exemptions
+were used. Ruff and the async-blocking lint also passed.
+[Mutation tests](library-registration-20261105/shared-live-mutations.json),
+[before/after extraction parity](library-registration-20261105/shared-session-parity.json).
+
+### 2026-11-06 — Gripper contact evidence, not a proven rigid attachment
+
+[FACTR2/NEXT](https://jasonjzliu.com/factr2/) learns free-motion torque from joint
+states, then subtracts it from current-derived measured torque to estimate external
+contact. Its reported 10-minute calibration and hardware results do not establish
+accuracy on our SO107. [Robotiq's control documentation](https://assets.robotiq.com/website-assets/support_documents/document/online/2F-85_2F-140_Instruction_Manual_Gen_HTML_20190524.zip/2F-85_2F-140_Instruction_Manual_Gen_HTML/Content/4.%20Control.htm)
+likewise distinguishes stopped-on-object from reaching the requested jaw position.
+
+Our Feetech table exposes `Present_Current`/`Present_Load`, but the current follower
+observation reads position, and this live camera worker reads no motor telemetry.
+The older `feature/motor-current-observation` branch contains a gripper-current
+logging processor with smoothing, but no grasp-state inference.
+**Holding-event detection is not implemented or calibrated here.** Current rise
+plus stopped jaws before full closure could indicate contact; a jam or table
+contact can produce the same signal. For rigid-pose support, additionally verify
+object/gripper co-movement when visible and retain uncertainty while hidden.
+Current alone supplies neither object identity nor its transform in the gripper.

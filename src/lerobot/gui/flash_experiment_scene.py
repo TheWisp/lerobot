@@ -8,16 +8,16 @@ JSON, float32 little-endian depth in metres, then a lossless RGB PNG.
 from __future__ import annotations
 
 import json
-import struct
 from functools import lru_cache
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 from benchmarks.flash_experiment_inputs import sample_at
 from benchmarks.flash_experiment_labels import load_pose_labels
 from benchmarks.flash_full_pose_score import score_transforms
+from benchmarks.flash_surface_score import LabelledSurface, distance_statistics
+from lerobot.gui.flash_pose_overlay import reference_axes
 
 
 @lru_cache(maxsize=2)
@@ -48,7 +48,7 @@ def _points(values):
 
 @lru_cache(maxsize=2)
 def _label_surface(file: Path, modified_ns: int):
-    return np.asarray(_points(np.load(file, mmap_mode="r", allow_pickle=False)))
+    return np.asarray(np.load(file, mmap_mode="r", allow_pickle=False))
 
 
 def scene_packet(manifest: dict, index: int, method: str) -> bytes:
@@ -98,6 +98,7 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
         label_surface = reference
         label_kind = "initial_observation_at_labelled_pose" if labelled_pose is not None else None
         surface_spec = case.get("evaluation_surfaces", {}).get(role)
+        surface_error = None
         if labelled_pose is not None and surface_spec:
             file = Path(surface_spec["points_m"]).expanduser().resolve()
             model_points = _label_surface(file, file.stat().st_mtime_ns)
@@ -106,36 +107,34 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
             origin = truth[role][first]
             label_surface = model_points @ origin[:3, :3].T + origin[:3, 3]
             label_kind = "dataset_model"
+            if result.get(method) is not None and len(model):
+                surface_error = distance_statistics(
+                    LabelledSurface(model_points).distances_mm(
+                        model, np.asarray(result[method]), truth[role][index]
+                    )
+                )
         objects[role] = {
             "surface": _points(model),
             "initial_surface": _points(initial_surface),
             "pose": result.get(method),
             "reference": _points(reference),
+            "axis_points": reference_axes(reference).tolist(),
             "labelled_pose": labelled_pose,
             "labelled_surface": _points(label_surface),
             "label_kind": label_kind,
             "model_version": version,
             "error": error,
+            "surface_error": surface_error,
             "group_tracks": result.get(method + "_details", {}).get("group", {}),
         }
-    depth = frame.metric_depth()
-    depth = np.where(np.isfinite(depth) & (depth > 0), depth, 0).astype("<f4")
-    ok, encoded = cv2.imencode(".png", cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR))
-    if not ok:
-        raise ValueError("Cannot encode RGB frame")
     header = {
         "frame": index,
         "time_s": row["time_s"],
         "method": method,
         "input_sha256": manifest["input_sha256"],
-        "camera": {
-            "width": depth.shape[1],
-            "height": depth.shape[0],
-            "intrinsics": frame.intrinsics.tolist(),
-        },
-        "depth_bytes": depth.nbytes,
         "objects": objects,
         "label_error": label_error,
     }
-    metadata = json.dumps(header, allow_nan=False, separators=(",", ":")).encode()
-    return struct.pack("<I", len(metadata)) + metadata + depth.tobytes() + encoded.tobytes()
+    from lerobot.gui.flash_live_scene import encode_rgbd_scene
+
+    return encode_rgbd_scene(frame, header)

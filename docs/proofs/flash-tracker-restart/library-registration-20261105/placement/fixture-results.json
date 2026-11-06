@@ -1,0 +1,854 @@
+[
+  {
+    "method": "baseline",
+    "frame": 540,
+    "clean_start": false,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 4.455222306321285,
+      "mean_feature_error_px": 6.460473605314382,
+      "dpad_error_px": 3.9623840664893657
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0008291873963515755,
+      "free_space_outlier_fraction": 0.0
+    },
+    "solver": {
+      "initial_cost": 0.17694476999586745,
+      "cost": 0.17687793136272567,
+      "evaluations": 17,
+      "converged": true,
+      "batched_jacobian": true,
+      "fit_reference_points": 671,
+      "fit_target_points": 1248
+    },
+    "pose": [
+      [
+        0.9190426521234561,
+        -0.3328514085626096,
+        0.21111736876856468,
+        -0.018960723216350565
+      ],
+      [
+        0.3395688331348073,
+        0.9405694790982407,
+        0.004697079126864633,
+        -0.02230855622717451
+      ],
+      [
+        -0.20013398297473908,
+        0.06737206250924004,
+        0.9774494329896987,
+        -0.026572726065401356
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "baseline",
+    "frame": 540,
+    "clean_start": true,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 0.4962410372967979,
+      "mean_feature_error_px": 0.44680504305484997,
+      "dpad_error_px": 0.4090414686131847
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.0
+    },
+    "solver": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.02936862623842814,
+      "evaluations": 14,
+      "converged": true,
+      "batched_jacobian": true,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248
+    },
+    "pose": [
+      [
+        0.9999439886813145,
+        -0.0007147140099221625,
+        -0.010559767231675591,
+        0.004464173389902533
+      ],
+      [
+        0.0007504600906760568,
+        0.9999940009616145,
+        0.003381545568946118,
+        -0.0012019801492053036
+      ],
+      [
+        0.01055728704523331,
+        -0.0033892808479938077,
+        0.9999385263432837,
+        0.000918938895752031
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "baseline",
+    "frame": 627,
+    "clean_start": false,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 4.444288537954028,
+      "mean_feature_error_px": 6.55936259355876,
+      "dpad_error_px": 4.390341875114044
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.0
+    },
+    "solver": {
+      "initial_cost": 0.18162905241142857,
+      "cost": 0.1803163094594176,
+      "evaluations": 14,
+      "converged": true,
+      "batched_jacobian": true,
+      "fit_reference_points": 671,
+      "fit_target_points": 1262
+    },
+    "pose": [
+      [
+        0.9194820071803566,
+        -0.3326907551003685,
+        0.2094509487739913,
+        -0.018334766394533072
+      ],
+      [
+        0.33826827164530776,
+        0.9409997926320605,
+        0.009693640415896014,
+        -0.024550137267487875
+      ],
+      [
+        -0.20031828391253992,
+        0.06193748248975186,
+        0.9777711048057796,
+        -0.026788225375897645
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "baseline",
+    "frame": 627,
+    "clean_start": true,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 0.5670956230702434,
+      "mean_feature_error_px": 0.3796935191445233,
+      "dpad_error_px": 0.5997207531974726
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.0
+    },
+    "solver": {
+      "initial_cost": 0.03141512743909609,
+      "cost": 0.028899550251208127,
+      "evaluations": 15,
+      "converged": true,
+      "batched_jacobian": true,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1262
+    },
+    "pose": [
+      [
+        0.9999767112425837,
+        -0.004974437892478077,
+        -0.004672466171114538,
+        0.0019646483788876663
+      ],
+      [
+        0.004993465494158393,
+        0.9999792520920867,
+        0.004069482486704689,
+        -0.0012869257558952051
+      ],
+      [
+        0.004652125839332052,
+        -0.004092719512112329,
+        0.9999808035018323,
+        0.00024982048856170947
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "small_gicp",
+    "frame": 540,
+    "clean_start": false,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 14.100045441868847,
+      "mean_feature_error_px": 19.40949380082144,
+      "dpad_error_px": 15.816801767871668
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.24046434494195687,
+      "free_space_outlier_fraction": 0.1094224924012158
+    },
+    "solver": {
+      "initial_cost": 0.8982315480104289,
+      "cost": 1.6524760332525106,
+      "evaluations": 38,
+      "converged": false,
+      "fit_reference_points": 658,
+      "fit_target_points": 1248,
+      "library": "small_gicp",
+      "library_inliers": 569,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        0.9069111658386697,
+        0.39926114800467316,
+        -0.13454617412300274,
+        0.0825334289354943
+      ],
+      [
+        0.39943842720589195,
+        -0.9163663679503364,
+        -0.026863033350624385,
+        0.08380029556105555
+      ],
+      [
+        -0.134018954437167,
+        -0.029380527284287822,
+        -0.9905431360965893,
+        0.7876733970573055
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "small_gicp",
+    "frame": 540,
+    "clean_start": true,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 0.9249944241864333,
+      "mean_feature_error_px": 1.2260416107492653,
+      "dpad_error_px": 1.377877332538625
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.0
+    },
+    "solver": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.033139762759115135,
+      "evaluations": 5,
+      "converged": true,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "small_gicp",
+      "library_inliers": 372,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        0.999969852280319,
+        0.006669412141390196,
+        -0.003976615667301069,
+        0.0010464671059132306
+      ],
+      [
+        -0.006675855544254299,
+        0.9999764213442661,
+        -0.0016092570544272067,
+        0.0003078154921245504
+      ],
+      [
+        0.00396578910551185,
+        0.0016357558507465537,
+        0.9999907983674488,
+        0.000490627774898755
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "small_gicp",
+    "frame": 627,
+    "clean_start": false,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 15.679336420171628,
+      "mean_feature_error_px": 21.12511779996762,
+      "dpad_error_px": 19.34604308343513
+    },
+    "geometry": {
+      "accepted": false,
+      "observed_outlier_fraction": 0.25612745098039214,
+      "free_space_outlier_fraction": 0.12917933130699089
+    },
+    "solver": {
+      "initial_cost": 0.9305567717194849,
+      "cost": 2.0143076662058785,
+      "evaluations": 38,
+      "converged": false,
+      "fit_reference_points": 658,
+      "fit_target_points": 1262,
+      "library": "small_gicp",
+      "library_inliers": 564,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        0.9299892015195502,
+        0.3495718869085405,
+        -0.11366433451279857,
+        0.07744937918986633
+      ],
+      [
+        0.3465837833178363,
+        -0.9369043472600322,
+        -0.04571569999856769,
+        0.08542122452189778
+      ],
+      [
+        -0.12247353264330114,
+        0.0031208922548194313,
+        -0.9924668729148538,
+        0.7881697577559452
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "small_gicp",
+    "frame": 627,
+    "clean_start": true,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 0.9313964128852728,
+      "mean_feature_error_px": 1.0732214224753631,
+      "dpad_error_px": 0.608515174445199
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.0
+    },
+    "solver": {
+      "initial_cost": 0.03141512743909609,
+      "cost": 0.029563702312069406,
+      "evaluations": 6,
+      "converged": true,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1262,
+      "library": "small_gicp",
+      "library_inliers": 372,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        0.9999647917818134,
+        -0.00805301946670541,
+        0.0023588289941053366,
+        -0.0016724808207279332
+      ],
+      [
+        0.008054217278043507,
+        0.9999674398908236,
+        -0.0004987406441108816,
+        0.0008721800726121812
+      ],
+      [
+        -0.002354735822259895,
+        0.0005177216055817375,
+        0.9999970935875496,
+        -0.00022433236314585772
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "open3d_plane",
+    "frame": 540,
+    "clean_start": false,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 91.02345472361098,
+      "mean_feature_error_px": 134.90996830857665,
+      "dpad_error_px": 143.12064703759964
+    },
+    "geometry": {
+      "accepted": false,
+      "observed_outlier_fraction": 1.0,
+      "free_space_outlier_fraction": 0.9765051395007343
+    },
+    "solver": {
+      "initial_cost": 203.35585278693662,
+      "cost": 203.35585278693662,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 681,
+      "fit_target_points": 1248,
+      "library": "open3d_plane",
+      "library_inliers": 0,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        0.9999479641126908,
+        -0.0061148861164053775,
+        -0.008165612938737387,
+        0.0038192516258921116
+      ],
+      [
+        0.006181021556826603,
+        0.9999481013609782,
+        0.0080987379933646,
+        -0.004560080743558528
+      ],
+      [
+        0.008115666294023874,
+        -0.008148788397934413,
+        0.999933864417107,
+        0.002038171493090623
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "open3d_plane",
+    "frame": 540,
+    "clean_start": true,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 0.9795268577958404,
+      "mean_feature_error_px": 1.3248436538870405,
+      "dpad_error_px": 1.5158306016535736
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.0
+    },
+    "solver": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.032852549327966156,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "open3d_plane",
+      "library_inliers": 372,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        0.9999583027587967,
+        0.0067697231696125055,
+        -0.00612891441898179,
+        0.0018479330966012346
+      ],
+      [
+        -0.006762393652643719,
+        0.9999763956207279,
+        0.0012158262467719455,
+        -0.0008049508089998325
+      ],
+      [
+        0.006137000556874258,
+        -0.0011743294182071475,
+        0.9999804788967532,
+        0.0005543779673913537
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "open3d_plane",
+    "frame": 627,
+    "clean_start": false,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 141.425891534843,
+      "mean_feature_error_px": 231.6245474395925,
+      "dpad_error_px": 194.80449456494958
+    },
+    "geometry": {
+      "accepted": false,
+      "observed_outlier_fraction": 1.0,
+      "free_space_outlier_fraction": 0.9325513196480938
+    },
+    "solver": {
+      "initial_cost": 0.5124425211442356,
+      "cost": 355.41087703981214,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 682,
+      "fit_target_points": 1262,
+      "library": "open3d_plane",
+      "library_inliers": 0,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        -0.6360978962998493,
+        -0.7714329490409109,
+        0.016452095822331703,
+        -0.16895602616431682
+      ],
+      [
+        0.7416049796531123,
+        -0.6053368163822896,
+        0.28911830257847126,
+        0.10188578110998939
+      ],
+      [
+        -0.21307632547190677,
+        0.19610850023951987,
+        0.957151991930848,
+        -0.09364769403159307
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "open3d_plane",
+    "frame": 627,
+    "clean_start": true,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 131.27544538067244,
+      "mean_feature_error_px": 130.48053529752633,
+      "dpad_error_px": 127.4875134050786
+    },
+    "geometry": {
+      "accepted": false,
+      "observed_outlier_fraction": 1.0,
+      "free_space_outlier_fraction": 0.994435612082671
+    },
+    "solver": {
+      "initial_cost": 0.03141512743909609,
+      "cost": 94.35511994142351,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1262,
+      "library": "open3d_plane",
+      "library_inliers": 0,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        0.544525240512735,
+        -0.7862612488331723,
+        -0.29203683162890287,
+        0.13129292728578565
+      ],
+      [
+        0.756586029258836,
+        0.6107413512478378,
+        -0.23360775288143304,
+        0.18828923479719614
+      ],
+      [
+        0.36203569268084007,
+        -0.093745669016041,
+        0.9274383573940852,
+        -0.054449525770238406
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "open3d_color",
+    "frame": 540,
+    "clean_start": false,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 31.06621913063915,
+      "mean_feature_error_px": 46.500814079741374,
+      "dpad_error_px": 61.29823865764131
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.23383084577114427,
+      "free_space_outlier_fraction": 0.13963328631875882
+    },
+    "solver": {
+      "initial_cost": 1.8212076194549087,
+      "cost": 1.966245192430032,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 709,
+      "fit_target_points": 1248,
+      "library": "open3d_color",
+      "library_inliers": 242,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        -0.8298832053466678,
+        -0.5196432009057397,
+        0.20313741466302523,
+        -0.24159549851073958
+      ],
+      [
+        0.5084690032441795,
+        -0.5545148678533008,
+        0.6587659175075075,
+        -0.1849414569277913
+      ],
+      [
+        -0.22968051337327722,
+        0.6499878499495694,
+        0.7244050363536318,
+        0.04073940518232334
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "open3d_color",
+    "frame": 540,
+    "clean_start": true,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 0.4811568863167462,
+      "mean_feature_error_px": 0.3884765725142453,
+      "dpad_error_px": 0.354010835261844
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.0
+    },
+    "solver": {
+      "initial_cost": 0.03459216992354246,
+      "cost": 0.032268122474348016,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1248,
+      "library": "open3d_color",
+      "library_inliers": 372,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        0.9999489997553561,
+        -0.003527512234485913,
+        -0.009463326354840741,
+        0.0037419756087874534
+      ],
+      [
+        0.003659212738637108,
+        0.9998961949102326,
+        0.013935909233756788,
+        -0.005235263005467379
+      ],
+      [
+        0.009413184923078218,
+        -0.013969826823324047,
+        0.9998581078773774,
+        0.0006409557660616414
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "open3d_color",
+    "frame": 627,
+    "clean_start": false,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 31.602001155948578,
+      "mean_feature_error_px": 47.266132140660595,
+      "dpad_error_px": 59.95768886790126
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.22099673202614378,
+      "free_space_outlier_fraction": 0.12411847672778561
+    },
+    "solver": {
+      "initial_cost": 1.636320789705258,
+      "cost": 1.7319614578278495,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 709,
+      "fit_target_points": 1262,
+      "library": "open3d_color",
+      "library_inliers": 239,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        -0.8285188347242978,
+        -0.5267802889943295,
+        0.1898922526964722,
+        -0.23665402636625266
+      ],
+      [
+        0.500045594923354,
+        -0.5434048079231454,
+        0.6742889719725221,
+        -0.1934050368942754
+      ],
+      [
+        -0.2520137764187512,
+        0.6536158977970427,
+        0.7136352812481184,
+        0.04205116080022017
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  {
+    "method": "open3d_color",
+    "frame": 627,
+    "clean_start": true,
+    "result": {
+      "available": true,
+      "mean_feature_error_mm": 0.5862867670172439,
+      "mean_feature_error_px": 0.37668710707593633,
+      "dpad_error_px": 0.5410017737467995
+    },
+    "geometry": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.0
+    },
+    "solver": {
+      "initial_cost": 0.03141512743909609,
+      "cost": 0.031141293941769767,
+      "evaluations": 0,
+      "converged": false,
+      "fit_reference_points": 1258,
+      "fit_target_points": 1262,
+      "library": "open3d_color",
+      "library_inliers": 372,
+      "library_levels": 2,
+      "retained_admissible_iterate": false
+    },
+    "pose": [
+      [
+        0.9999514615116207,
+        -0.004779981011401922,
+        -0.008615474583869973,
+        0.0035188129903142356
+      ],
+      [
+        0.004757874600580824,
+        0.9999853412106655,
+        -0.002584568256876821,
+        0.0013607090586242264
+      ],
+      [
+        0.008627702478633563,
+        0.0025434514581460276,
+        0.9999595459840459,
+        0.0005724062542164101
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  }
+]

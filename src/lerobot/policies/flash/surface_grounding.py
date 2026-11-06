@@ -9,7 +9,7 @@ retain the older, unconditional current-to-reference coverage objective.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from inspect import signature
 from itertools import permutations
 from os import cpu_count
@@ -24,6 +24,7 @@ from scipy.spatial import ConvexHull, cKDTree
 from scipy.spatial.transform import Rotation
 
 from .surface_observation import move, spatial_sample
+from .surface_registration import LibraryConfig
 
 # SciPy < 1.16 remains supported: use its original scalar derivative path.
 _HAS_SOLVER_WORKERS = "workers" in signature(least_squares).parameters
@@ -31,6 +32,7 @@ _HAS_SOLVER_WORKERS = "workers" in signature(least_squares).parameters
 
 @dataclass(frozen=True)
 class ShapeConfig:
+    registration: LibraryConfig = field(default_factory=lambda: LibraryConfig(backend="scipy"))
     # Observation tolerances inherited from the existing depth experiment.
     depth_tolerance_m: float = 0.005
     surface_spacing_m: float = 0.003
@@ -42,8 +44,8 @@ class ShapeConfig:
     # Multiplier of that squared-error cost: 0 disables the preference; 1 keeps
     # the previous strength. This does not weaken depth/free-space checks.
     mask_coverage_weight: float = 1.0
-    # Experimental: use surrounding depth as an empty-space constraint, keeping
-    # depth holes and a nearer foreground surface explicitly uninformative.
+    # Add scene depth to the search objective. Final empty-space validation is
+    # mandatory regardless of this flag; holes/nearer occluders are not conflicts.
     scene_depth_constraints: bool = False
     # Experimental search preference: unknown surface is not a perfect match.
     prefer_observed_overlap: bool = False
@@ -57,6 +59,10 @@ class ShapeConfig:
     # Exact finite-difference candidates share nearest-neighbour tree queries.
     batch_jacobian: bool = True
     batch_query_workers: int = 8
+
+    def __post_init__(self):
+        if isinstance(self.registration, dict):
+            object.__setattr__(self, "registration", LibraryConfig(**self.registration))
 
 
 @dataclass(frozen=True)
@@ -97,22 +103,20 @@ class PreparedTargetSurface:
     queries: np.ndarray
     outside_mask: np.ndarray
     mask_outline: np.ndarray
-    scene_nearest_depth: np.ndarray | None
+    scene_nearest_depth: np.ndarray
 
     @classmethod
     def build(cls, observation: dict, config: ShapeConfig):
         points = observation.get("all_surface_points", observation["obs"]["points"])
-        scene_nearest_depth = None
-        if config.scene_depth_constraints:
-            raw = observation.get("scene_depth", observation["depth"])
-            raw = np.where(np.isfinite(raw) & (raw > 0), raw, 0).astype(np.float32)
-            radius = int(np.ceil(config.mask_boundary_tolerance_px))
-            scene_nearest_depth = cv2.erode(
-                raw,
-                np.ones((2 * radius + 1,) * 2, np.uint8),
-                borderType=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            )
+        raw = observation.get("scene_depth", observation["depth"])
+        raw = np.where(np.isfinite(raw) & (raw > 0), raw, 0).astype(np.float32)
+        radius = int(np.ceil(config.mask_boundary_tolerance_px))
+        scene_nearest_depth = cv2.erode(
+            raw,
+            np.ones((2 * radius + 1,) * 2, np.uint8),
+            borderType=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
         mask = observation["mask"]
         contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         mask_pixels = np.concatenate(contours)[:, 0].astype(float)
@@ -176,6 +180,7 @@ class WholeSurfaceFit:
         reference_observation: dict | None = None,
         reference_intrinsics: np.ndarray | None = None,
         reference_views: tuple[SurfaceFitView, ...] = (),
+        appearance_views: tuple[SurfaceFitView, ...] = (),
     ):
         """Fit reference-camera points into the current camera.
 
@@ -242,6 +247,8 @@ class WholeSurfaceFit:
                 ),
             )
         self.reference_views = tuple(reference_views)
+        self.appearance_views = tuple(appearance_views) or self.reference_views
+        self._registration_solver = None
         self.reverse_fits = []
         for view in self.reference_views:
             reverse = WholeSurfaceFit(
@@ -471,6 +478,56 @@ class WholeSurfaceFit:
             "has_visible_overlap": any(count > 0 for count in visible),
         }
 
+    def check_pose(self, pose, *, max_outlier_fraction=None, agreement_m=None, min_overlap=0.0):
+        """Measured geometry only: independent of solver residuals and Kalman.
+
+        The standalone fitter requires no coherent protrusion. Tracking callers
+        also supply their existing outlier/overlap limits. The same policy is
+        used during search and after temporal fusion; growth has separate rules.
+        """
+        scene = self.scene_depth_check(pose)
+        if max_outlier_fraction is None and min_overlap == 0:
+            return {**scene, "accepted": not scene["scene_depth_coherent_protrusion"]}
+        distances = cKDTree(move(self.reference, pose)).query(self.observation["obs"]["points"])[0]
+        if self.reverse_fits:
+            direct = self.partial_surface_check(pose)
+            overlap = 1.0 - direct["observed_outlier_fraction"] if direct["has_visible_overlap"] else 0.0
+        else:
+            predicted = move(self.reference_queries, pose)
+            _, visibility, silhouette = self._projection_evidence(predicted)
+            direct = {
+                "observed_outlier_fraction": float(np.mean(distances > self.config.depth_tolerance_m)),
+                "free_space_outlier_fraction": float(
+                    np.mean(np.sqrt(visibility) * silhouette > self.config.depth_tolerance_m)
+                ),
+                "has_visible_overlap": bool(np.any(distances <= self.config.depth_tolerance_m)),
+            }
+            overlap = float(np.mean(distances <= (agreement_m or self.config.depth_tolerance_m)))
+        accepted = not scene["scene_depth_coherent_protrusion"]
+        if max_outlier_fraction is not None:
+            accepted &= (
+                direct["has_visible_overlap"]
+                and max(
+                    direct["observed_outlier_fraction"],
+                    direct["free_space_outlier_fraction"],
+                    scene["scene_depth_outlier_fraction"],
+                )
+                <= max_outlier_fraction
+            )
+        geometry_accepted = bool(accepted)
+        accepted &= overlap >= min_overlap
+        return {
+            **direct,
+            **scene,
+            "accepted": bool(accepted),
+            "geometry_accepted": geometry_accepted,
+            "observed_overlap": overlap,
+            "observed_overlap_basis": "mutually_visible_points"
+            if self.reverse_fits
+            else "all_current_points",
+            "surface_median_mm": float(np.median(distances) * 1000),
+        }
+
     def _scene_depth_evidence(self, predicted):
         """Depth bounds along rays, independent of object point-cloud trimming.
 
@@ -504,11 +561,10 @@ class WholeSurfaceFit:
         return free, exposed, contradicted
 
     def scene_depth_check(self, pose):
-        directions = [(self, move(self.reference_queries, pose))]
+        # A solver's subsampling budget must not hide a contradictory patch.
+        directions = [(self, move(self.reference, pose))]
         inverse = np.linalg.inv(pose)
-        directions.extend(
-            (fit, move(fit.reference_queries, camera @ inverse)) for camera, fit in self.reverse_fits
-        )
+        directions.extend((fit, move(fit.reference, camera @ inverse)) for camera, fit in self.reverse_fits)
         fractions, exposed_counts, coherent_protrusions = [], [], []
         for fit, predicted in directions:
             _, exposed, bad = fit._scene_depth_evidence(predicted)
@@ -523,13 +579,13 @@ class WholeSurfaceFit:
         }
 
     def _coherent_protrusion(self, predicted, contradicted):
-        """Find a connected patch protruding into measured background.
+        """Find a connected patch protruding into measured empty space.
 
         A single depth disagreement can be a bad map point or sensor reading.
         A patch wider than one surface-sample neighborhood is pose evidence.
-        Only points outside the observed mask and beyond its existing boundary
-        tolerance count; disagreements *inside* the mask are handled by the
-        ordinary robust surface-fit allowance.
+        This also applies inside the mask: a surface floating in front of the
+        measured object is impossible too. Depth already uses the conservative
+        neighborhood minimum, so holes and closer occluders cannot reject it.
         """
         indices = np.flatnonzero(contradicted > 0)
         if len(indices) < 2:
@@ -542,21 +598,12 @@ class WholeSurfaceFit:
         depth = predicted[indices[valid], 2]
         if len(uv) < 2:
             return False
-        outside = map_coordinates(
-            self.outside_mask,
-            (uv[:, 1], uv[:, 0]),
-            order=1,
-            mode="nearest",
-        )
-        uv = uv[outside > self.config.mask_boundary_tolerance_px]
-        depth = depth[outside > self.config.mask_boundary_tolerance_px]
-        if len(uv) < 2:
-            return False
         # One projected surface-sample neighborhood sets both connectivity
-        # and the minimum span. No independent pixel/count threshold is added.
+        # and the minimum span. Round to image pixels so float32 depth rounding
+        # cannot disconnect adjacent samples. No extra threshold is introduced.
         neighborhood = max(
             self.config.mask_boundary_tolerance_px,
-            self.k[0, 0] * self.config.surface_spacing_m / np.median(depth),
+            np.ceil(self.k[0, 0] * self.config.surface_spacing_m / np.median(depth)),
         )
         pairs = np.asarray(list(cKDTree(uv).query_pairs(neighborhood)), dtype=np.intp).reshape(-1, 2)
         if not len(pairs):
@@ -571,19 +618,86 @@ class WholeSurfaceFit:
 
     def score(self, pose: np.ndarray) -> float:
         residual = self.residual(pose)
-        return float(np.dot(residual, residual))
+        cost = float(np.dot(residual, residual))
+        if self.config.registration.backend != "scipy" and self.config.registration.appearance_weight:
+            from .surface_registration import LibraryMatcher
 
-    def refine(self, initial: np.ndarray, *, admissible=None) -> tuple[np.ndarray, dict]:
+            cost += self.config.registration.appearance_weight * LibraryMatcher.appearance_cost(self, pose)
+        return cost
+
+    def _refine_visible_correspondences(self, initial, max_iterations):
+        """Correct a rejected local fit without differentiating visibility.
+
+        Freeze measured correspondences for each rigid update, then recompute
+        them. Otherwise the optimizer can reduce its error by moving samples
+        across an occlusion/mask boundary instead of aligning them. Unknown or
+        hidden samples supply no pairs; measured empty space requires a move
+        toward the observed object, never toward the background depth itself.
+        The result still has to pass the ordinary acceptance checks.
+        """
+        pose = initial.copy()
+
+        def pairs(fit, predicted):
+            visible, _, _ = fit._projection_evidence(predicted)
+            _, _, contradicted = fit._scene_depth_evidence(predicted)
+            weight = np.maximum(visible, contradicted)
+            distance, indices = fit.target_tree.query(predicted)
+            weight[distance > fit.config.max_surface_distance_m] = 0
+            return fit.target[indices], weight / len(predicted)
+
+        for _iteration in range(max_iterations):
+            predicted = move(self.reference, pose)
+            target, weight = pairs(self, predicted)
+            sources, targets, weights = [predicted], [target], [weight]
+            reverse_pairs = []
+            for camera, reverse in self.reverse_fits:
+                predicted_old = move(reverse.reference, camera @ np.linalg.inv(pose))
+                target_old, old_weight = pairs(reverse, predicted_old)
+                reverse_pairs.append(
+                    (move(target_old, pose @ np.linalg.inv(camera)), reverse.reference, old_weight)
+                )
+            if reverse_pairs:
+                # Match the existing max-over-views objective: repeating an
+                # earlier view must not multiply its influence on a point.
+                errors = np.asarray([np.sum((a - b) ** 2, axis=1) * w for a, b, w in reverse_pairs])
+                chosen, indices = errors.argmax(axis=0), np.arange(errors.shape[1])
+                sources.append(np.asarray([a for a, _, _ in reverse_pairs])[chosen, indices])
+                targets.append(reverse_pairs[0][1])
+                weights.append(np.asarray([w for _, _, w in reverse_pairs])[chosen, indices])
+            source, target, weight = np.concatenate(sources), np.concatenate(targets), np.concatenate(weights)
+            active = weight > 0
+            if np.count_nonzero(active) < 3:
+                break
+            source, target, weight = source[active], target[active], weight[active]
+            weight /= weight.sum()
+            x, y = np.sum(source * weight[:, None], axis=0), np.sum(target * weight[:, None], axis=0)
+            cross = ((source - x) * weight[:, None]).T @ (target - y)
+            if np.linalg.matrix_rank(cross) < 2:
+                break
+            u, _, vh = np.linalg.svd(cross)
+            rotation = (u @ np.diag([1, 1, np.linalg.det(u @ vh)]) @ vh).T
+            step = np.eye(4)
+            step[:3, :3], step[:3, 3] = rotation, y - rotation @ x
+            pose = step @ pose
+            yield pose.copy()
+            if np.linalg.norm(step - np.eye(4)) < self.config.solver_tolerance:
+                break
+
+    def _solve(self, initial, max_evaluations):
+        """Propose numerical iterates. This routine neither accepts nor publishes."""
+        if self.config.registration.backend != "scipy":
+            from .surface_registration import LibraryMatcher
+
+            if self._registration_solver is None:
+                self._registration_solver = LibraryMatcher(self.config.registration)
+            solver = self._registration_solver
+            pose, detail = solver.refine(self, initial, max_evaluations=max_evaluations)
+            return pose, detail, [(self.score(p), p) for p in solver._local.proposals]
         center = move(self.reference, initial).mean(0)
-        best_admissible = None
+        iterates = []
 
         def record(pose, residual):
-            nonlocal best_admissible
-            if admissible is None:
-                return residual
-            cost = float(residual @ residual)
-            if (best_admissible is None or cost < best_admissible[0]) and admissible(pose):
-                best_admissible = cost, pose.copy()
+            iterates.append((float(residual @ residual), pose.copy()))
             return residual
 
         def pose_from_delta(delta):
@@ -606,49 +720,181 @@ class WholeSurfaceFit:
             residual,
             np.zeros(6),
             x_scale="jac",
-            max_nfev=self.config.max_evaluations,
+            max_nfev=max_evaluations,
             ftol=self.config.solver_tolerance,
             xtol=self.config.solver_tolerance,
             gtol=self.config.solver_tolerance,
             **({"workers": batch_map} if batched else {}),
         )
-        pose = pose_from_delta(solution.x)
-        if best_admissible is not None:
-            pose = best_admissible[1]
-        return pose, {
-            "initial_cost": self.score(initial),
-            "cost": self.score(pose),
-            "evaluations": solution.nfev,
-            "converged": bool(solution.success),
-            "batched_jacobian": batched,
-            "fit_reference_points": len(self.reference_queries),
-            "fit_target_points": len(self.target_queries),
-            **({"retained_admissible_iterate": best_admissible is not None} if admissible else {}),
+        return (
+            pose_from_delta(solution.x),
+            {
+                "evaluations": solution.nfev,
+                "converged": bool(solution.success),
+                "batched_jacobian": batched,
+                "fit_reference_points": len(self.reference_queries),
+                "fit_target_points": len(self.target_queries),
+            },
+            iterates,
+        )
+
+    def search(
+        self,
+        proposal,
+        *,
+        geometry=None,
+        previous=None,
+        check=None,
+        extra=(),
+        coarse=True,
+        recovery_starts=0,
+        evaluation_budget=None,
+    ):
+        """One owner for all starts, validity checks, and retained alternatives.
+
+        Numerical fitting and correspondence updates only propose poses. Every
+        candidate uses the same cached check. A lower-cost invalid candidate can
+        never displace a valid one. Budgets count solver evaluations (excluding
+        finite-difference probes) and correspondence updates, as in max_nfev.
+        """
+        geometry = self if geometry is None else geometry
+        check = geometry.check_pose if check is None else check
+        branches = 1 if geometry is self else 3
+        # Preserve the previous maximum work, but account for it in one place:
+        # each branch had two starts, each with a solve and a corrective pass.
+        budget = (
+            evaluation_budget
+            if evaluation_budget is not None
+            else (self.config.max_evaluations * (branches * (4 if coarse else 2) + 2 * recovery_starts))
+        )
+        remaining = budget
+        candidates, checks = [], {}
+
+        def checked(pose):
+            key = pose.tobytes()
+            if key not in checks:
+                checks[key] = check(pose)
+            return checks[key]
+
+        def add(pose, name, detail=None):
+            record = {
+                "pose": pose.copy(),
+                "name": name,
+                "check": checked(pose),
+                "cost": geometry.score(pose),
+                "detail": detail or {},
+            }
+            candidates.append(record)
+            return record
+
+        def run(objective, initial, name):
+            nonlocal remaining
+            if remaining <= 0:
+                return None
+            final, detail, iterates = objective._solve(initial, min(self.config.max_evaluations, remaining))
+            remaining -= detail["evaluations"]
+            # Evaluate promising iterates first; numerical derivative probes
+            # share the same cache as all other candidates.
+            valid = next((p for _, p in sorted(iterates, key=lambda x: x[0]) if checked(p)["accepted"]), None)
+            correction_count = 0
+            # A solver can slide off a flat surface and leave only its input
+            # admissible. Refine that input rather than treating it as a
+            # successful solve or correcting the diverged endpoint.
+            unchanged = valid is not None and np.array_equal(valid, initial)
+            if remaining > 0 and (
+                valid is None or (unchanged and objective.score(final) > objective.score(initial))
+            ):
+                corrected = []
+                for pose in objective._refine_visible_correspondences(
+                    initial if unchanged else final, min(self.config.max_evaluations, remaining)
+                ):
+                    correction_count += 1
+                    corrected.append(pose)
+                remaining -= correction_count
+                costs = [float(r @ r) for r in objective.batch_residuals(corrected)]
+                corrected_valid = next(
+                    (
+                        p
+                        for _, p in sorted(zip(costs, corrected, strict=True), key=lambda x: x[0])
+                        if checked(p)["accepted"]
+                    ),
+                    None,
+                )
+                if corrected_valid is not None and (
+                    valid is None or objective.score(corrected_valid) < objective.score(valid)
+                ):
+                    valid = corrected_valid
+            detail.update(
+                visible_correction_iterations=correction_count, retained_admissible_iterate=valid is not None
+            )
+            result = add(final if valid is None else valid, name, detail)
+            return result if result["check"]["accepted"] else None
+
+        def branch(objective, initial, name):
+            local = run(objective, initial, name)
+            if not coarse or remaining <= 0:
+                return local
+            predicted = move(self.reference, initial)
+            seed = min(
+                pca_candidates(self.reference, self.observation["obs"]["points"]),
+                key=(
+                    objective.score
+                    if self.config.registration.backend != "scipy"
+                    else lambda p: np.mean(np.sum((move(self.reference, p) - predicted) ** 2, axis=1))
+                ),
+            )
+            if local is not None and objective.score(seed) >= objective.score(local["pose"]):
+                return local
+            alternative = run(objective, seed, name + "_coarse")
+            valid = [r for r in (local, alternative) if r is not None]
+            return min(valid, key=lambda r: objective.score(r["pose"])) if valid else None
+
+        joint = branch(self, proposal, "joint_fit" if geometry is not self else "local")
+        if geometry is not self:
+            add(proposal, "proposal")
+            branch(geometry, joint["pose"] if joint is not None else proposal, "surface_from_joint")
+            branch(geometry, previous, "surface_from_previous")
+            add(previous, "previous")
+        for name, pose in extra:
+            add(pose, name)
+        if not any(c["check"]["accepted"] for c in candidates) and recovery_starts:
+            seeds = pca_candidates(self.reference, self.observation["obs"]["points"], all_axis_orders=True)
+            for i, seed in enumerate(sorted(seeds, key=geometry.score)[:recovery_starts]):
+                run(geometry, seed, f"recovery_{i}")
+        return candidates, {
+            "evaluations": budget - remaining,
+            "evaluation_budget": budget,
+            "validation_count": len(checks),
         }
 
-    def correct(self, proposal: np.ndarray) -> tuple[np.ndarray, dict]:
-        """Compare local refinement with a coarse whole-surface initialization.
+    def refine(self, initial, *, check=None):
+        """Single-start search retained for registration experiments."""
+        candidates, detail = self.search(initial, check=check, coarse=False)
+        return self._search_result(candidates, detail, initial)
 
-        Choose the coarse branch closest to the proposed motion, so this does
-        not freely exchange visually similar ends at every frame. Both results
-        are scored against the same current mask and depth, not by PCA agreement.
-        """
-        local, local_detail = self.refine(proposal)
-        predicted = move(self.reference, proposal)
-        coarse = min(
-            pca_candidates(self.reference, self.observation["obs"]["points"]),
-            key=lambda pose: np.mean(np.sum((move(self.reference, pose) - predicted) ** 2, axis=1)),
-        )
-        if self.score(coarse) >= local_detail["cost"]:
-            return local, {**local_detail, "used_coarse": False}
-        alternative, alternative_detail = self.refine(coarse)
-        chosen, detail = (
-            (alternative, alternative_detail)
-            if alternative_detail["cost"] < local_detail["cost"]
-            else (local, local_detail)
-        )
-        detail = dict(detail)
-        detail["initial_cost"] = self.score(proposal)
-        detail["used_coarse"] = chosen is alternative
-        detail["evaluations"] = local_detail["evaluations"] + alternative_detail["evaluations"]
-        return chosen, detail
+    def _search_result(self, candidates, detail, initial):
+        valid = [c for c in candidates if c["check"]["accepted"]]
+        if not valid:
+            rejected = min(candidates, key=lambda c: c["cost"]) if candidates else None
+            return None, {
+                **(rejected["detail"] if rejected else {}),
+                **detail,
+                **(rejected["check"] if rejected else {}),
+                "cost": rejected["cost"] if rejected else None,
+                "used_coarse": rejected["name"].endswith("_coarse") if rejected else False,
+                "converged": False,
+                "reason": "no_observation_compatible_candidate",
+            }
+        best = min(valid, key=lambda c: c["cost"])
+        return best["pose"], {
+            **best["detail"],
+            **detail,
+            "initial_cost": self.score(initial),
+            "cost": best["cost"],
+            "geometry_check": best["check"],
+            "used_coarse": best["name"].endswith("_coarse"),
+        }
+
+    def correct(self, proposal, *, check=None):
+        candidates, detail = self.search(proposal, check=check)
+        return self._search_result(candidates, detail, proposal)

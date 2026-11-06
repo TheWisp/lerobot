@@ -13,10 +13,11 @@ from tests.policies.flash.test_scene_depth_constraints import scene
 
 
 @pytest.mark.parametrize("weight", [0.0, 0.1, 0.25, 0.5, 1.0, 2.0])
-def test_outline_weight_preserves_depth_rejection_and_scalar_compiled_parity(weight):
+@pytest.mark.parametrize("scene_depth", [False, True])
+def test_outline_weight_preserves_depth_rejection_and_scalar_compiled_parity(weight, scene_depth):
     source, current, k = scene()
     config = ShapeConfig(
-        scene_depth_constraints=True, require_full_mask_coverage=True, mask_coverage_weight=weight
+        scene_depth_constraints=scene_depth, require_full_mask_coverage=True, mask_coverage_weight=weight
     )
     wrong = np.eye(4)
     wrong[0, 3] = 8 * 0.4 / k[0, 0]

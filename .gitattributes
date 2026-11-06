@@ -24,6 +24,8 @@ tests/artifacts/cameras/*.png filter=lfs diff=lfs merge=lfs -text
 tests/policies/flash/fixtures/image_matching_*.npz filter=lfs diff=lfs merge=lfs -text
 # Recorded recovery checkpoints keep RGB-D evidence available to integration tests.
 tests/policies/flash/fixtures/recorded_recovery/**/*.npz filter=lfs diff=lfs merge=lfs -text
+# Recorded clear-placement checkpoints for native surface matcher regressions.
+tests/policies/flash/fixtures/gamepad_placement/*.npz filter=lfs diff=lfs merge=lfs -text
 # Proof media are small and exist to be LOOKED AT. GitHub serves an LFS
 # object as application/octet-stream with nosniff, so a browser refuses to
 # render it -- an embedded proof video is a blank box in a PR, and the

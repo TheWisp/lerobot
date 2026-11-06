@@ -1,0 +1,27 @@
+[
+  {
+    "mutation": "sam-empty",
+    "test": "tests/gui/test_overlay_adapter_detect.py::test_read_output_treats_an_empty_mask_as_lost",
+    "exit_code": 1
+  },
+  {
+    "mutation": "sam-owner",
+    "test": "tests/gui/test_overlay_adapter_detect.py",
+    "exit_code": 1
+  },
+  {
+    "mutation": "worker-entrypoint",
+    "test": "tests/policies/flash/test_live_surface_session.py::test_worker_module_has_a_real_cli_entrypoint",
+    "exit_code": 1
+  },
+  {
+    "mutation": "axes",
+    "test": "tests/gui/test_flash_experiments.py::test_scene_browser_orbits_resets_and_switches_recorded_method",
+    "exit_code": 1
+  },
+  {
+    "mutation": "live-list-race",
+    "test": "tests/gui/test_flash_tracking_debug.py::test_shared_live_view_freezes_clicked_frame_and_never_paints_new_preview_over_old_pose",
+    "exit_code": 1
+  }
+]

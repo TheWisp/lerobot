@@ -134,17 +134,19 @@ def main():
             seeds.insert(0, np.asarray(old))
 
         def check(pose, geometry=fit):
-            return check_surface_contradiction(geometry, pose, uncertainty)["accepted"]
+            return check_surface_contradiction(geometry, pose, uncertainty)
 
         candidates = []
         for i, seed in enumerate(seeds):
-            pose, detail = fit.refine(seed, admissible=check)
+            pose, detail = fit.refine(seed, check=check)
             candidates.append(
                 {
                     "seed": i,
-                    "pose": pose.tolist(),
+                    "pose": pose.tolist() if pose is not None else None,
                     "detail": detail,
-                    "check": check_surface_contradiction(fit, pose, uncertainty),
+                    "check": check_surface_contradiction(fit, pose, uncertainty)
+                    if pose is not None
+                    else {"accepted": False},
                 }
             )
         valid = [i for i, candidate in enumerate(candidates) if candidate["check"]["accepted"]]

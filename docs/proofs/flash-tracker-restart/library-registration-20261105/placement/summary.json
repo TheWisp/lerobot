@@ -1,0 +1,28 @@
+{
+  "scope": "Frames 510\u2013627, 22.61\u201327.82 s, clear post-placement gamepad. Five independently observed white controls, not full 6D truth. Round buttons may permute. Clear-start is an experiment, not a timed production reset.",
+  "replays": "/home/feit/.cache/flash-tracker-restart/gamepad-placement-20261105",
+  "results": "interval-scores.json",
+  "fixtures": "tests/policies/flash/fixtures/gamepad_placement",
+  "config": "docs/proofs/flash-tracker-restart/runtime-baseline-20261104/settings.json",
+  "tests_before_any_fitting_fix": {
+    "passed": 11,
+    "failed": 9,
+    "expected_failures": 0
+  },
+  "unchanged": "Production fitter, configuration, hosted results, gripper and robot.",
+  "diagnostics_fix": "Count successful library levels rather than prepared point clouds; record no-correspondence failures. Previously levels>0 overstated completed solves.",
+  "combined_tests": {
+    "passed": 20,
+    "failed": 9,
+    "expected_failures": 0
+  },
+  "diagnostic_mutation_check": "Restored levels>0 success counting: test_prepared_clouds_are_not_reported_as_a_successful_library_solve fails (1 != 0). Restored corrected code: passes.",
+  "clear_replay_command_verified": {
+    "method": "open3d_color",
+    "poses": 118,
+    "median_feature_mm": 0.7027079814342536,
+    "p95_feature_mm": 0.9937620562340588,
+    "status_changes_on_repeat": 0,
+    "max_transform_element_change_on_repeat": 2.1543530848155967e-14
+  }
+}

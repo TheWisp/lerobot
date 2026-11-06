@@ -555,6 +555,49 @@ def test_motion_prior_stays_unknown_after_missing_correspondence():
     assert result.proposals[0].motion_prior_pose is None
 
 
+@pytest.mark.parametrize("shift", [0.0, 0.008])
+def test_shared_backend_rejects_surface_in_measured_air(shift):
+    from lerobot.policies.flash.surface_grounding import WholeSurfaceFit
+    from tests.policies.flash.test_surface_publication import frame as measured_frame
+
+    measured = measured_frame(0)["current"]
+    sequence = [
+        replace(
+            f,
+            rgb=measured["rgb"],
+            depth=measured["depth"],
+            depth_m_per_unit=1.0,
+            intrinsics=measured["intrinsics"],
+        )
+        for f in frames()
+    ]
+
+    class StaticMask:
+        def masks(self, frame):
+            return {"object": measured["mask"]}
+
+    backend = build_vision_backend(
+        VisionPipelineConfig(), StaticMask(), matcher=object(), local_reference=True, clock=lambda: 0.0
+    )
+    pipeline = PerceptionPipeline(backend, (reference(),))
+    pipeline.process(sequence[0])
+
+    def propose(fitter, seed, limit):
+        # Most of this asymmetric face still overlaps; a narrow patch projects
+        # into measured air. The static control must remain observed.
+        pose = np.eye(4)
+        pose[0, 3] = shift
+        return pose, {"evaluations": 1, "converged": True}, [(0.0, pose)]
+
+    with (
+        patch("lerobot.policies.flash.surface_tracking.ufm_pairs", synthetic_pairs),
+        patch.object(WholeSurfaceFit, "_solve", propose),
+    ):
+        result = pipeline.process(sequence[1])
+    assert (result.estimates[0].evidence == Evidence.OBSERVED) == (shift == 0)
+    assert result.details["object"]["diagnostics"]["scene_depth_coherent_protrusion"] == (shift != 0)
+
+
 def test_narrow_visible_patch_remains_a_proposal_instead_of_a_full_pose():
     from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 

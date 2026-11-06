@@ -126,7 +126,9 @@ def test_live_debug_click_uses_painted_frozen_frame_not_latest_preview(gui_page)
         route.fulfill(json={"id": "ack"})
 
     page.route("**/api/run/flash/tracking/control", control)
-    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate(
+        "async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash'); await showFlashReview();}"
+    )
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.wait_for_function("document.getElementById('flash-surface-estimate')?.dataset.frameId === '42'")
     # A click in the center of the scaled canvas must be converted back to
@@ -158,7 +160,9 @@ def test_live_debug_record_button_sends_bounded_duration(gui_page):
         route.fulfill(json={"id": "ack"})
 
     page.route("**/api/run/flash/tracking/control", control)
-    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate(
+        "async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash'); await showFlashReview();}"
+    )
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.locator("#flash-trace-seconds").fill("7")
     page.get_by_role("button", name="Record diagnostic trace").click()
@@ -199,7 +203,9 @@ def test_object_closeup_uses_estimate_frame_and_observed_mask(gui_page):
         },
     }
     page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json=packet))
-    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate(
+        "async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash'); await showFlashReview();}"
+    )
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.wait_for_function("document.getElementById('flash-surface-local')?.dataset.frameId === '42'")
     result = page.evaluate("""() => {
@@ -276,7 +282,9 @@ def test_multi_object_list_changes_closeup_and_3d_without_changing_source_frame(
         },
     }
     page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json=packet))
-    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate(
+        "async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash'); await showFlashReview();}"
+    )
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.wait_for_function("document.getElementById('flash-surface-local')?.dataset.frameId === '52'")
     page.wait_for_function("""() => {
@@ -347,7 +355,9 @@ def test_live_detection_correction_toggle_reaches_the_worker_configuration(gui_p
         route.fulfill(json={"status": "starting"})
 
     page.route("**/api/run/flash/tracking/start", capture)
-    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate(
+        "async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash'); await showFlashReview();}"
+    )
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.locator("#flash-detection-correction").wait_for()
     page.locator("#flash-detection-correction").check()
@@ -374,7 +384,9 @@ def test_live_group_toggle_reaches_the_worker_configuration(gui_page):
             route.fulfill(json={"status": "starting"}),
         ),
     )
-    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate(
+        "async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash'); await showFlashReview();}"
+    )
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.locator("#flash-group-fallback").check()
     page.get_by_role("button", name="Open camera").click()
@@ -416,7 +428,9 @@ def test_group_pose_is_drawn_on_its_own_camera_frame(gui_page):
         },
     }
     page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json=packet))
-    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate(
+        "async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash'); await showFlashReview();}"
+    )
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.wait_for_function("document.getElementById('flash-surface-group')?.dataset.frameId === '42'")
     result = page.evaluate("""() => ({
@@ -432,7 +446,9 @@ def test_group_pose_is_drawn_on_its_own_camera_frame(gui_page):
 def test_object_inspection_removes_pose_but_scene_toggle_restores_it(gui_page):
     page = gui_page
     page.route("**/api/run/flash/tracking/state", lambda route: route.fulfill(json={"running": False}))
-    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate(
+        "async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash'); await showFlashReview();}"
+    )
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.wait_for_selector("#flash-surface-cloud")
     page.wait_for_function("flashTrackingCloudViewer !== null")
@@ -506,7 +522,9 @@ def test_sampling_controls_reach_shared_configuration(gui_page):
         route.fulfill(json={"status": "started"})
 
     page.route("**/api/run/flash/tracking/start", launch)
-    page.evaluate("switchTab('run'); selectWorkflow('flash')")
+    page.evaluate(
+        "async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash'); await showFlashReview();}"
+    )
     page.get_by_role("button", name="Live tracking · camera only →").click()
     page.wait_for_function("document.getElementById('flash-sampling-budget')?.value !== ''")
     page.locator("#flash-sampling-budget").fill("512")
@@ -519,3 +537,119 @@ def test_sampling_controls_reach_shared_configuration(gui_page):
     assert config.shape.max_fit_points == 512
     assert config.observation.min_surface_spacing_m == pytest.approx(0.0008)
     assert config.observation.samples_across_object == 80
+
+
+def test_new_live_inspector_launches_shared_worker_and_passes_exact_settings(tmp_path, monkeypatch):
+    from lerobot.policies.flash.surface_session_config import defaults
+
+    settings = defaults()
+    settings["shared_matching"]["backend"] = "lk"
+    settings["config"]["shape"]["registration"]["backend"] = "open3d_plane"
+    settings["surface_experiment"]["spacing_m"] = 0.004
+    captured = {}
+
+    async def launch(args, **kwargs):
+        captured.update(args=args, **kwargs)
+
+    monkeypatch.setattr(run, "_launch_lock", asyncio.Lock())
+    monkeypatch.setattr(run, "_ensure_no_active_process", lambda: None)
+    monkeypatch.setattr(run, "_launch_subprocess", launch)
+    monkeypatch.setattr("lerobot.gui.api.robot.release_preview_cameras", lambda: None)
+    monkeypatch.setattr(flash_tracking, "_directory", None)
+    monkeypatch.setattr(flash_tracking.tempfile, "mkdtemp", lambda **_: str(tmp_path))
+    req = flash_tracking.TrackingStart(engine="experiment", pipeline_settings=settings)
+    asyncio.run(flash_tracking.start(req))
+    assert captured["args"][-2] == "lerobot.policies.flash.live_surface_worker"
+    assert captured["config"]["pipeline_settings"] == settings
+    assert json.loads((tmp_path / "config.json").read_text())["pipeline_settings"] == json.loads(
+        json.dumps(settings)
+    )
+    settings["group_experiment"] = None
+    with pytest.raises(ValidationError, match="requires group"):
+        flash_tracking.TrackingStart(engine="experiment", pipeline_settings=settings)
+
+
+@pytest.mark.requires_playwright
+def test_shared_live_view_freezes_clicked_frame_and_never_paints_new_preview_over_old_pose(gui_page):
+    import base64
+
+    import cv2
+    import numpy as np
+
+    from lerobot.gui.flash_live_scene import encode_rgbd_scene
+    from lerobot.policies.flash.perception import RGBDFrame
+    from lerobot.policies.flash.surface_registration import MATCHERS
+    from lerobot.policies.flash.surface_session_config import defaults
+
+    page = gui_page
+    rgb = np.full((50, 100, 3), 70, np.uint8)
+    _, png = cv2.imencode(".png", rgb)
+    frozen = {
+        "frame_id": 42,
+        "width": 100,
+        "height": 50,
+        "image": "data:image/png;base64," + base64.b64encode(png).decode(),
+    }
+    state = {
+        "running": True,
+        "config": {"engine": "experiment", "pipeline_settings": defaults(), "method": "group_growing"},
+        "estimate": {"status": "frozen", "frame": frozen},
+        "preview": {**frozen, "frame_id": 99},
+    }
+    page.route("**/api/run/flash/tracking/state", lambda r: r.fulfill(json=state))
+    page.route(
+        "**/api/run/flash/tracking/shared-defaults",
+        lambda r: r.fulfill(json={"settings": defaults(), "matchers": MATCHERS}),
+    )
+    controls = []
+
+    def control(route):
+        controls.append(route.request.post_data_json)
+        route.fulfill(json={"id": "ok"})
+
+    page.route("**/api/run/flash/tracking/control", control)
+    page.evaluate("async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash');}")
+    page.get_by_role("button", name="Live camera", exact=True).click()
+    page.wait_for_function("flashLive.frame?.frozen === true")
+    # A delayed experiment-list response must not replace the live view.
+    page.route(
+        "**/api/run/flash/experiments",
+        lambda r: r.fulfill(json=[{"id": "later", "name": "Later", "experiment": "test"}]),
+    )
+    page.evaluate("async () => {flashExperiments.selected = null; await loadFlashExperiments();}")
+    assert page.locator("#flash-live-panel").is_visible()
+    assert page.evaluate("flashLive.visible")
+    page.locator("#flash-live-image").click()
+    page.wait_for_timeout(100)
+    assert controls[-1]["frame_id"] == 42
+    assert controls[-1]["point"] == pytest.approx([50, 25], abs=1)
+    page.locator("#flash-live-name").fill("red object")
+    page.get_by_role("button", name="Track by name", exact=True).click()
+    assert controls[-1]["prompt"] == "red object" and "point" not in controls[-1]
+    frame = RGBDFrame(
+        43,
+        rgb,
+        np.full((50, 100), 1000, np.uint16),
+        np.array([[100, 0, 50], [0, 100, 25], [0, 0, 1]]),
+        0.001,
+        np.eye(4),
+        1.0,
+        1.0,
+        "test",
+    )
+    packet = encode_rgbd_scene(frame, {"frame": 43, "time_s": 1.0, "method": "group_growing", "objects": {}})
+    page.route(
+        "**/api/run/flash/tracking/scene",
+        lambda r: r.fulfill(body=packet, content_type="application/octet-stream"),
+    )
+    state["estimate"] = {"status": "tracking", "frame_id": 43}
+    page.wait_for_function("flashLive.processed === 43")
+    assert page.evaluate("flashLive.frame.frame_id") == 43
+    assert page.evaluate("flashLive.packet.frame") == 43
+    # The visible image must be the processed packet's pixels despite preview 99.
+    assert page.evaluate(
+        "Array.from(document.getElementById('flash-live-image').getContext('2d').getImageData(20,20,1,1).data)"
+    ) == [70, 70, 70, 255]
+    page.locator("#flash-live-3d").click()
+    page.wait_for_function("flashLive.viewer !== null")
+    assert page.locator("#flash-live-scene").is_visible()

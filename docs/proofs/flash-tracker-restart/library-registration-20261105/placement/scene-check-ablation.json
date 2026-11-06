@@ -1,0 +1,202 @@
+[
+  {
+    "method": "baseline",
+    "frame": 540,
+    "scene_check": false,
+    "check": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0008291873963515755,
+      "free_space_outlier_fraction": 0.0
+    }
+  },
+  {
+    "method": "baseline",
+    "frame": 540,
+    "scene_check": true,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 0.0008291873963515755,
+      "free_space_outlier_fraction": 0.043219076005961254,
+      "scene_depth_outlier_fraction": 0.05004700599519383,
+      "scene_depth_exposed_weights": [
+        453.89905272808784
+      ],
+      "scene_depth_coherent_protrusion": true
+    }
+  },
+  {
+    "method": "baseline",
+    "frame": 627,
+    "scene_check": false,
+    "check": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.0
+    }
+  },
+  {
+    "method": "baseline",
+    "frame": 627,
+    "scene_check": true,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 0.0,
+      "free_space_outlier_fraction": 0.038748137108792845,
+      "scene_depth_outlier_fraction": 0.04885903973827479,
+      "scene_depth_exposed_weights": [
+        456.5007066551958
+      ],
+      "scene_depth_coherent_protrusion": true
+    }
+  },
+  {
+    "method": "small_gicp",
+    "frame": 540,
+    "scene_check": false,
+    "check": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.24046434494195687,
+      "free_space_outlier_fraction": 0.1094224924012158
+    }
+  },
+  {
+    "method": "small_gicp",
+    "frame": 540,
+    "scene_check": true,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 0.24046434494195687,
+      "free_space_outlier_fraction": 0.1884498480243161,
+      "scene_depth_outlier_fraction": 0.25624169858349516,
+      "scene_depth_exposed_weights": [
+        502.82659104523447
+      ],
+      "scene_depth_coherent_protrusion": true
+    }
+  },
+  {
+    "method": "small_gicp",
+    "frame": 627,
+    "scene_check": false,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 0.25612745098039214,
+      "free_space_outlier_fraction": 0.12917933130699089
+    }
+  },
+  {
+    "method": "small_gicp",
+    "frame": 627,
+    "scene_check": true,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 0.25612745098039214,
+      "free_space_outlier_fraction": 0.20212765957446807,
+      "scene_depth_outlier_fraction": 0.29664770786036,
+      "scene_depth_exposed_weights": [
+        495.9344643225651
+      ],
+      "scene_depth_coherent_protrusion": true
+    }
+  },
+  {
+    "method": "open3d_plane",
+    "frame": 540,
+    "scene_check": false,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 1.0,
+      "free_space_outlier_fraction": 0.9765051395007343
+    }
+  },
+  {
+    "method": "open3d_plane",
+    "frame": 540,
+    "scene_check": true,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 1.0,
+      "free_space_outlier_fraction": 0.9765051395007343,
+      "scene_depth_outlier_fraction": 0.9592305198156144,
+      "scene_depth_exposed_weights": [
+        681.0
+      ],
+      "scene_depth_coherent_protrusion": true
+    }
+  },
+  {
+    "method": "open3d_plane",
+    "frame": 627,
+    "scene_check": false,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 1.0,
+      "free_space_outlier_fraction": 0.9325513196480938
+    }
+  },
+  {
+    "method": "open3d_plane",
+    "frame": 627,
+    "scene_check": true,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 1.0,
+      "free_space_outlier_fraction": 0.9325513196480938,
+      "scene_depth_outlier_fraction": 1.0,
+      "scene_depth_exposed_weights": [
+        618.7255890376464
+      ],
+      "scene_depth_coherent_protrusion": true
+    }
+  },
+  {
+    "method": "open3d_color",
+    "frame": 540,
+    "scene_check": false,
+    "check": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.23383084577114427,
+      "free_space_outlier_fraction": 0.13963328631875882
+    }
+  },
+  {
+    "method": "open3d_color",
+    "frame": 540,
+    "scene_check": true,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 0.23383084577114427,
+      "free_space_outlier_fraction": 0.25952045133991536,
+      "scene_depth_outlier_fraction": 0.32145950709850324,
+      "scene_depth_exposed_weights": [
+        550.2796415217832
+      ],
+      "scene_depth_coherent_protrusion": true
+    }
+  },
+  {
+    "method": "open3d_color",
+    "frame": 627,
+    "scene_check": false,
+    "check": {
+      "accepted": true,
+      "observed_outlier_fraction": 0.22099673202614378,
+      "free_space_outlier_fraction": 0.12411847672778561
+    }
+  },
+  {
+    "method": "open3d_color",
+    "frame": 627,
+    "scene_check": true,
+    "check": {
+      "accepted": false,
+      "observed_outlier_fraction": 0.22099673202614378,
+      "free_space_outlier_fraction": 0.25952045133991536,
+      "scene_depth_outlier_fraction": 0.3251382895038668,
+      "scene_depth_exposed_weights": [
+        528.3151845020395
+      ],
+      "scene_depth_coherent_protrusion": true
+    }
+  }
+]

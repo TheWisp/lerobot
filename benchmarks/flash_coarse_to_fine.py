@@ -65,9 +65,9 @@ class RefinementTrial:
         self.calls = []
 
     def __enter__(self):
-        original = WholeSurfaceFit.refine
+        original = WholeSurfaceFit._solve
 
-        def refine(fitter, initial, *, admissible=None):
+        def solve(fitter, initial, max_evaluations):
             started = time.perf_counter()
             cached = getattr(fitter, "_coarse_trial_fitter", None)
             key = self.points, self.evaluations, self.simplify_trees
@@ -79,28 +79,40 @@ class RefinementTrial:
             else:
                 coarse = cached[1]
             prepared = time.perf_counter()
-            seed, coarse_detail = original(coarse, initial)
+            seed, coarse_detail, coarse_iterates = original(
+                coarse, initial, min(self.evaluations, max_evaluations)
+            )
+            seed = min([initial, *[p for _, p in coarse_iterates]], key=fitter.score)
             coarse_done = time.perf_counter()
             fine = copy(fitter)
             if self.fine_evaluations is not None:
                 fine.config = replace(fitter.config, max_evaluations=self.fine_evaluations)
-            pose, detail = original(fine, seed, admissible=admissible)
+            remaining = max_evaluations - coarse_detail["evaluations"]
+            if remaining > 0:
+                pose, detail, iterates = original(fine, seed, min(fine.config.max_evaluations, remaining))
+            else:
+                pose, detail, iterates = seed, {**coarse_detail, "evaluations": 0}, []
+            # Rank coarse proposals with the final objective; validation remains
+            # the shared search's responsibility.
+            iterates = [(fitter.score(p), p) for _, p in coarse_iterates] + iterates
+            fine_count = detail["evaluations"]
+            detail["evaluations"] += coarse_detail["evaluations"]
             self.calls.append(
                 {
                     "prepare_ms": 1000 * (prepared - started),
                     "coarse_ms": 1000 * (coarse_done - prepared),
                     "fine_ms": 1000 * (time.perf_counter() - coarse_done),
                     "coarse_evaluations": coarse_detail["evaluations"],
-                    "fine_evaluations": detail["evaluations"],
+                    "fine_evaluations": fine_count,
                     "coarse_reference_queries": len(coarse.reference_queries),
                     "coarse_target_queries": len(coarse.target_queries),
                     "fine_reference_queries": len(fitter.reference_queries),
                     "fine_target_queries": len(fitter.target_queries),
                 }
             )
-            return pose, detail
+            return pose, detail, iterates
 
-        self._patch = patch.object(WholeSurfaceFit, "refine", refine)
+        self._patch = patch.object(WholeSurfaceFit, "_solve", solve)
         self._patch.start()
         return self
 
@@ -143,11 +155,11 @@ class PointToPlaneTrial:
         self.calls = []
 
     def __enter__(self):
-        original = WholeSurfaceFit.refine
+        original = WholeSurfaceFit._solve
         o3d = self.o3d
         registration = o3d.pipelines.registration
 
-        def refine(fitter, initial, *, admissible=None):
+        def solve(fitter, initial, max_evaluations):
             started = time.perf_counter()
             cached = getattr(fitter, "_icp_trial_levels", None)
             if cached is None or cached[0] != tuple(self.voxel_sizes):
@@ -165,16 +177,22 @@ class PointToPlaneTrial:
                 levels = cached[1]
             prepared = time.perf_counter()
             seed = initial
+            coarse_iterates, spent = [(fitter.score(initial), initial)], 0
             for voxel, source, target in levels:
+                limit = min(self.iterations, max_evaluations - spent)
+                if limit <= 0:
+                    break
                 result = registration.registration_icp(
                     source,
                     target,
                     voxel * 3,
                     seed,
                     registration.TransformationEstimationPointToPlane(),
-                    registration.ICPConvergenceCriteria(max_iteration=self.iterations),
+                    registration.ICPConvergenceCriteria(max_iteration=limit),
                 )
                 seed = result.transformation
+                spent += limit
+                coarse_iterates.append((fitter.score(seed), seed))
             coarse_seed_used = bool(levels)
             if self.keep_better_seed and fitter.score(seed) >= fitter.score(initial):
                 seed = initial
@@ -183,13 +201,20 @@ class PointToPlaneTrial:
             fine = copy(fitter)
             if self.fine_evaluations is not None:
                 fine.config = replace(fitter.config, max_evaluations=self.fine_evaluations)
-            pose, detail = original(fine, seed, admissible=admissible)
+            remaining = max_evaluations - spent
+            if remaining > 0:
+                pose, detail, iterates = original(fine, seed, min(fine.config.max_evaluations, remaining))
+            else:
+                pose, detail, iterates = seed, {"evaluations": 0, "converged": False}, []
+            iterates = coarse_iterates + iterates
+            fine_count = detail["evaluations"]
+            detail["evaluations"] += spent
             self.calls.append(
                 {
                     "prepare_ms": 1000 * (prepared - started),
                     "coarse_ms": 1000 * (coarse_done - prepared),
                     "fine_ms": 1000 * (time.perf_counter() - coarse_done),
-                    "fine_evaluations": detail["evaluations"],
+                    "fine_evaluations": fine_count,
                     "coarse_reference_queries": len(levels[0][1].points) if levels else 0,
                     "coarse_target_queries": len(levels[0][2].points) if levels else 0,
                     "coarse_seed_used": coarse_seed_used,
@@ -197,9 +222,9 @@ class PointToPlaneTrial:
                     "fine_target_queries": len(fitter.target_queries),
                 }
             )
-            return pose, detail
+            return pose, detail, iterates
 
-        self._patch = patch.object(WholeSurfaceFit, "refine", refine)
+        self._patch = patch.object(WholeSurfaceFit, "_solve", solve)
         self._patch.start()
         return self
 

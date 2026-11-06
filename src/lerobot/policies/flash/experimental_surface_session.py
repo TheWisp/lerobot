@@ -20,7 +20,6 @@ from .surface_grounding import (
     PreparedReferenceSurface,
     SurfaceFitView,
     WholeSurfaceFit,
-    pca_candidates,
     project,
 )
 from .surface_kalman import MeasuredGroupMotion, PoseKalmanFilter
@@ -450,14 +449,9 @@ class ImageConditionedFit(WholeSurfaceFit):
             blocks.append(residual.ravel() * np.sqrt(weight / len(residual)))
         return np.concatenate(blocks)
 
-    def correct_surface_first(self, proposal, previous, *, uncertainty=None, recovery_starts=0):
-        """Image evidence may choose a geometric fit, not pay to violate it.
-
-        Refine from the new motion proposal and the previous estimate. The
-        latter is a search seed, not a stationary-object assumption: all seeds
-        are scored against the current observation. Prefer the image/group
-        objective only among solutions indistinguishable at solver precision.
-        """
+    def correct_surface_first(self, proposal, previous, *, uncertainty=None, recovery_starts=0, check=None):
+        """Rank geometrically valid candidates, then optionally measure uncertainty."""
+        uncertainty = uncertainty or PoseUncertaintyConfig()
         geometry = WholeSurfaceFit(
             self.reference,
             self.observation,
@@ -468,124 +462,81 @@ class ImageConditionedFit(WholeSurfaceFit):
             fit_kernels=self.fit_kernels,
             search_pool=self.search_pool,
             reference_views=self.reference_views,
+            appearance_views=self.appearance_views,
         )
-        joint, joint_detail = self.correct(proposal)
-        candidates = [(joint, joint_detail), (proposal, {"unrefined_proposal": True})]
-        for initial in (joint, previous):
-            candidates.append(geometry.correct(initial))
-        if uncertainty is not None and uncertainty.enabled:
-            names = ["joint_fit", "proposal", "surface_from_joint", "surface_from_previous"]
-            candidates.append((previous, {}))
-            names.append("previous")
-            supported = []
-            for evidence in self.point_evidence:
-                if evidence.weight <= 0:
-                    continue
-                index = len(candidates)
-                candidates.append((rigid_fit(evidence.reference, evidence.current), {}))
-                names.append(evidence.source)
-                if evidence.kind == "predicted":
-                    supported.append(index)
-            costs = np.asarray([geometry.score(pose) for pose, _ in candidates])
-            direct_checks = [
-                check_surface_contradiction(geometry, pose, uncertainty) for pose, _ in candidates
-            ]
-            valid = [i for i, check in enumerate(direct_checks) if check["accepted"]]
-            if not valid and recovery_starts:
-                seeds = pca_candidates(
-                    self.reference, self.observation["obs"]["points"], all_axis_orders=True
+        if check is None:
+
+            def check(pose):
+                return geometry.check_pose(
+                    pose, max_outlier_fraction=uncertainty.max_visible_outlier_fraction
                 )
-                seeds.sort(key=geometry.score)
-                for index, seed in enumerate(seeds[:recovery_starts]):
-                    pose, detail = geometry.refine(
-                        seed,
-                        admissible=lambda p: check_surface_contradiction(geometry, p, uncertainty)[
-                            "accepted"
-                        ],
-                    )
-                    candidates.append((pose, detail))
-                    names.append(f"recovery_{index}")
-                    direct_checks.append(check_surface_contradiction(geometry, pose, uncertainty))
-                costs = np.asarray([geometry.score(pose) for pose, _ in candidates])
-                valid = [i for i, check in enumerate(direct_checks) if check["accepted"]]
-            if not valid:
-                return None, {
-                    "surface_priority": True,
-                    "geometry_costs": costs.tolist(),
-                    "uncertainty": {
-                        "covariance": None,
-                        "selected": None,
-                        "candidates": [
-                            {
-                                "name": name,
-                                **check,
-                                "reason": "visible_surface_contradiction",
-                                "covariance_tested": False,
-                            }
-                            for name, check in zip(names, direct_checks, strict=True)
-                        ],
-                    },
-                }
-            best = min(valid, key=lambda i: costs[i])
-            estimator = SurfacePoseUncertainty(geometry, candidates[best][0], uncertainty)
-            if uncertainty.mode == "kalman":
-                # Supply the measured estimate AND its information to the
-                # temporal filter. No group-first candidate selection here.
-                return candidates[best][0], {
-                    "surface_priority": True,
-                    "geometry_costs": costs.tolist(),
-                    "uncertainty": {**estimator.diagnostics(), "mode": "kalman", "selected": names[best]},
-                }
-            checks = [
-                estimator.check(pose, direct=check)
-                for (pose, _), check in zip(candidates, direct_checks, strict=True)
-            ]
-            eligible = [i for i, check in enumerate(checks) if check["accepted"]]
-            preferred = (
-                [i for i in supported if i in eligible] if uncertainty.prefer_supported_prediction else []
-            )
-            chosen = (
-                min(
-                    preferred or eligible,
-                    key=lambda i: float(
-                        np.mean(
-                            np.sum(
-                                (move(self.reference, candidates[i][0]) - move(self.reference, previous))
-                                ** 2,
-                                axis=1,
+
+        extra = [(p.source, rigid_fit(p.reference, p.current)) for p in self.point_evidence if p.weight > 0]
+        candidates, detail = self.search(
+            proposal,
+            geometry=geometry,
+            previous=previous,
+            check=check,
+            extra=extra,
+            recovery_starts=recovery_starts,
+        )
+        valid = [c for c in candidates if c["check"]["accepted"]]
+        detail.update(surface_priority=True, geometry_costs=[c["cost"] for c in candidates])
+        if not valid:
+            return None, {**detail, "reason": "no_observation_compatible_candidate"}
+        best = min(valid, key=lambda c: c["cost"])
+        if uncertainty.enabled:
+            estimator = SurfacePoseUncertainty(geometry, best["pose"], uncertainty)
+            if uncertainty.mode == "selection":
+                compatible = [(c, estimator.check(c["pose"], direct=c["check"])) for c in candidates]
+                eligible = [c for c, verdict in compatible if verdict["accepted"]]
+                supported = {p.source for p in self.point_evidence if p.kind == "predicted" and p.weight > 0}
+                preferred = (
+                    [c for c in eligible if c["name"] in supported]
+                    if uncertainty.prefer_supported_prediction
+                    else []
+                )
+                best = (
+                    min(
+                        preferred or eligible,
+                        key=lambda c: float(
+                            np.mean(
+                                np.sum(
+                                    (move(self.reference, c["pose"]) - move(self.reference, previous)) ** 2,
+                                    axis=1,
+                                )
                             )
-                        )
-                    ),
+                        ),
+                    )
+                    if eligible
+                    else None
                 )
-                if eligible
-                else None
-            )
-            detail = {
-                "surface_priority": True,
-                "geometry_costs": costs.tolist(),
-                "selected_candidate": chosen,
-                "uncertainty": {
+                detail["uncertainty"] = {
                     **estimator.diagnostics(),
-                    "candidates": [
-                        {"name": name, **check} for name, check in zip(names, checks, strict=True)
-                    ],
-                    "selected": names[chosen] if chosen is not None else None,
-                },
-            }
-            return (candidates[chosen][0] if chosen is not None else None), detail
-        costs = np.asarray([geometry.score(pose) for pose, _ in candidates])
-        best = float(costs.min())
-        tolerance = self.config.solver_tolerance * max(1.0, abs(best))
-        eligible = np.flatnonzero(costs <= best + tolerance)
-        chosen = min(eligible, key=lambda i: self.score(candidates[i][0]))
-        pose, detail = candidates[chosen]
-        return pose, {
+                    "selected": best["name"] if best else None,
+                    "candidates": [{"name": c["name"], **verdict} for c, verdict in compatible],
+                }
+            else:
+                detail["uncertainty"] = {
+                    **estimator.diagnostics(),
+                    "mode": "kalman",
+                    "selected": best["name"],
+                }
+        else:
+            tolerance = self.config.solver_tolerance * max(1.0, abs(best["cost"]))
+            best = min(
+                (c for c in valid if c["cost"] <= best["cost"] + tolerance),
+                key=lambda c: self.score(c["pose"]),
+            )
+        if best is None:
+            return None, detail
+        return best["pose"], {
+            **best["detail"],
             **detail,
-            "surface_priority": True,
-            "geometry_costs": costs.tolist(),
-            "selected_candidate": int(chosen),
-            "joint_geometry_cost": float(costs[0]),
-            "geometry_cost": float(costs[chosen]),
+            "geometry_check": best["check"],
+            "geometry_cost": best["cost"],
+            "selected_candidate": next(i for i, candidate in enumerate(candidates) if candidate is best),
+            "selected_candidate_name": best["name"],
         }
 
 
@@ -608,6 +559,7 @@ class GrowingSurfaceSession:
         self.connected_pose = None
         self.connected_observation = None
         self.connected_intrinsics = None
+        self.initial_appearance_view = None
         self.last_time = self.last_frame = None
         self.base_from_camera = np.eye(4)
         self.last_observed_time = None
@@ -658,6 +610,9 @@ class GrowingSurfaceSession:
             self.reference = points.copy()
             self.pose = np.eye(4)
             self.reference_frame = frame
+            self.initial_appearance_view = SurfaceFitView(
+                current, prepared["intrinsics"].copy(), self.pose.copy()
+            )
             if self.config.uncertainty.enabled and self.config.uncertainty.mode == "kalman":
                 self.kalman = PoseKalmanFilter(
                     self.pose, self.reference.mean(0), time_s, self.config.uncertainty
@@ -718,39 +673,51 @@ class GrowingSurfaceSession:
             fit_kernels=self.fit_kernels,
             search_pool=self.search_pool,
             reference_views=self._fit_views(),
+            appearance_views=self._appearance_views(),
         )
+        geometry_checks = {}
+
+        def check_pose(pose):
+            key = pose.tobytes()
+            if key not in geometry_checks:
+                geometry_checks[key] = fitter.check_pose(
+                    pose,
+                    max_outlier_fraction=self.config.uncertainty.max_visible_outlier_fraction,
+                    agreement_m=self.config.agreement_m,
+                    min_overlap=self.config.min_overlap,
+                )
+            return geometry_checks[key]
+
         candidate, fit = (
             fitter.correct_surface_first(
                 seed,
                 self.pose,
                 recovery_starts=self.config.recovery_starts,
-                **({"uncertainty": self.config.uncertainty} if self.config.uncertainty.enabled else {}),
+                uncertainty=self.config.uncertainty,
+                check=check_pose,
             )
             if self.config.surface_priority
-            else fitter.correct(seed)
+            else fitter.correct(seed, check=check_pose)
         )
         if "uncertainty" in fit:
             details["covariance"] = fit["uncertainty"]["covariance"]
+        # Also covers weighted fitting and replacement matchers without Kalman.
+        # No candidate may update the pose or map while occupying measured air.
+        if candidate is not None and not check_pose(candidate)["accepted"]:
+            candidate = None
+            fit["reason"] = "measured_empty_space_conflict"
         if candidate is None:
-            # Every candidate contradicted measured geometry. Do not return the
-            # rejected hint through the missing-observation fallback.
-            details.update(fit=fit, reason="no_observation_compatible_candidate")
+            details["fit"] = fit
+            prior_check = check_pose(self.pose)
+            if prior_check["geometry_accepted"] and not prior_check["accepted"]:
+                # Too little overlap for a new measurement does not contradict
+                # an existing prediction. It cannot update the filter or map.
+                return self._missing(hint, time_s, details, "insufficient_surface_overlap", geometry=fitter)
+            details["reason"] = "no_observation_compatible_candidate"
             return self._result("lost", time_s, details, available=False)
         kalman_prior = None
         if self.kalman is not None:
-            geometry = WholeSurfaceFit(
-                self.store.points,
-                current,
-                prepared["intrinsics"],
-                self.shape_config,
-                prepared_reference=self._prepared_reference,
-                prepared_target=fitter.prepared_target,
-                search_pool=self.search_pool,
-                reference_views=self._fit_views(),
-            )
-            prior_valid = check_surface_contradiction(geometry, self.pose, self.config.uncertainty)[
-                "accepted"
-            ]
+            prior_valid = check_pose(self.pose)["accepted"]
             kalman_prior = self.kalman.snapshot()
             measured = fit["uncertainty"]
             correction = self.kalman.correct(
@@ -761,32 +728,19 @@ class GrowingSurfaceSession:
             )
             details["kalman"] = correction
             candidate = self.kalman.pose.copy()
-            if (
-                correction["accepted"]
-                and not check_surface_contradiction(geometry, candidate, self.config.uncertainty)["accepted"]
-            ):
+            if correction["accepted"] and not check_pose(candidate)["accepted"]:
                 self._rollback_correction(kalman_prior, details, "fused_pose_contradicts_observation")
             self.pose = self.kalman.pose.copy()
             if not details["kalman"]["accepted"]:
                 details.update(fit=fit, reason=details["kalman"]["reason"])
                 return self._result("predicted", time_s, details, available=prior_valid)
-        distances = cKDTree(move(self.store.points, candidate)).query(points)[0]
-        overlap = float(np.mean(distances <= self.config.agreement_m))
-        overlap_basis = "all_current_points"
-        if self.config.partial_surface_matching:
-            # Use the same mutually visible measurements as candidate
-            # validation. Newly exposed surface is unknown, not an unmatched
-            # measurement of an already mapped face. Surface growth below
-            # still has its separate stricter tests against stored geometry.
-            partial = fitter.partial_surface_check(candidate)
-            overlap = 1.0 - partial["observed_outlier_fraction"] if partial["has_visible_overlap"] else 0.0
-            overlap_basis = "mutually_visible_points"
+        accepted_geometry = check_pose(candidate)
         details.update(
             fit=fit,
             image_pairs=len(a),
-            observed_overlap=overlap,
-            observed_overlap_basis=overlap_basis,
-            surface_median_mm=float(np.median(distances) * 1000),
+            observed_overlap=accepted_geometry["observed_overlap"],
+            observed_overlap_basis=accepted_geometry["observed_overlap_basis"],
+            surface_median_mm=accepted_geometry["surface_median_mm"],
             candidate_camera_from_reference=candidate.tolist(),
             point_sources=[
                 {"source": p.source, "kind": p.kind, "count": len(p.reference), "weight": p.weight}
@@ -795,10 +749,6 @@ class GrowingSurfaceSession:
             if hint
             else [],
         )
-        if overlap < self.config.min_overlap:
-            if kalman_prior is not None:
-                self._rollback_correction(kalman_prior, details, "insufficient_surface_overlap")
-            return self._missing(hint, time_s, details, "insufficient_surface_overlap", geometry=fitter)
         if hint is not None:
             details["hint_disagreement_mm"] = float(
                 1000
@@ -879,6 +829,18 @@ class GrowingSurfaceSession:
         if self.config.fit_view_limit is not None:
             return tuple(views[f] for f in sorted(views, reverse=True)[: self.config.fit_view_limit])
         return tuple(views.values())
+
+    def _appearance_views(self):
+        # Keep the first actual RGB-D measurement as an identity anchor. Colors
+        # from a later accepted view fill unseen areas but never overwrite it.
+        views = []
+        if self.initial_appearance_view is not None:
+            views.append(self.initial_appearance_view)
+        if self.connected_observation is not None:
+            views.append(
+                SurfaceFitView(self.connected_observation, self.connected_intrinsics, self.connected_pose)
+            )
+        return tuple(views)
 
     def _rollback_correction(self, prior, details, reason):
         self.kalman.restore(prior)

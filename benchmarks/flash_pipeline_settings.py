@@ -7,10 +7,20 @@ from dataclasses import asdict, fields, is_dataclass
 from benchmarks.flash_experiment_groups import GroupConfig
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
+from lerobot.policies.flash.surface_session_config import defaults as defaults, validate as validate
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 OPTION_HELP = {
+    "config.shape.registration.backend": "3D surface solver: scipy, small_gicp, open3d_plane or open3d_color. Does not change UFM/LK image matching or depth rejection.",
+    "voxel_sizes_m": "Coarse-to-fine point sampling for library solvers, metres.",
+    "iterations_per_level": "Maximum library iterations per resolution, including point-to-point initialization.",
+    "correspondence_voxels": "Maximum correspondence distance as a multiple of the current voxel size.",
+    "threads": "CPU threads used by small_gicp.",
+    "translation_epsilon_m": "small_gicp translation convergence tolerance, metres.",
+    "rotation_epsilon_rad": "small_gicp rotation convergence tolerance, radians.",
+    "colored_geometry_weight": "Geometry contribution in Open3D colored ICP; library default 0.968.",
+    "appearance_weight": "Measured RGB correlation used to rank library proposals; depth contradictions still reject poses.",
     "partial_surface_matching": "Experimental fitting using depth/mask visibility in current and retained measured views.",
     "backend": "Backend selection (surface/appearance for vision; lk/ufm for shared matching).",
     "sam_resolution": "SAM input resolution in pixels; unused when replaying saved masks.",
@@ -47,11 +57,11 @@ OPTION_HELP = {
     "mask_boundary_tolerance_px": "Allowed projected silhouette-boundary discrepancy, pixels.",
     "require_full_mask_coverage": "Enable a soft preference to cover more of the current visible mask. Applies to partial surfaces; uncovered pixels alone never reject a pose.",
     "mask_coverage_weight": "Strength of the optional outline-coverage preference; 0 disables it. Strong values can bias fits of incomplete surfaces.",
-    "scene_depth_constraints": "Opt-in: reject surface protruding into measured empty space, including connected patches below the global outlier allowance. Missing depth and nearer occluders remain unknown.",
+    "scene_depth_constraints": "Include scene depth in the fitting cost. Rejecting connected patches in measured empty space is mandatory regardless of this setting. Missing depth and nearer occluders remain unknown.",
     "prefer_observed_overlap": "Opt-in search preference for measured surface agreement over hiding the stored surface. Does not make missing measurements a contradiction.",
     "reset_on_geometry_conflict": "Allow a geometry-conflicting prediction to reset Kalman at the proposed pose. Disable to retain the normal innovation test on every update.",
     "max_surface_distance_m": "Maximum nearest-surface distance considered by fitting, metres.",
-    "max_evaluations": "Maximum least-squares objective evaluations per local fit.",
+    "max_evaluations": "Maximum objective evaluations (SciPy) or solver iteration budget (libraries) per local fit.",
     "solver_tolerance": "Numerical least-squares stopping tolerance; legacy surface-priority cost tie tolerance.",
     "max_fit_points": "Maximum sampled points in each direction of the fitting objective.",
     "nn_queries_per_worker": "Minimum query work per nearest-neighbour worker.",
@@ -114,38 +124,6 @@ OPTION_HELP = {
 }
 
 
-def defaults():
-    return {
-        "config": asdict(VisionPipelineConfig()),
-        "surface_experiment": asdict(GrowingSurfaceConfig()),
-        "group_experiment": asdict(GroupConfig()),
-        "shared_matching": asdict(SharedMatchingConfig()),
-        "retain_motion_reference": True,
-    }
-
-
-def validate(values):
-    """Return what the real benchmark consumers accept; reject unknown keys."""
-    unknown = values.keys() - defaults().keys()
-    if unknown:
-        raise ValueError(f"Unknown pipeline sections: {sorted(unknown)}")
-    if set(values) != set(defaults()):
-        raise ValueError("Supply every pipeline section; use null to disable an optional section")
-    result = {"config": asdict(VisionPipelineConfig.from_dict(values["config"]))}
-    for key, parse in (
-        ("surface_experiment", lambda v: GrowingSurfaceConfig(**v)),
-        ("group_experiment", GroupConfig.from_dict),
-        ("shared_matching", SharedMatchingConfig.from_dict),
-    ):
-        result[key] = asdict(parse(values[key])) if values[key] is not None else None
-    if result["group_experiment"] is not None and result["surface_experiment"] is None:
-        raise ValueError("Groups require surface_experiment")
-    if type(values["retain_motion_reference"]) is not bool:
-        raise ValueError("retain_motion_reference must be boolean")
-    result["retain_motion_reference"] = values["retain_motion_reference"]
-    return result
-
-
 def from_recording(provenance, methods):
     # Match the existing rerun behavior, including adding the group ablation
     # to older surface experiments. Runtime/detection options remain visible
@@ -196,11 +174,12 @@ def catalog():
                 }
             )
 
+    values = defaults()
     for prefix, obj in (
-        ("config", VisionPipelineConfig()),
-        ("surface_experiment", GrowingSurfaceConfig()),
-        ("group_experiment", GroupConfig()),
-        ("shared_matching", SharedMatchingConfig()),
+        ("config", VisionPipelineConfig.from_dict(values["config"])),
+        ("surface_experiment", GrowingSurfaceConfig(**values["surface_experiment"])),
+        ("group_experiment", GroupConfig.from_dict(values["group_experiment"])),
+        ("shared_matching", SharedMatchingConfig.from_dict(values["shared_matching"])),
     ):
         visit(obj, prefix)
     result.append(
@@ -220,7 +199,7 @@ def reference_markdown():
     lines = [
         "# FLASH experiment pipeline settings",
         "",
-        "Open **Run → FLASH → Pipeline settings** beside the selected video. New surface experiments use **Kalman filter**. Earlier recordings retain their saved settings; choose **Kalman filter** and set `max_visible_outlier_fraction` to `0.25` to compare them with the new default. The JSON contains the recording's settings with current defaults filled in. **Rerun this scene with these settings** validates and runs it. Playback itself never recomputes poses.",
+        "Open **Run → FLASH → Pipeline settings** beside the selected video. Fresh live sessions use **LK + SciPy + groups + growing surface + Kalman**. Recorded experiments retain their saved settings; use the same complete configuration for a fair live/replay comparison. The JSON contains the recording's settings with current defaults filled in. **Rerun this scene with these settings** validates and runs it. Playback itself never recomputes poses.",
         "",
         "This is the restart experiment pipeline. It does not configure robot control. Saved-mask benchmarks reuse segmentation, so SAM/detection options are listed but not executed. Shared matching replaces the legacy object-crop matcher. Live-only scheduling options have no effect in the sequential benchmark.",
         "",
@@ -228,14 +207,14 @@ def reference_markdown():
         "",
         "Tracking and growth have separate acceptance thresholds. Tracking defaults to 25% overlap within 5 mm; growth requires 75% within 3 mm before adding or confirming patches. An addition also needs 95% consistency with earlier retained depth/masks and 80% of its points measured again within 3 mm. These are experimental settings, not calibrated confidence: a geometrically ambiguous fit can still pass. Rejecting growth leaves pose tracking active. Initializing the first partial surface has no previous surface to compare against.",
         "",
-        "New surface experiments default to **Kalman filtering with a 25% geometry rejection allowance**. This is an empirical research default, not calibrated confidence. The allowance applies to both unmatched observed points and contradicted stored points; it also affects when the filter restarts. It is separate from the stricter growth thresholds above. Candidate selection and filter-off remain available. Noise values are assumptions, not measured confidence. `depth_tolerance_m` and `max_visible_outlier_fraction` test direct contradictions independently of covariance. Missing observations still allow group prediction. The mode does not estimate the probability that an object remains attached to its group.",
+        "New surface experiments default to **Kalman filtering with a 25% geometry rejection allowance**. This is an empirical research default, not calibrated confidence. The allowance applies to aggregate point disagreement; it never permits a connected surface patch in measured empty space. It is separate from the stricter growth thresholds above. Candidate selection and filter-off remain available. Noise values are assumptions, not measured confidence. `depth_tolerance_m` and `max_visible_outlier_fraction` test direct contradictions in every mode, including with uncertainty disabled. The field remains in the uncertainty section for saved-configuration compatibility. Missing observations still allow group prediction. The mode does not estimate the probability that an object remains attached to its group.",
         "Kalman mode propagates a 6D covariance with camera changes, consecutive measured group motion and time-scaled process noise. Current visible-surface information corrects the prediction in constrained directions. Innovation checks use both prediction and observation uncertainty. The legacy `reset_on_geometry_conflict=true` policy can restart the filter at a geometry-compatible proposal; setting it to `false` keeps the innovation check even when the previous prediction conflicts with depth/mask. A later geometry rejection restores the filter state. Rejected updates never grow the surface. Depth-normal constraints currently determine observation uncertainty; outline and image constraints used by fitting are omitted, so sideways motion on a flat patch can lag. Shared sensor biases and mistaken group membership remain limitations.",
         "",
-        "Recovery options are explicit experiments, not promoted defaults: scene-depth constraints and observed-overlap preference default off; extra recovery starts default to zero; depth-range cleanup and retained-view limits default to null. Outline coverage remains an opt-in soft preference for partial surfaces; its weight is not a rejection threshold. Newly exposed sides may be absent from the stored surface, so a strong preference can bias a fit. Velocity prediction lives only in benchmark scripts. Dated comparisons and their limitations are in the [research log](../../../../../docs/proofs/flash-tracker-restart/RESEARCH.md).",
+        "The shared fresh-session recipe enables scene-depth search cost, observed-overlap preference, four recovery starts, depth-range cleanup and one retained fit view. It disables Kalman reset on geometry conflict. Outline coverage is a soft preference with weight 0.5, not a rejection threshold. Older saved experiments keep their configuration; dataclass defaults preserve that compatibility. Newly exposed sides may be absent from the stored surface, so a strong preference can bias a fit. Velocity prediction lives only in benchmark scripts. Dated comparisons and their limitations are in the [research log](../../../../../docs/proofs/flash-tracker-restart/RESEARCH.md).",
         "",
         "For CLI use, `flash_tracker_experiment` accepts `--config` (a JSON object containing `vision_pipeline`), `--surface-experiment-config`, `--group-experiment-config`, and `--shared-matching-config`. The GUI uses the complete sectioned JSON below. `retain_motion_reference` corresponds to `--retain-motion-reference`.",
         "",
-        "Regenerate this reference with `python -m benchmarks.flash_pipeline_settings --write-reference <path>`. Defaults come from the actual configuration classes. Units appear in names: `_m` metres, `_px` pixels, `_s` seconds.",
+        "Regenerate this reference with `python -m benchmarks.flash_pipeline_settings --write-reference <path>`. Defaults come from `surface_session_config.defaults()`, shared with the live debugger; they include the current research recipe over the compatibility dataclass defaults. Units appear in names: `_m` metres, `_px` pixels, `_s` seconds.",
         "",
         "| Option | Default | Meaning / scope |",
         "| --- | --- | --- |",

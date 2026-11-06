@@ -42,8 +42,9 @@ class PoseUncertaintyConfig:
     max_measurements: int = 256
     # Nominal chi-square coverage under the assumed noise model, not accuracy.
     compatibility_probability: float = 0.95
-    # Distance uses ShapeConfig.depth_tolerance_m, independently of covariance.
-    # A small fraction of noisy depth pixels may fail this direct check.
+    # Geometry limit, applied even when uncertainty.enabled is false.
+    # Distance uses ShapeConfig.depth_tolerance_m; a small fraction of noisy
+    # depth pixels may fail, but coherent empty-space protrusion is never allowed.
     max_visible_outlier_fraction: float = 0.1
     # Prefer compatible predicted point sources; otherwise least pose change.
     prefer_supported_prediction: bool = True
@@ -164,36 +165,5 @@ class SurfacePoseUncertainty:
 
 
 def check_surface_contradiction(geometry, pose, config):
-    """Absolute observed-shape check, independent of covariance magnitude."""
-    scene = geometry.scene_depth_check(pose) if geometry.config.scene_depth_constraints else {}
-    scene_outliers = scene.get("scene_depth_outlier_fraction", 0.0)
-    coherent_protrusion = scene.get("scene_depth_coherent_protrusion", False)
-    if geometry.reverse_fits:
-        direct = geometry.partial_surface_check(pose)
-        accepted = (
-            direct["has_visible_overlap"]
-            and not coherent_protrusion
-            and max(
-                direct["observed_outlier_fraction"], direct["free_space_outlier_fraction"], scene_outliers
-            )
-            <= config.max_visible_outlier_fraction
-        )
-        return {"accepted": accepted, **direct, **scene}
-    distance = cKDTree(move(geometry.reference, pose)).query(geometry.observation["obs"]["points"])[0]
-    outliers = float(np.mean(distance > geometry.config.depth_tolerance_m))
-    residual = geometry.residual(pose)
-    n, m = len(geometry.reference_queries), len(geometry.target_queries)
-    # WholeSurfaceFit's free-space block already accounts for projection,
-    # silhouette, depth tolerance, and possible foreground occlusion.
-    free = residual[n + m : n + m + n] * np.sqrt(n)
-    contradictions = float(np.mean(free > 1))
-    accepted = (
-        not coherent_protrusion
-        and max(outliers, contradictions, scene_outliers) <= config.max_visible_outlier_fraction
-    )
-    return {
-        "accepted": accepted,
-        "observed_outlier_fraction": outliers,
-        "free_space_outlier_fraction": contradictions,
-        **scene,
-    }
+    """Compatibility entry point; validity belongs to the measured geometry."""
+    return geometry.check_pose(pose, max_outlier_fraction=config.max_visible_outlier_fraction)

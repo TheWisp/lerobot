@@ -283,6 +283,7 @@ def review_sealed_reference_view(
             for fit in fits:
                 result = {
                     "seed": fit.seed,
+                    "geometry_accepted": fit.geometry_accepted,
                     "converged": fit.converged,
                     "fit_cost": fit.fit_cost,
                     "measured_to_reference_p90_m": fit.measured_to_reference_p90_m,

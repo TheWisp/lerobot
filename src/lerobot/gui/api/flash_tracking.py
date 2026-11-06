@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lerobot.policies.flash.causal_service import CausalTrackingConfig, default_causal_tracking_config
@@ -28,6 +29,11 @@ _directory: Path | None = None
 
 class TrackingStart(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    engine: Literal["legacy", "experiment"] = "legacy"
+    pipeline_settings: dict | None = None
+    method: Literal["conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"] = (
+        "group_growing"
+    )
     serial: str = ""
     width: int = Field(default=1280, gt=0)
     height: int = Field(default=720, gt=0)
@@ -60,6 +66,18 @@ class TrackingStart(BaseModel):
                 raise ValueError(str(exc)) from exc
         if "causal_tracking" in values:
             CausalTrackingConfig.from_config(values["causal_tracking"])
+        if values.get("engine") == "experiment":
+            from lerobot.policies.flash.surface_session_config import defaults, validate
+
+            values["pipeline_settings"] = validate(values.get("pipeline_settings") or defaults())
+            settings = values["pipeline_settings"]
+            if settings["surface_experiment"] is None:
+                raise ValueError("Live surface inspection requires a surface experiment")
+            if (
+                values.get("method", "group_growing").startswith("group_")
+                and settings["group_experiment"] is None
+            ):
+                raise ValueError("Selected method requires group settings")
         return values
 
 
@@ -80,6 +98,14 @@ def _python() -> str:
 @router.get("/defaults")
 async def defaults() -> dict:
     return TrackingStart().model_dump()
+
+
+@router.get("/shared-defaults")
+async def shared_defaults() -> dict:
+    from lerobot.policies.flash.surface_registration import MATCHERS
+    from lerobot.policies.flash.surface_session_config import defaults
+
+    return {"settings": defaults(), "matchers": MATCHERS}
 
 
 @router.post("/cameras")
@@ -129,9 +155,10 @@ async def start(req: TrackingStart) -> dict:
         from .robot import release_preview_cameras
 
         await asyncio.get_running_loop().run_in_executor(_io, release_preview_cameras)
+        module = "live_surface_worker" if req.engine == "experiment" else "tracking_debug_worker"
         await run._launch_subprocess(
-            [_python(), "-u", "-m", "lerobot.policies.flash.tracking_debug_worker", str(_directory)],
-            command="flash_tracking",
+            [_python(), "-u", "-m", f"lerobot.policies.flash.{module}", str(_directory)],
+            command="flash_surface_live" if req.engine == "experiment" else "flash_tracking",
             config=req.model_dump(),
         )
         return {"status": "started"}
@@ -142,7 +169,11 @@ async def control(req: TrackingControl) -> dict:
     from . import run
 
     proc = run._active_process
-    if run._active_command != "flash_tracking" or proc is None or proc.returncode is not None:
+    if (
+        run._active_command not in {"flash_tracking", "flash_surface_live"}
+        or proc is None
+        or proc.returncode is not None
+    ):
         raise HTTPException(409, "Open the tracking camera first")
     if req.action == "select" and req.point is None and not req.prompt.strip():
         raise HTTPException(400, "Enter an object name or select a point")
@@ -163,7 +194,7 @@ async def state() -> dict:
     from . import run
 
     directory = _directory
-    running = run._active_command == "flash_tracking" and run.is_run_active()
+    running = run._active_command in {"flash_tracking", "flash_surface_live"} and run.is_run_active()
 
     def read():
         result = {"running": running, "server_time_s": time.perf_counter()}
@@ -185,6 +216,19 @@ async def state() -> dict:
 async def stop() -> dict:
     from . import run
 
-    if run._active_command != "flash_tracking" or not run.is_run_active():
+    if run._active_command not in {"flash_tracking", "flash_surface_live"} or not run.is_run_active():
         return {"status": "stopped"}
     return await run.stop_process()
+
+
+@router.get("/scene")
+async def scene():
+    directory = _directory
+
+    def read():
+        if directory is None or not (directory / "scene.bin").is_file():
+            raise HTTPException(404, "No processed live frame yet")
+        return (directory / "scene.bin").read_bytes()
+
+    packet = await asyncio.get_running_loop().run_in_executor(_io, read)
+    return Response(packet, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})

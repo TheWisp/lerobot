@@ -135,6 +135,7 @@ class VisionPipelineConfig:
                 raise ValueError(f"invalid observation setting: {key}")
         for key, value in asdict(self.shape).items():
             if key in {
+                "registration",
                 "batch_jacobian",
                 "require_full_mask_coverage",
                 "scene_depth_constraints",
@@ -613,6 +614,7 @@ class SurfacePoseBackend:
                 or (
                     detail["status"] == "fitted"
                     and not insufficient_extent
+                    and not diagnostics["scene_depth_coherent_protrusion"]
                     and diagnostics.get("converged", False)
                     and diagnostics.get("inliers", 0) >= self.config.registration_min_inliers
                     and diagnostics.get("surface_p90_mm", float("inf"))

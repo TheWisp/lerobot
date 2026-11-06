@@ -155,9 +155,12 @@ def test_retained_view_pose_is_respected_and_duplicate_views_do_not_add_weight()
     assert one.score(expected) == pytest.approx(base.score(truth), abs=1e-10)
     assert repeated.score(expected) == pytest.approx(one.score(expected), abs=1e-10)
     gate = PoseUncertaintyConfig()
-    assert check_surface_contradiction(one, expected, gate) == check_surface_contradiction(
-        repeated, expected, gate
-    )
+    single_check = check_surface_contradiction(one, expected, gate)
+    repeated_check = check_surface_contradiction(repeated, expected, gate)
+    single_counts = single_check.pop("scene_depth_exposed_weights")
+    repeated_counts = repeated_check.pop("scene_depth_exposed_weights")
+    assert repeated_counts == [*single_counts, single_counts[-1]]
+    assert single_check == repeated_check
 
 
 def test_partial_matching_is_used_by_sequential_session_and_its_kalman_checks():
@@ -190,7 +193,7 @@ def test_partial_matching_is_used_by_sequential_session_and_its_kalman_checks():
     assert error["rotation_error_deg"] < 2
 
 
-def test_group_validation_does_not_repeat_the_old_unconditional_surface_check():
+def test_group_validation_does_not_repeat_the_old_unconditional_surface_check(monkeypatch):
     from benchmarks.flash_experiment_groups import GroupConfig, GroupHints
     from lerobot.policies.flash.experimental_surface_session import PoseHint
     from lerobot.policies.flash.perception import RGBDFrame
@@ -209,6 +212,11 @@ def test_group_validation_does_not_repeat_the_old_unconditional_surface_check():
         "controlled",
     )
     groups = GroupHints(GroupConfig(), uncertainty_config=PoseUncertaintyConfig(enabled=True))
+
+    def old_comparison(*args):
+        raise AssertionError("Geometry validation must not run a different, overwritten verdict first")
+
+    monkeypatch.setattr(groups, "_compare", old_comparison)
     hint = PoseHint(truth, "test group", 1.0, 0.0, 0)
     accepted, details = groups.compare_candidate(
         frame,
