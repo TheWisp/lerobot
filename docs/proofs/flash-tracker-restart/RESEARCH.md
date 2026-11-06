@@ -3917,8 +3917,12 @@ masks; it was not inherently protected.
 Recomputed SAM on all 628 gamepad-demo frames: masks before occlusion (0–425)
 are identical, and the hidden cube has no mask in frames 428–627, rather than
 moving onto the tape-roll hole. Reappearance is covered by a controlled recovery
-test; this recording does not expose the cube again. Its shared-LK tracking result
-is being regenerated for the browser; older cached variants retain old masks.
+test; this recording does not expose the cube again. The full 628-frame shared-LK
+tracking result is hosted as `3ddc3b284cdfc384ad16`, labelled **Shared core + fixed
+SAM recovery · Nov 6**. Its final 200 frames contain no cube mask; the cube's pose
+there is a group prediction. Older cached variants retain old masks. The exporter
+also no longer offers uncomputed methods as empty playback choices; a method that
+was attempted but returned no accepted poses remains visible.
 [Segmentation evidence](library-registration-20261105/sam-cube-recovery.json).
 
 Mutation checks restore each empty-mask, ownership, CLI-launch, axes and late-list
@@ -3946,3 +3950,12 @@ plus stopped jaws before full closure could indicate contact; a jam or table
 contact can produce the same signal. For rigid-pose support, additionally verify
 object/gripper co-movement when visible and retain uncertainty while hidden.
 Current alone supplies neither object identity nor its transform in the gripper.
+
+A more directly related [August 2026 preprint](https://arxiv.org/html/2608.23983v1)
+uses SO-ARM101/Feetech STS3215 hardware: contact is a sustained rise in the load
+register above measured free-closing noise. That register is an effort proxy,
+not calibrated force. Its hardware grasp-success criterion also uses load, so it
+does not independently prove absence of slipping or rotation in the jaws. This
+supports testing contact detection on our hardware, not treating current as a
+guaranteed rigid attachment. Our existing gamepad recording has joint positions
+but no recorded motor-current channel; it cannot validate that detector offline.

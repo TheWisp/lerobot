@@ -121,6 +121,23 @@ def test_export_keeps_irregular_camera_times_and_missing_poses(tmp_path):
     assert not data["has_correspondences"] and first["matches"] is None
 
 
+@pytest.mark.parametrize("has_pose", [True, False])
+def test_export_only_offers_methods_that_were_run(tmp_path, has_pose):
+    run, _ = completed_run(tmp_path)
+    rows = [json.loads(line) for line in (run / "frames.jsonl").read_text().splitlines()]
+    for row in rows:
+        original = row["objects"]["object"]
+        row["objects"]["object"] = {
+            "group_fixed": original["ufm_chain"] if has_pose else None,
+        }
+    (run / "frames.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+    result = export(run, tmp_path / "browser")
+    for filename in ("manifest.json", "overlays.json"):
+        # An attempted method with no accepted poses still belongs in the result;
+        # unrelated methods must not appear as empty playback choices.
+        assert set(json.loads((result / filename).read_text())["methods"]) == {"group_fixed"}
+
+
 def test_export_preserves_raw_2d_predictions_and_earlier_retry_source(tmp_path):
     run, _ = completed_run(tmp_path)
     evidence = recorded_matches(run)

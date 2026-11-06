@@ -101,7 +101,8 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
             references[role] = np.concatenate(
                 (reference_axes(ref), ref[spatial_sample(ref, DISPLAY_SURFACE_POINTS)])
             )
-    methods = dict(METHODS)
+    recorded_fields = {key for row in rows for obj in row["objects"].values() for key in obj}
+    methods = {name: label for name, label in METHODS.items() if name in recorded_fields}
     if any("ufm_retained_reference" in obj for obj in rows[0]["objects"].values()):
         methods["ufm_retained_reference"] = "Pose with earlier-frame recovery"
     for name, label in (
