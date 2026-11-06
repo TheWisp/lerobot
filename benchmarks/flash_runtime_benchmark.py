@@ -14,6 +14,7 @@ import time
 from contextlib import ExitStack
 from dataclasses import asdict, replace
 from functools import wraps
+from inspect import isgeneratorfunction
 from itertools import islice
 from pathlib import Path
 from unittest.mock import patch
@@ -47,12 +48,11 @@ class FitProfile(ExitStack):
     def instrument(self, owner, name, label):
         original = getattr(owner, name)
 
-        @wraps(original)
-        def measured(*args, **kwargs):
+        def measure(call, *args, **kwargs):
             active = [time.perf_counter(), 0.0]
             self.stack.append(active)
             try:
-                return original(*args, **kwargs)
+                return call(*args, **kwargs)
             finally:
                 elapsed = time.perf_counter() - active[0]
                 self.stack.pop()
@@ -63,7 +63,24 @@ class FitProfile(ExitStack):
                 row["inclusive_ms"] += 1000 * elapsed
                 row["exclusive_ms"] += 1000 * (elapsed - active[1])
 
-        self.enter_context(patch.object(owner, name, measured))
+        @wraps(original)
+        def measured(*args, **kwargs):
+            return measure(original, *args, **kwargs)
+
+        @wraps(original)
+        def measured_generator(*args, **kwargs):
+            generator = original(*args, **kwargs)
+            while True:
+                try:
+                    value = measure(next, generator)
+                except StopIteration:
+                    return
+                # Time computation between yields, not the consumer's work.
+                yield value
+
+        self.enter_context(
+            patch.object(owner, name, measured_generator if isgeneratorfunction(original) else measured)
+        )
 
     def __enter__(self):
         from benchmarks.flash_experiment_groups import GroupHints
@@ -79,9 +96,15 @@ class FitProfile(ExitStack):
             "__init__",
             "refine",
             "search",
+            "_solve",
+            "_refine_visible_correspondences",
             "residual",
             "batch_residuals",
             "score",
+            "check_pose",
+            "partial_surface_check",
+            "scene_depth_check",
+            "uncovered_mask",
             "_legacy_view_residual",
             "_projection_evidence",
             "_scene_depth_evidence",
@@ -92,6 +115,14 @@ class FitProfile(ExitStack):
         self.instrument(uncertainty.SurfacePoseUncertainty, "__init__", "covariance")
         self.instrument(PoseKalmanFilter, "correct", "kalman_update")
         self.instrument(session.SurfaceStore, "extend", "surface_growth")
+        from lerobot.policies.flash import surface_tracking
+        from lerobot.policies.flash.shared_image_tracking import SharedFrameTracker
+        from lerobot.policies.flash.surface_registration import LibraryMatcher
+
+        self.instrument(surface_tracking, "observation", "observation")
+        self.instrument(LibraryMatcher, "prepare", "library.prepare")
+        self.instrument(LibraryMatcher, "refine", "library.refine")
+        self.instrument(SharedFrameTracker, "update", "image_matching")
         for name in ("predict", "compare_candidate", "observe"):
             self.instrument(GroupHints, name, "group." + name)
         return self

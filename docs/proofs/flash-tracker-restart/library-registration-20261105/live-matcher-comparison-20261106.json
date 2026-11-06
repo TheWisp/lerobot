@@ -1,0 +1,733 @@
+{
+  "scope": "60 fresh RealSense D435 frames, 1280x720, approximately 10 sampled frames/s; one stationary gamepad. One sequential uninstrumented run and one separate profiled run per matcher. Same canonical live settings; only 3D backend changes. Actual LiveSurfaceSession and live_scene_packet; saved SAM masks, measured SAM times added to estimate end-to-end cost. No capture wait, disk I/O, HTTP transfer or browser rendering included. First initialization frame excluded; first library loading/solve included. No other benchmark/test ran concurrently.",
+  "source_revision": "a298ef421",
+  "artifact_root": "/home/feit/.cache/flash-tracker-restart/live-matchers-20261106",
+  "accuracy_limit": "No ground-truth pose labels. Stationarity and accepted geometry are diagnostics, not proof of dynamic/occluded accuracy.",
+  "settings": {
+    "config": {
+      "backend": "surface",
+      "sam_resolution": 504,
+      "min_similarity": 0.75,
+      "registration_threshold_m": 0.005,
+      "registration_min_inliers": 12,
+      "registration_trials": 100,
+      "visible_shape_fallback": false,
+      "parallel_surface_objects": true,
+      "pipeline_surface_frames": true,
+      "surface_object_workers": 2,
+      "surface_reference_max_points_per_view": 15000,
+      "compiled_surface_fit": true,
+      "reuse_surface_search": true,
+      "detection_correction": {
+        "enabled": false,
+        "offline_interval_frames": 16,
+        "runtime_interval_frames": 60,
+        "min_detector_score": 0.8,
+        "min_tracker_score": 0.8,
+        "min_mask_overlap": 0.5
+      },
+      "observation": {
+        "mask_margin_px": 2,
+        "depth_span_m": 0.01,
+        "depth_neighborhood_px": 3,
+        "normal_bilateral_diameter_px": 5,
+        "normal_bilateral_sigma_px": 2.0,
+        "huber_m": 0.005,
+        "surface_spacing_m": 0.003,
+        "samples_across_object": 64,
+        "min_surface_spacing_m": 0.001,
+        "component_gap_m": null,
+        "depth_outlier_sigma": 3,
+        "filtered_depth_for_fitting": true,
+        "validation_tile_px": 4
+      },
+      "shape": {
+        "registration": {
+          "backend": "scipy",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3.0,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968,
+          "appearance_weight": 1.0
+        },
+        "depth_tolerance_m": 0.005,
+        "surface_spacing_m": 0.003,
+        "mask_boundary_tolerance_px": 2.0,
+        "require_full_mask_coverage": true,
+        "mask_coverage_weight": 0.5,
+        "scene_depth_constraints": true,
+        "prefer_observed_overlap": true,
+        "max_surface_distance_m": 0.03,
+        "max_evaluations": 50,
+        "solver_tolerance": 1e-05,
+        "max_fit_points": 2048,
+        "nn_queries_per_worker": 512,
+        "batch_jacobian": true,
+        "batch_query_workers": 8
+      },
+      "motion": {
+        "crop_min_px": 160,
+        "crop_max_px": 480,
+        "crop_extent_multiplier": 2.5,
+        "input_size_px": 320,
+        "grid_step_px": 4,
+        "covisibility_min": 0.5,
+        "min_ransac_pairs": 6,
+        "ransac_distance_m": 0.006,
+        "ransac_confidence": 0.99,
+        "refinement_steps": 2,
+        "connected_dilation_px": 7
+      }
+    },
+    "surface_experiment": {
+      "spacing_m": 0.003,
+      "agreement_m": 0.005,
+      "min_overlap": 0.25,
+      "growth_agreement_m": 0.003,
+      "growth_min_overlap": 0.75,
+      "patch_consistency": 0.95,
+      "patch_overlap": 0.8,
+      "image_weight": 1.0,
+      "surface_priority": true,
+      "partial_surface_matching": true,
+      "recovery_starts": 4,
+      "fit_view_limit": 1,
+      "confirmations": 2,
+      "max_patches": 32,
+      "max_pending": 8,
+      "points_per_patch": 1024,
+      "max_points": 8192,
+      "grow": true,
+      "retain_unobserved_pose": false,
+      "uncertainty": {
+        "enabled": true,
+        "mode": "kalman",
+        "initial_position_std_m": 0.005,
+        "initial_rotation_std_deg": 10.0,
+        "position_process_std_m_sqrt_s": 0.03,
+        "rotation_process_std_deg_sqrt_s": 2.0,
+        "reset_on_geometry_conflict": false,
+        "independent_error_m": 0.001,
+        "correlated_error_m": 0.002,
+        "correlation_length_m": 0.01,
+        "max_measurements": 256,
+        "compatibility_probability": 0.95,
+        "max_visible_outlier_fraction": 0.25,
+        "prefer_supported_prediction": true
+      }
+    },
+    "group_experiment": {
+      "context_radius_m": 0.25,
+      "min_inliers": 12,
+      "fit_threshold_m": 0.005,
+      "object_max_points": 120,
+      "object_max_frame_gap_s": 0.1,
+      "object_fb_threshold_px": 1.0,
+      "object_image_scale": 1.0,
+      "depth_support_radius_px": 1,
+      "support_confirmation_s": 1.0,
+      "point_evidence_weight": 1.0
+    },
+    "shared_matching": {
+      "backend": "lk",
+      "max_image_size_px": 640,
+      "scene_points": 800,
+      "object_points": 256,
+      "spacing_px": 5,
+      "history_frames": 64,
+      "depth_support_radius_px": 1,
+      "lk": {
+        "window_size_px": 21,
+        "pyramid_levels": 3,
+        "forward_backward_limit_px": 1.0
+      },
+      "ufm": {
+        "covisibility_min": 0.5
+      }
+    },
+    "retain_motion_reference": true
+  },
+  "sam_mean_ms_excluding_initialization": 23.16480079346131,
+  "results": [
+    {
+      "backend": "scipy",
+      "input_sha256": "08245978848df8aeae0bfb48123fc00566ce797053dd9ffddd8fdaab256e96e7",
+      "core_ms": {
+        "median": 510.9246430802159,
+        "mean": 521.4196556638452,
+        "p90": 613.9913092367351,
+        "max": 823.7327910028398
+      },
+      "display_ms": {
+        "median": 21.368755027651787,
+        "mean": 21.274290034760547,
+        "p90": 22.39672818686813,
+        "max": 25.257152039557695
+      },
+      "estimated_total_ms_including_recorded_sam": {
+        "median": 557.4669099296443,
+        "mean": 565.8905477247248,
+        "p90": 656.9906971883029,
+        "max": 868.7011259607971
+      },
+      "estimated_fps": 1.767126176644403,
+      "status": {
+        "initialized": 1,
+        "observed_candidate": 59
+      },
+      "max_stationary_surface_displacement_mm": 0.09086659142128886,
+      "final_surface_points": 675,
+      "mean_search_evaluations": 45.54237288135593,
+      "mean_validation_count": 6.813559322033898,
+      "profile_per_frame": {
+        "image_matching": {
+          "calls": 1.0,
+          "inclusive_ms": 10.064108356423045,
+          "exclusive_ms": 10.064108356423045
+        },
+        "observation": {
+          "calls": 1.0,
+          "inclusive_ms": 3.7761328315709606,
+          "exclusive_ms": 3.7761328315709606
+        },
+        "group.predict": {
+          "calls": 1.0,
+          "inclusive_ms": 13.520256490880719,
+          "exclusive_ms": 1.5264674892917403
+        },
+        "fitter.__init__": {
+          "calls": 5.661016949152542,
+          "inclusive_ms": 46.61349041123038,
+          "exclusive_ms": 28.176503310224703
+        },
+        "fitter._legacy_view_residual": {
+          "calls": 553.8305084745763,
+          "inclusive_ms": 68.48962557841472,
+          "exclusive_ms": 68.48962557841472
+        },
+        "fitter._projection_evidence": {
+          "calls": 571.1186440677966,
+          "inclusive_ms": 82.23609049149425,
+          "exclusive_ms": 82.23609049149425
+        },
+        "fitter._scene_depth_evidence": {
+          "calls": 571.1186440677966,
+          "inclusive_ms": 76.586822262902,
+          "exclusive_ms": 76.586822262902
+        },
+        "fitter.residual": {
+          "calls": 335.2881355932203,
+          "inclusive_ms": 351.1856989135918,
+          "exclusive_ms": 154.7790835355014
+        },
+        "fitter.batch_residuals": {
+          "calls": 36.42372881355932,
+          "inclusive_ms": 317.9561773046725,
+          "exclusive_ms": 43.90589839293448
+        },
+        "fitter._solve": {
+          "calls": 3.0,
+          "inclusive_ms": 412.4836356791478,
+          "exclusive_ms": 16.012798749123526
+        },
+        "fitter.scene_depth_check": {
+          "calls": 8.64406779661017,
+          "inclusive_ms": 3.85918360503422,
+          "exclusive_ms": 0.45705739491603387
+        },
+        "fitter.partial_surface_check": {
+          "calls": 8.64406779661017,
+          "inclusive_ms": 8.186347935530279,
+          "exclusive_ms": 5.651872952358198
+        },
+        "fitter.check_pose": {
+          "calls": 8.64406779661017,
+          "inclusive_ms": 18.37265977371579,
+          "exclusive_ms": 6.3271282331512895
+        },
+        "fitter.score": {
+          "calls": 12.830508474576272,
+          "inclusive_ms": 23.632414438722307,
+          "exclusive_ms": 0.0423323007900331
+        },
+        "fitter.search": {
+          "calls": 1.0,
+          "inclusive_ms": 451.337896577493,
+          "exclusive_ms": 0.899285011948481
+        },
+        "covariance": {
+          "calls": 1.0,
+          "inclusive_ms": 0.9997702002430618,
+          "exclusive_ms": 0.9997702002430618
+        },
+        "kalman_update": {
+          "calls": 1.0,
+          "inclusive_ms": 0.2744099494243451,
+          "exclusive_ms": 0.2744099494243451
+        },
+        "surface_growth": {
+          "calls": 1.0,
+          "inclusive_ms": 1.958427151617736,
+          "exclusive_ms": 1.958427151617736
+        },
+        "group.observe": {
+          "calls": 1.0,
+          "inclusive_ms": 0.71351669365698,
+          "exclusive_ms": 0.71351669365698
+        }
+      },
+      "profiling_parity": {
+        "max_pose_matrix_element_difference": 0.0,
+        "same_status_and_map_events": true
+      }
+    },
+    {
+      "backend": "small_gicp",
+      "input_sha256": "08245978848df8aeae0bfb48123fc00566ce797053dd9ffddd8fdaab256e96e7",
+      "core_ms": {
+        "median": 315.16775203635916,
+        "mean": 351.5299398252756,
+        "p90": 472.5660732248799,
+        "max": 623.6607349710539
+      },
+      "display_ms": {
+        "median": 21.153821027837694,
+        "mean": 23.916706283995094,
+        "p90": 22.850877791643143,
+        "max": 188.50035895593464
+      },
+      "estimated_total_ms_including_recorded_sam": {
+        "median": 360.6333479983732,
+        "mean": 398.6425904687336,
+        "p90": 543.7494566314854,
+        "max": 667.725546984002
+      },
+      "estimated_fps": 2.5085126976126055,
+      "status": {
+        "initialized": 1,
+        "observed_candidate": 59
+      },
+      "max_stationary_surface_displacement_mm": 0.2335315500041143,
+      "final_surface_points": 689,
+      "mean_search_evaluations": 136.23728813559322,
+      "mean_validation_count": 6.779661016949152,
+      "profile_per_frame": {
+        "image_matching": {
+          "calls": 1.0,
+          "inclusive_ms": 9.996028984028657,
+          "exclusive_ms": 9.996028984028657
+        },
+        "observation": {
+          "calls": 1.0,
+          "inclusive_ms": 3.7647688187169446,
+          "exclusive_ms": 3.7647688187169446
+        },
+        "group.predict": {
+          "calls": 1.0,
+          "inclusive_ms": 13.417152899033312,
+          "exclusive_ms": 1.540260338145545
+        },
+        "fitter.__init__": {
+          "calls": 5.661016949152542,
+          "inclusive_ms": 46.22164936302135,
+          "exclusive_ms": 27.951828389570622
+        },
+        "library.prepare": {
+          "calls": 3.0,
+          "inclusive_ms": 1.353901921439979,
+          "exclusive_ms": 1.353901921439979
+        },
+        "fitter._projection_evidence": {
+          "calls": 307.1525423728813,
+          "inclusive_ms": 48.841606260285225,
+          "exclusive_ms": 48.841606260285225
+        },
+        "fitter._scene_depth_evidence": {
+          "calls": 307.1525423728813,
+          "inclusive_ms": 46.05836224825106,
+          "exclusive_ms": 46.05836224825106
+        },
+        "fitter._legacy_view_residual": {
+          "calls": 198.03389830508473,
+          "inclusive_ms": 24.69458480629975,
+          "exclusive_ms": 24.69458480629975
+        },
+        "fitter.residual": {
+          "calls": 155.08474576271186,
+          "inclusive_ms": 192.6936222777023,
+          "exclusive_ms": 75.51813728602257
+        },
+        "fitter.score": {
+          "calls": 56.067796610169495,
+          "inclusive_ms": 107.76856678668251,
+          "exclusive_ms": 7.423416650222646
+        },
+        "library.refine": {
+          "calls": 3.0,
+          "inclusive_ms": 17.504718924193817,
+          "exclusive_ms": 2.283465321436209
+        },
+        "fitter._solve": {
+          "calls": 3.0,
+          "inclusive_ms": 45.836429336597604,
+          "exclusive_ms": 0.8942128674095591
+        },
+        "fitter.scene_depth_check": {
+          "calls": 8.610169491525424,
+          "inclusive_ms": 3.799902311707768,
+          "exclusive_ms": 0.4327930835612371
+        },
+        "fitter.partial_surface_check": {
+          "calls": 8.610169491525424,
+          "inclusive_ms": 8.067317729247575,
+          "exclusive_ms": 5.541653270730591
+        },
+        "fitter.check_pose": {
+          "calls": 8.610169491525424,
+          "inclusive_ms": 18.03122283358095,
+          "exclusive_ms": 6.164002792625609
+        },
+        "fitter.batch_residuals": {
+          "calls": 2.559322033898305,
+          "inclusive_ms": 62.212572109459316,
+          "exclusive_ms": 7.860737391037204
+        },
+        "fitter.search": {
+          "calls": 1.0,
+          "inclusive_ms": 280.346147627254,
+          "exclusive_ms": 57.26455773278219
+        },
+        "covariance": {
+          "calls": 1.0,
+          "inclusive_ms": 1.0240827114873772,
+          "exclusive_ms": 1.0240827114873772
+        },
+        "kalman_update": {
+          "calls": 1.0,
+          "inclusive_ms": 0.294191514189213,
+          "exclusive_ms": 0.294191514189213
+        },
+        "surface_growth": {
+          "calls": 1.0,
+          "inclusive_ms": 2.0436532223218324,
+          "exclusive_ms": 2.0436532223218324
+        },
+        "group.observe": {
+          "calls": 1.0,
+          "inclusive_ms": 0.7090699440657587,
+          "exclusive_ms": 0.7090699440657587
+        }
+      },
+      "profiling_parity": {
+        "max_pose_matrix_element_difference": 1.9710700628096378e-14,
+        "same_status_and_map_events": true
+      }
+    },
+    {
+      "backend": "open3d_plane",
+      "input_sha256": "08245978848df8aeae0bfb48123fc00566ce797053dd9ffddd8fdaab256e96e7",
+      "core_ms": {
+        "median": 328.67576100397855,
+        "mean": 366.6296016979347,
+        "p90": 496.8526086187922,
+        "max": 1041.9169790111482
+      },
+      "display_ms": {
+        "median": 21.262453985400498,
+        "mean": 21.138570303989226,
+        "p90": 22.45566979981959,
+        "max": 23.497921007219702
+      },
+      "estimated_total_ms_including_recorded_sam": {
+        "median": 373.2770059723407,
+        "mean": 410.9632008269003,
+        "p90": 540.8808027859777,
+        "max": 1086.163793981541
+      },
+      "estimated_fps": 2.433307892258716,
+      "status": {
+        "initialized": 1,
+        "observed_candidate": 59
+      },
+      "max_stationary_surface_displacement_mm": 0.2335315500041143,
+      "final_surface_points": 686,
+      "mean_search_evaluations": 165.96610169491527,
+      "mean_validation_count": 6.779661016949152,
+      "profile_per_frame": {
+        "image_matching": {
+          "calls": 1.0,
+          "inclusive_ms": 10.010358493704096,
+          "exclusive_ms": 10.010358493704096
+        },
+        "observation": {
+          "calls": 1.0,
+          "inclusive_ms": 3.771188607739316,
+          "exclusive_ms": 3.771188607739316
+        },
+        "group.predict": {
+          "calls": 1.0,
+          "inclusive_ms": 13.478617323957131,
+          "exclusive_ms": 1.5326964765613489
+        },
+        "fitter.__init__": {
+          "calls": 5.661016949152542,
+          "inclusive_ms": 46.25838966073342,
+          "exclusive_ms": 27.988729609760565
+        },
+        "library.prepare": {
+          "calls": 3.0,
+          "inclusive_ms": 2.107689254798816,
+          "exclusive_ms": 2.107689254798816
+        },
+        "fitter._projection_evidence": {
+          "calls": 320.3728813559322,
+          "inclusive_ms": 51.319411034316964,
+          "exclusive_ms": 51.319411034316964
+        },
+        "fitter._scene_depth_evidence": {
+          "calls": 320.3728813559322,
+          "inclusive_ms": 48.3769544753467,
+          "exclusive_ms": 48.3769544753467
+        },
+        "fitter._legacy_view_residual": {
+          "calls": 205.1864406779661,
+          "inclusive_ms": 25.76124694758742,
+          "exclusive_ms": 25.76124694758742
+        },
+        "fitter.residual": {
+          "calls": 159.20338983050848,
+          "inclusive_ms": 195.35466468344458,
+          "exclusive_ms": 76.15712515800655
+        },
+        "fitter.score": {
+          "calls": 56.610169491525426,
+          "inclusive_ms": 107.45070621339698,
+          "exclusive_ms": 7.539728639639472
+        },
+        "library.refine": {
+          "calls": 3.0,
+          "inclusive_ms": 17.97128031799822,
+          "exclusive_ms": 2.959196808968939
+        },
+        "fitter._solve": {
+          "calls": 3.0,
+          "inclusive_ms": 53.56179025533246,
+          "exclusive_ms": 8.92825733171776
+        },
+        "fitter.scene_depth_check": {
+          "calls": 8.610169491525424,
+          "inclusive_ms": 3.8602872134060044,
+          "exclusive_ms": 0.4495197031015562
+        },
+        "fitter.partial_surface_check": {
+          "calls": 8.610169491525424,
+          "inclusive_ms": 8.08348126958077,
+          "exclusive_ms": 5.552021095971182
+        },
+        "fitter.check_pose": {
+          "calls": 8.610169491525424,
+          "inclusive_ms": 18.07810311596367,
+          "exclusive_ms": 6.134334632976896
+        },
+        "fitter.batch_residuals": {
+          "calls": 2.694915254237288,
+          "inclusive_ms": 67.06557095926887,
+          "exclusive_ms": 8.473328140098602
+        },
+        "fitter.search": {
+          "calls": 1.0,
+          "inclusive_ms": 300.98899668062865,
+          "exclusive_ms": 61.263993183166676
+        },
+        "covariance": {
+          "calls": 1.0,
+          "inclusive_ms": 1.043186051439557,
+          "exclusive_ms": 1.043186051439557
+        },
+        "kalman_update": {
+          "calls": 1.0,
+          "inclusive_ms": 0.3060366932728912,
+          "exclusive_ms": 0.3060366932728912
+        },
+        "surface_growth": {
+          "calls": 1.0,
+          "inclusive_ms": 2.053712220404739,
+          "exclusive_ms": 2.053712220404739
+        },
+        "group.observe": {
+          "calls": 1.0,
+          "inclusive_ms": 0.7278977654542838,
+          "exclusive_ms": 0.7278977654542838
+        }
+      },
+      "profiling_parity": {
+        "max_pose_matrix_element_difference": 0.0,
+        "same_status_and_map_events": true
+      }
+    },
+    {
+      "backend": "open3d_color",
+      "input_sha256": "08245978848df8aeae0bfb48123fc00566ce797053dd9ffddd8fdaab256e96e7",
+      "core_ms": {
+        "median": 343.9495070488192,
+        "mean": 365.5696179938771,
+        "p90": 456.84821556787944,
+        "max": 774.0291400114074
+      },
+      "display_ms": {
+        "median": 21.073019015602767,
+        "mean": 21.216310969143475,
+        "p90": 22.711308591533452,
+        "max": 27.301347989123315
+      },
+      "estimated_total_ms_including_recorded_sam": {
+        "median": 391.1335989832878,
+        "mean": 409.98100429098514,
+        "p90": 499.77962281554943,
+        "max": 817.5164939602837
+      },
+      "estimated_fps": 2.4391373979128246,
+      "status": {
+        "initialized": 1,
+        "observed_candidate": 59
+      },
+      "max_stationary_surface_displacement_mm": 0.21180030828641178,
+      "final_surface_points": 691,
+      "mean_search_evaluations": 164.59322033898306,
+      "mean_validation_count": 6.796610169491525,
+      "profile_per_frame": {
+        "image_matching": {
+          "calls": 1.0,
+          "inclusive_ms": 10.019267286702801,
+          "exclusive_ms": 10.019267286702801
+        },
+        "observation": {
+          "calls": 1.0,
+          "inclusive_ms": 3.767019946727965,
+          "exclusive_ms": 3.767019946727965
+        },
+        "group.predict": {
+          "calls": 1.0,
+          "inclusive_ms": 13.51394164237841,
+          "exclusive_ms": 1.5302830823634008
+        },
+        "fitter.__init__": {
+          "calls": 5.661016949152542,
+          "inclusive_ms": 46.767742023803294,
+          "exclusive_ms": 28.271817691995114
+        },
+        "library.prepare": {
+          "calls": 3.0,
+          "inclusive_ms": 3.1114685274187033,
+          "exclusive_ms": 3.1114685274187033
+        },
+        "fitter._projection_evidence": {
+          "calls": 314.7118644067797,
+          "inclusive_ms": 50.51887852447581,
+          "exclusive_ms": 50.51887852447581
+        },
+        "fitter._scene_depth_evidence": {
+          "calls": 314.7118644067797,
+          "inclusive_ms": 47.45677936135523,
+          "exclusive_ms": 47.45677936135523
+        },
+        "fitter._legacy_view_residual": {
+          "calls": 202.67796610169492,
+          "inclusive_ms": 25.695126702006654,
+          "exclusive_ms": 25.695126702006654
+        },
+        "fitter.residual": {
+          "calls": 158.28813559322035,
+          "inclusive_ms": 197.37675781184177,
+          "exclusive_ms": 77.51061034317807
+        },
+        "fitter.score": {
+          "calls": 56.94915254237288,
+          "inclusive_ms": 109.35337187513173,
+          "exclusive_ms": 7.521145138494923
+        },
+        "library.refine": {
+          "calls": 3.0,
+          "inclusive_ms": 21.906547578864622,
+          "exclusive_ms": 5.701556224652203
+        },
+        "fitter._solve": {
+          "calls": 3.0,
+          "inclusive_ms": 57.809732861272295,
+          "exclusive_ms": 8.913503169531982
+        },
+        "fitter.scene_depth_check": {
+          "calls": 8.627118644067796,
+          "inclusive_ms": 3.881517303436679,
+          "exclusive_ms": 0.4546767035578141
+        },
+        "fitter.partial_surface_check": {
+          "calls": 8.627118644067796,
+          "inclusive_ms": 8.187273090065977,
+          "exclusive_ms": 5.627664943596632
+        },
+        "fitter.check_pose": {
+          "calls": 8.627118644067796,
+          "inclusive_ms": 18.278714554518526,
+          "exclusive_ms": 6.209924161015867
+        },
+        "fitter.batch_residuals": {
+          "calls": 2.7796610169491527,
+          "inclusive_ms": 65.89949888106183,
+          "exclusive_ms": 8.465436066232495
+        },
+        "fitter.search": {
+          "calls": 1.0,
+          "inclusive_ms": 302.4004755089833,
+          "exclusive_ms": 59.32342505548149
+        },
+        "covariance": {
+          "calls": 1.0,
+          "inclusive_ms": 1.0516464145917257,
+          "exclusive_ms": 1.0516464145917257
+        },
+        "kalman_update": {
+          "calls": 1.0,
+          "inclusive_ms": 0.3023510433780819,
+          "exclusive_ms": 0.3023510433780819
+        },
+        "surface_growth": {
+          "calls": 1.0,
+          "inclusive_ms": 2.0165858470629585,
+          "exclusive_ms": 2.0165858470629585
+        },
+        "group.observe": {
+          "calls": 1.0,
+          "inclusive_ms": 0.7276317702558965,
+          "exclusive_ms": 0.7276317702558965
+        }
+      },
+      "profiling_parity": {
+        "max_pose_matrix_element_difference": 3.859065844658005e-14,
+        "same_status_and_map_events": true
+      }
+    }
+  ],
+  "live_small_gicp": {
+    "frames": 40,
+    "median_timings": {
+      "processed_fps": 2.656459938292861,
+      "processing_ms": 351.66888052481227,
+      "mask_ms": 23.50718801608309,
+      "image_matching_ms": 10.875961510464549,
+      "display_ms": 23.82410049904138,
+      "skipped_camera_frames": 10.0,
+      "age_ms": 391.7865954863373
+    },
+    "fps_from_mean_frame_time": 2.417774254460848,
+    "camera_stopped_afterward": true
+  },
+  "old_timing_warning": "Nov 5 fixed-matcher-timing used an older recipe with partial-surface matching, scene depth constraints and mask coverage disabled, different growth/covariance settings and UFM. Its ~6 FPS cannot be used for the current recipe.",
+  "changes": "Profiler instrumentation only; no tracking algorithm, quality threshold or default backend changed."
+}

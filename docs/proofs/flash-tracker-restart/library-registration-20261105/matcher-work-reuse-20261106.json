@@ -1,0 +1,480 @@
+{
+  "date": "2026-11-06",
+  "base_commit": "a298ef421",
+  "artifact_root": "/home/feit/.cache/flash-tracker-restart/matcher-rewrite-20261106",
+  "implementation": "Shared prepared geometry, frame-local score/solve reuse, compiled ray checks; baseline start policy retained. Local, not deployed.",
+  "latency": {
+    "small_gicp": {
+      "baseline_core_mean_ms": 351.53,
+      "baseline_estimated_total_approx_ms": 398.0,
+      "current": {
+        "processing_ms": {
+          "median": 176.15662596654147,
+          "mean": 201.86842796373008,
+          "p90": 298.98844021372497,
+          "max": 374.52041904907674
+        },
+        "core_wall_ms": {
+          "median": 176.18094198405743,
+          "mean": 201.89909905124202,
+          "p90": 299.02426121989265,
+          "max": 374.5498349890113
+        },
+        "scene_point_tracking_ms": {
+          "median": 9.717645007185638,
+          "mean": 10.001986219460871,
+          "p90": 10.570973413996398,
+          "max": 12.081776978448033
+        },
+        "display_ms": {
+          "median": 20.974749990273267,
+          "mean": 21.04365604858593,
+          "p90": 22.2844889620319,
+          "max": 22.745591995771974
+        },
+        "estimated_total_with_saved_sam_ms": {
+          "median": 218.55222200974822,
+          "mean": 246.10755589328926,
+          "p90": 343.6316238483414,
+          "max": 416.6482229484245
+        }
+      },
+      "input_sha256": "08245978848df8aeae0bfb48123fc00566ce797053dd9ffddd8fdaab256e96e7",
+      "status": {
+        "initialized": 1,
+        "observed_candidate": 59
+      },
+      "max_stationary_rms_mm": 0.2335315500041143,
+      "scope": "Actual LiveSurfaceSession + live_scene_packet, saved masks; measured SAM times added for estimated total, no disk/capture wait; no labelled pose accuracy"
+    },
+    "scipy": {
+      "baseline_core_mean_ms": 521.42,
+      "baseline_estimated_total_approx_ms": 565.0,
+      "current": {
+        "processing_ms": {
+          "median": 288.6509649688378,
+          "mean": 297.0161512868984,
+          "p90": 341.231833177153,
+          "max": 496.975855960045
+        },
+        "core_wall_ms": {
+          "median": 288.6809500050731,
+          "mean": 297.04829823557225,
+          "p90": 341.26595662673935,
+          "max": 497.0026859664358
+        },
+        "scene_point_tracking_ms": {
+          "median": 9.723406052216887,
+          "mean": 10.018546777477455,
+          "p90": 10.607260593678802,
+          "max": 12.786004052031785
+        },
+        "display_ms": {
+          "median": 21.47265401436016,
+          "mean": 21.20473285174092,
+          "p90": 22.184463823214173,
+          "max": 23.428258020430803
+        },
+        "estimated_total_with_saved_sam_ms": {
+          "median": 332.4357069795951,
+          "mean": 341.4178318807745,
+          "p90": 385.0067366147414,
+          "max": 538.939481950365
+        }
+      },
+      "input_sha256": "08245978848df8aeae0bfb48123fc00566ce797053dd9ffddd8fdaab256e96e7",
+      "status": {
+        "initialized": 1,
+        "observed_candidate": 59
+      },
+      "max_stationary_rms_mm": 0.09086659142128886,
+      "scope": "Actual LiveSurfaceSession + live_scene_packet, saved masks; measured SAM times added for estimated total, no disk/capture wait; no labelled pose accuracy"
+    }
+  },
+  "replays": [
+    {
+      "case": "dexycb-drill-20201002_111923",
+      "frames": 74,
+      "input_sha256": "602e332520f1fc25f76127f4b882e3252f2df87b0bd65ab28569dd5cae5148cb",
+      "roles": {
+        "object": {
+          "old_available": 55,
+          "new_available": 55,
+          "total": 73,
+          "old_pose_error": {
+            "available": 55,
+            "total": 73,
+            "cloud_mm_median": 3.875378703443929,
+            "cloud_mm_p90": 21.053553390490144,
+            "angle_deg_median": 1.985305547104107,
+            "angle_deg_p90": 5.955614248539703,
+            "center_mm_median": 3.1810669686562085,
+            "within_10mm_10deg": 35,
+            "within_20mm_20deg": 47,
+            "final_cloud_mm": 10.435833618217158,
+            "final_angle_deg": 2.218544549974367
+          },
+          "new_pose_error": {
+            "available": 55,
+            "total": 73,
+            "cloud_mm_median": 3.8753787034423612,
+            "cloud_mm_p90": 21.053553390489956,
+            "angle_deg_median": 1.9853055471048413,
+            "angle_deg_p90": 5.9556142485392645,
+            "center_mm_median": 3.1810669686541697,
+            "within_10mm_10deg": 35,
+            "within_20mm_20deg": 47,
+            "final_cloud_mm": 10.435833618216973,
+            "final_angle_deg": 2.2185445499746956
+          }
+        }
+      }
+    },
+    {
+      "case": "dexycb-tomato-can-20201002_105506",
+      "frames": 68,
+      "input_sha256": "197e33c66de5adacf25e5278f8ef5c5c9b4ee80285eff937c86eb0f676e3d23f",
+      "roles": {
+        "object": {
+          "old_available": 58,
+          "new_available": 58,
+          "total": 67,
+          "old_pose_error": {
+            "available": 58,
+            "total": 67,
+            "cloud_mm_median": 36.92449618400725,
+            "cloud_mm_p90": 56.875629044241144,
+            "angle_deg_median": 43.500220355755005,
+            "angle_deg_p90": 82.84001457816048,
+            "center_mm_median": 31.665273906726853,
+            "within_10mm_10deg": 24,
+            "within_20mm_20deg": 26,
+            "final_cloud_mm": 53.30812513948109,
+            "final_angle_deg": 81.30993043710068
+          },
+          "new_pose_error": {
+            "available": 58,
+            "total": 67,
+            "cloud_mm_median": 36.92449618400724,
+            "cloud_mm_p90": 56.875629044241066,
+            "angle_deg_median": 43.50022035575563,
+            "angle_deg_p90": 82.84001457816083,
+            "center_mm_median": 31.66527390672669,
+            "within_10mm_10deg": 24,
+            "within_20mm_20deg": 26,
+            "final_cloud_mm": 53.308125139481426,
+            "final_angle_deg": 81.30993043710104
+          }
+        }
+      }
+    },
+    {
+      "case": "flash-demo-dowel-ring",
+      "frames": 713,
+      "input_sha256": "9451f8b8a7129105375c6e6ab5ca84f561e86b6d327f83ce83550252bbdc8bf9",
+      "roles": {
+        "dowel": {
+          "old_available": 235,
+          "new_available": 236,
+          "total": 712,
+          "old_pose_error": null,
+          "new_pose_error": null
+        },
+        "ring": {
+          "old_available": 701,
+          "new_available": 701,
+          "total": 712,
+          "old_pose_error": null,
+          "new_pose_error": null
+        }
+      }
+    },
+    {
+      "case": "flash-demo-gamepad-cube",
+      "frames": 628,
+      "input_sha256": "fda3c6528b84615e7e04bed498cbec284fb4837a34f453f37c0b632a701d10cf",
+      "roles": {
+        "gamepad": {
+          "old_available": 554,
+          "new_available": 556,
+          "total": 627,
+          "old_pose_error": null,
+          "new_pose_error": null
+        },
+        "cube": {
+          "old_available": 450,
+          "new_available": 450,
+          "total": 627,
+          "old_pose_error": null,
+          "new_pose_error": null
+        }
+      }
+    },
+    {
+      "case": "laval-clock-interaction-hard",
+      "frames": 203,
+      "input_sha256": "1e395c9078ea1819b600b06004d1c37a392353247f936b693b7f5b950fa2f6aa",
+      "roles": {
+        "clock": {
+          "old_available": 31,
+          "new_available": 31,
+          "total": 202,
+          "old_pose_error": {
+            "available": 31,
+            "total": 202,
+            "cloud_mm_median": 5.137553294280143,
+            "cloud_mm_p90": 58.55179292167825,
+            "angle_deg_median": 5.457515504794119,
+            "angle_deg_p90": 179.63433972952433,
+            "center_mm_median": 3.371455209418141,
+            "within_10mm_10deg": 17,
+            "within_20mm_20deg": 18,
+            "final_cloud_mm": null,
+            "final_angle_deg": null
+          },
+          "new_pose_error": {
+            "available": 31,
+            "total": 202,
+            "cloud_mm_median": 5.137553294279559,
+            "cloud_mm_p90": 58.551792921678114,
+            "angle_deg_median": 5.457515504793986,
+            "angle_deg_p90": 179.6343397295293,
+            "center_mm_median": 3.371455209417726,
+            "within_10mm_10deg": 17,
+            "within_20mm_20deg": 18,
+            "final_cloud_mm": null,
+            "final_angle_deg": null
+          }
+        }
+      }
+    },
+    {
+      "case": "rig-yellow-block",
+      "frames": 75,
+      "input_sha256": "1aef5724a99226a5fe503fa1e85457ef4e76865796ef57c4f0fe0997efc61cc3",
+      "roles": {
+        "object": {
+          "old_available": 27,
+          "new_available": 27,
+          "total": 74,
+          "old_pose_error": null,
+          "new_pose_error": null
+        }
+      }
+    },
+    {
+      "case": "ycb-mustard_easy_00_02",
+      "frames": 181,
+      "input_sha256": "2ca33583b95ed8d6e091777efe9285bd8e6343389d3d3ab90b2b48fef1399852",
+      "roles": {
+        "object": {
+          "old_available": 178,
+          "new_available": 178,
+          "total": 180,
+          "old_pose_error": {
+            "available": 178,
+            "total": 180,
+            "cloud_mm_median": 1.7631554471377981,
+            "cloud_mm_p90": 4.72722633593775,
+            "angle_deg_median": 0.7034701807044135,
+            "angle_deg_p90": 4.176147350315641,
+            "center_mm_median": 1.383606117615271,
+            "within_10mm_10deg": 178,
+            "within_20mm_20deg": 178,
+            "final_cloud_mm": 5.337672511804482,
+            "final_angle_deg": 5.005759801418995
+          },
+          "new_pose_error": {
+            "available": 178,
+            "total": 180,
+            "cloud_mm_median": 1.7631554471388693,
+            "cloud_mm_p90": 4.727226335937409,
+            "angle_deg_median": 0.703470180704979,
+            "angle_deg_p90": 4.176147350316306,
+            "center_mm_median": 1.3836061176169108,
+            "within_10mm_10deg": 178,
+            "within_20mm_20deg": 178,
+            "final_cloud_mm": 5.337672511803266,
+            "final_angle_deg": 5.005759801419286
+          }
+        }
+      }
+    }
+  ],
+  "gamepad": {
+    "baseline-replays-1": {
+      "stationary_frames": 193,
+      "available": 193,
+      "max_center_displacement_mm": 3.502071218239931,
+      "max_rotation_deg": 6.874400955058136,
+      "placement": {
+        "source_run": "/home/feit/.cache/flash-tracker-restart/matcher-rewrite-20261106/baseline-replays-1/flash-demo-gamepad-cube",
+        "reference_frame": 0,
+        "frames": 118,
+        "available": 118,
+        "median_feature_error_mm": 1.84357942170413,
+        "p95_feature_error_mm": 2.125975511484798,
+        "within_5mm": 118
+      }
+    },
+    "baseline-repeat-193": {
+      "stationary_frames": 193,
+      "available": 191,
+      "max_center_displacement_mm": 3.4277015777661597,
+      "max_rotation_deg": 7.420821957636881
+    },
+    "shared-geometry-replays-4": {
+      "stationary_frames": 193,
+      "available": 193,
+      "max_center_displacement_mm": 3.210762164699728,
+      "max_rotation_deg": 7.7229056813850505,
+      "placement": {
+        "source_run": "/home/feit/.cache/flash-tracker-restart/matcher-rewrite-20261106/shared-geometry-replays-4/flash-demo-gamepad-cube",
+        "reference_frame": 0,
+        "frames": 118,
+        "available": 118,
+        "median_feature_error_mm": 3.0802577927065165,
+        "p95_feature_error_mm": 3.284993760913811,
+        "within_5mm": 118
+      }
+    }
+  },
+  "verification": {
+    "targeted": {
+      "passed": 232,
+      "failed": 6,
+      "baseline_has_same_failures": true,
+      "log": "/tmp/flash-rewrite-final-targeted-2.log"
+    },
+    "additional_consumers": {
+      "passed": 34,
+      "log": "/tmp/flash-rewrite-cache-consumer-tests.log"
+    },
+    "final_array_reduction_and_profiler_checks": {
+      "passed": 76,
+      "log": "/tmp/flash-rewrite-last-tests.log"
+    },
+    "mutation": "Stationary identical-start test fails frozen baseline (3 solves), passes replacement (1).",
+    "limitations": [
+      "Not 10 FPS.",
+      "Six existing recovery/preparation failures remain.",
+      "Full replays used saved masks and shared LK + small_gicp; not runtime segmentation quality.",
+      "Old native pipeline is not exactly repeatable; small trajectory differences cannot be attributed to code alone.",
+      "No claim that gamepad placement error improved.",
+      "No UI/server restart or default matcher change."
+    ]
+  },
+  "profile_mean_per_frame": {
+    "image_matching": {
+      "calls": 1.0,
+      "inclusive_ms": 9.970240339328992,
+      "exclusive_ms": 9.970240339328992
+    },
+    "observation": {
+      "calls": 1.0,
+      "inclusive_ms": 3.8033010955047555,
+      "exclusive_ms": 3.8033010955047555
+    },
+    "group.predict": {
+      "calls": 1.0,
+      "inclusive_ms": 15.610823679076097,
+      "exclusive_ms": 4.301462795040807
+    },
+    "fitter.__init__": {
+      "calls": 4.661016949152542,
+      "inclusive_ms": 30.557948816764974,
+      "exclusive_ms": 20.13706916082903
+    },
+    "library.prepare": {
+      "calls": 2.9661016949152543,
+      "inclusive_ms": 1.4681844050617163,
+      "exclusive_ms": 1.4681844050617163
+    },
+    "fitter._projection_evidence": {
+      "calls": 220.96610169491527,
+      "inclusive_ms": 13.053252029240573,
+      "exclusive_ms": 13.053252029240573
+    },
+    "fitter._scene_depth_evidence": {
+      "calls": 220.96610169491527,
+      "inclusive_ms": 7.384174222213422,
+      "exclusive_ms": 7.384174222213422
+    },
+    "fitter._legacy_view_residual": {
+      "calls": 114.35593220338983,
+      "inclusive_ms": 13.414563668370878,
+      "exclusive_ms": 13.414563668370878
+    },
+    "fitter.residual": {
+      "calls": 101.67796610169492,
+      "inclusive_ms": 52.795325937657225,
+      "exclusive_ms": 26.321201249799234
+    },
+    "fitter.score": {
+      "calls": 39.898305084745765,
+      "inclusive_ms": 28.924771865743008,
+      "exclusive_ms": 5.581492245378825
+    },
+    "library.refine": {
+      "calls": 2.9661016949152543,
+      "inclusive_ms": 11.907432378285517,
+      "exclusive_ms": 2.55101560753123
+    },
+    "fitter._solve": {
+      "calls": 2.9661016949152543,
+      "inclusive_ms": 24.45096220185791,
+      "exclusive_ms": 0.8167856011808045
+    },
+    "fitter.scene_depth_check": {
+      "calls": 8.610169491525424,
+      "inclusive_ms": 1.4539099736454881,
+      "exclusive_ms": 0.42600944042363664
+    },
+    "fitter.partial_surface_check": {
+      "calls": 8.610169491525424,
+      "inclusive_ms": 6.651077795402794,
+      "exclusive_ms": 5.543899507324953
+    },
+    "fitter.check_pose": {
+      "calls": 8.610169491525424,
+      "inclusive_ms": 13.750073382575696,
+      "exclusive_ms": 5.645085613527415
+    },
+    "fitter._refine_visible_correspondences": {
+      "calls": 44.23728813559322,
+      "inclusive_ms": 64.28097845824688,
+      "exclusive_ms": 54.77778102326507
+    },
+    "fitter.batch_residuals": {
+      "calls": 2.542372881355932,
+      "inclusive_ms": 29.344008528130225,
+      "exclusive_ms": 4.521894184833045
+    },
+    "fitter.search": {
+      "calls": 1.0,
+      "inclusive_ms": 138.72349669296548,
+      "exclusive_ms": 0.6694794589085347
+    },
+    "covariance": {
+      "calls": 1.0,
+      "inclusive_ms": 1.0754983739974766,
+      "exclusive_ms": 1.0754983739974766
+    },
+    "kalman_update": {
+      "calls": 1.0,
+      "inclusive_ms": 0.3047282038003964,
+      "exclusive_ms": 0.3047282038003964
+    },
+    "surface_growth": {
+      "calls": 1.0,
+      "inclusive_ms": 2.055253910484834,
+      "exclusive_ms": 2.055253910484834
+    },
+    "group.observe": {
+      "calls": 1.0,
+      "inclusive_ms": 0.7063504101282333,
+      "exclusive_ms": 0.7063504101282333
+    }
+  },
+  "profile_note": "Inclusive timings overlap. Correction generator calls count advances, including exhaustion. Separate instrumented replay; use uninstrumented latency above."
+}

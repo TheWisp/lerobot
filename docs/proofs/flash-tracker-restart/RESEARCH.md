@@ -3864,6 +3864,10 @@ prediction, fitting, Kalman and growth; excludes segmentation, capture, disk
 I/O and display. First initialization frame is excluded; first native-library
 loading/solve is included. **About 6 FPS here, not the 10 FPS target.** These
 are one-segment measurements, not full-demo or corpus results.
+**Configuration caveat, verified Nov 6:** this comparison used the older recipe
+with partial-surface matching, scene-depth constraints and coverage preference
+disabled. It does not predict the speed of the current live defaults; see the
+identical-input comparison below.
 [Timing evidence](library-registration-20261105/fixed-matcher-timing.json).
 
 ### 2026-11-06 — Shared live session, display alignment and cube recovery
@@ -3959,3 +3963,153 @@ does not independently prove absence of slipping or rotation in the jaws. This
 supports testing contact detection on our hardware, not treating current as a
 guaranteed rigid attachment. Our existing gamepad recording has joint positions
 but no recorded motor-current channel; it cannot validate that detector offline.
+
+### 2026-11-06 — Where the live frame time goes
+
+Captured 60 new, aligned RGB-D frames of the stationary gamepad and computed
+SAM once. Replayed the identical RGB, depth, masks and timestamps through the
+actual live session and display encoder, sequentially for all four matchers.
+Only the matcher changed; current geometry checks, LK, groups, Kalman and growth
+remained enabled. Separate profiling runs retained identical statuses and map
+updates; pose differences were at most 4e-14 in matrix elements.
+
+| Matcher                 | Mean tracking time, saved masks | Estimated FPS including measured SAM + display encoding |
+| ----------------------- | ------------------------------: | ------------------------------------------------------: |
+| SciPy                   |                          521 ms |                                                    1.77 |
+| small_gicp              |                          352 ms |                                                    2.51 |
+| Open3D point-to-plane   |                          367 ms |                                                    2.43 |
+| Open3D geometry + color |                          366 ms |                                                    2.44 |
+
+SAM averaged 23 ms and display encoding about 21–24 ms. These FPS estimates
+exclude capture wait, HTTP transfer and browser rendering. A separate 40-frame
+actual live small_gicp trial measured **2.42 FPS** from mean processing time,
+with median displayed-frame age 392 ms. The camera was stopped afterward.
+
+**The remaining bottleneck is fitting/search, not Kalman.** SciPy's search cost
+451 ms/frame, including three local solves and repeated surface scoring. With
+small_gicp, search still cost 280 ms, although its library refinement consumed
+only 18 ms within that total. Both paths repeatedly evaluate projection, depth
+and nearest-surface distances. Kalman correction cost 0.3 ms, observation
+covariance 1 ms, surface growth 2 ms, and LK 10 ms. These are nested profile
+measurements: inclusive values must not be added together.
+
+All four produced poses on all 60 frames; maximum apparent surface displacement
+on this stationary object was 0.09–0.24 mm. This is a stability check, **not labelled
+accuracy or a motion/occlusion test**. No algorithm, quality threshold or default
+matcher changed. The next optimization target is repeated candidate scoring and
+geometry preparation, while preserving the existing validity checks. Changing
+the native solver alone does not reach 10 FPS.
+
+The existing runtime-profiler/experiment tests pass: **19 passed**. The expanded
+profiler is the only executable-code change in this measurement.
+[Settings, timings, profile and parity evidence](library-registration-20261105/live-matcher-comparison-20261106.json).
+Raw capture, replay harness and per-frame outputs remain in the evidence's local
+artifact directory; the recording is not added to Git.
+
+### 2026-11-06 — Refactor audit and comparison with published trackers
+
+**The large slowdown follows the settings, not the shared-session extraction.**
+Replayed identical inputs through the archived source used for the earlier
+6 FPS result and current source. All runs use small_gicp; saved masks exclude
+SAM, capture and display. The live recording uses LK, placement uses UFM.
+
+| Input and settings                                 |     Archived code |      Current code |
+| -------------------------------------------------- | ----------------: | ----------------: |
+| Same 60 live-capture frames, historical settings   |            133 ms |            133 ms |
+| Same 60 frames, current settings                   |            351 ms |            352 ms |
+| Original 118 placement frames, historical settings | 160 ms / 6.27 FPS | 163 ms / 6.13 FPS |
+
+Current-settings poses agree within 1.1e-14 in matrix elements; placement within
+2e-14, with identical statuses and map events. The historical-settings live run
+is **not** bit-identical (maximum matrix-element difference 0.00394, some map
+updates differ); this audit does not establish blanket output equivalence.
+Single runs establish the scale of the cost difference, not a statistically
+significant 1–3 ms code difference. The earlier 6 FPS claim was too broad.
+
+Diagnostic ablations of current settings, same 60 frames: disabling retained-view
+partial-surface matching gives **146 ms**, disabling scene-depth constraints
+**327 ms**, and disabling outline coverage preference **346 ms**. These options
+change the fitting path and map evolution as well as direct compute; their
+savings are not additive. **None is a quality-approved optimization or a changed
+default.** The expensive retained-view behavior tests the old surface against
+the current image and the current surface against an earlier measured image.
+[Inputs, settings, timings and equivalence results](library-registration-20261105/refactor-cost-audit-20261106.json).
+
+The implemented loop, in plain terms:
+
+```text
+RGB-D + SAM mask ────────────────> measured partial surface
+previous image + current image -> shared LK (or UFM) -> object/group motion hints
+stored surface + previous pose + those observations/hints
+  -> three fitting branches, coarse alternatives, conditional extra recovery
+  -> reject geometry conflicts, rank remaining poses
+  -> Kalman update -> check the resulting pose again
+  -> publish; grow the surface only through stricter checks
+```
+
+All measured 3D solvers are **CPU** implementations. SAM and optional UFM use
+the GPU. Open3D uses its legacy CPU API here. The native library solver proposes
+poses; it does not optimize our entire custom image/group/depth objective.
+Our surrounding search still runs multiple branches, scores their intermediate
+poses, and can run another iterative correspondence correction. Current native
+refinement takes about 18 ms inside a 280 ms search; this is not just slow GICP.
+
+What the public implementations establish (not measured on our cases):
+
+| Implementation                                                                                                                                                                                    | Relevant behavior                                                                                                                                    | Difference from our use                                                                                                                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [small_gicp](https://github.com/koide3/small_gicp)                                                                                                                                                | CPU parallel local registration; explicitly supports reusable preprocessed clouds and trees.                                                         | We use that API, but cache within fitters recreated during each frame; most measured cost is outside the library.                                                                                   |
+| [Open3D tensor ICP](https://www.open3d.org/docs/latest/tutorial/t_pipelines/t_icp_registration.html)                                                                                              | Coarse-to-fine registration can run on CUDA.                                                                                                         | Our two-level registration is CPU; moving only its native solve cannot remove the surrounding search cost.                                                                                          |
+| [FoundationPose source](https://github.com/NVlabs/FoundationPose/blob/main/estimater.py)                                                                                                          | Broad initialization; tracking refines the previous pose with a GPU network.                                                                         | We retain three routine fitting branches. FoundationPose needs an object model/reconstructed reference, so it is not a drop-in growing-partial-surface replacement.                                 |
+| [BundleSDF](https://bundlesdf.github.io/)                                                                                                                                                         | Temporal matching, selected memory frames, joint pose refinement; neural reconstruction runs in another thread.                                      | Useful separation of tracking and map work; it is an entire alternative system, not just a matcher.                                                                                                 |
+| [DeepPRO](https://openaccess.thecvf.com/content/ICCV2021/html/Lee_DeepPRO_Deep_Partial_Point_Cloud_Registration_of_Objects_ICCV_2021_paper.html), [RAP, ECCV 2026](https://github.com/PRBonn/RAP) | Learned partial-cloud alignment is feasible. DeepPRO reports 50 FPS on its mobile setup; RAP generates aligned clouds and recovers rigid transforms. | Neural proposals could replace substantial search, not merely its 18 ms solver. Neither result proves our occlusion accuracy or latency. RAP is not established here as a small, low-latency model. |
+| [KV-Tracker, CVPR 2026](https://arxiv.org/abs/2512.22581)                                                                                                                                         | Reuses cached keyframe features for RGB tracking; reports up to about 27 FPS.                                                                        | Evidence for avoiding repeated work; does not provide our measured-depth conflict checks.                                                                                                           |
+
+**Conclusion from this audit:** the library integration kept an expensive custom
+search around fast local solvers. Retained-view geometry multiplies that work.
+The defensible direction is to reuse prepared evidence and reduce repeated
+scoring, then compare bounded temporal refinement with broader recovery on the
+motion/occlusion fixtures. A neural proposal is a plausible separate experiment;
+it still needs the same final geometry validation. Earlier one-start dowel drift
+means simply deleting alternative starts is not yet justified. No tracker
+algorithm, default, server result or acceptance threshold changed in this audit.
+
+### 2026-11-06 — Reuse matching work before changing the search policy
+
+The local replacement has one matcher interface and shares prepared geometry,
+identical numerical solves and pose evaluations within each frame. Residual memory
+is bounded to 64 entries per objective and dies with that frame. Discarded
+nearest-neighbour queries and unused 3D hull construction were removed. Pixel-ray
+checks use compiled array kernels; connected-patch extents use array reductions
+instead of scanning every point separately for every patch. Acceptance thresholds,
+Kalman and surface-growth rules are unchanged.
+
+| Work                              | Purpose                                         | Execution                                                    |
+| --------------------------------- | ----------------------------------------------- | ------------------------------------------------------------ |
+| Mask and depth preparation        | Keep measured surfaces and empty-space evidence | OpenCV / NumPy arrays; SAM on GPU                            |
+| Image matching and group motion   | Supply motion evidence                          | Native LK or GPU UFM; batched array/SVD fits                 |
+| Surface registration              | Propose rigid alignment                         | Native GICP/Open3D or SciPy with array residuals             |
+| Depth, outline and overlap checks | Reject incompatible proposals                   | Batched nearest-neighbour queries and compiled array kernels |
+| Candidate scheduling              | Choose starts and enforce the work budget       | Python control over poses, not loops over pixels/points      |
+
+On the identical 60-frame live capture, native tracking fell **352 → 202 ms**;
+including recorded SAM time and actual display encoding, **398 → 246 ms**
+(approximately **4.1 FPS**). SciPy's estimated total fell **565 → 341 ms**.
+These exclude capture wait/network/browser rendering. No GPU matcher was added.
+The remaining correspondence correction alone averages 64 ms/frame. Compiling
+its point calculations does not eliminate repeated iterations.
+
+Full replays covered both demos plus mustard, yellow block, clock, drill and
+tomato can: all four labelled scenes retain the same accuracy counts. Gamepad
+placement still passes all 118 frames at 5 mm, but median control-point error
+changed **1.84 → 3.08 mm**; this is not an accuracy improvement. Repeating the
+unchanged baseline also changes its gamepad trajectory, so small differences
+need repeatability/visual review. The focused suite has **232 passes and the same
+six failures as the frozen baseline**; another 76 checks cover the final array
+reduction, search, profiler and cache behavior. Existing recovery failures remain.
+
+Rejected trials removed routine alternative starts: they ran faster but increased
+pre-grasp gamepad drift. The retained search policy therefore still has multiple
+starts. **This is not the completed simpler-search rewrite or a 10 FPS result.**
+Server 9102 and its default matcher were not changed. Measurements, rejected-run
+paths and test limitations are in the [work-reuse evidence](library-registration-20261105/matcher-work-reuse-20261106.json).

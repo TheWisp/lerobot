@@ -9,6 +9,7 @@ retain the older, unconditional current-to-reference coverage objective.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from inspect import signature
 from itertools import permutations
@@ -79,10 +80,12 @@ class PreparedReferenceSurface:
     def build(cls, reference: np.ndarray, config: ShapeConfig):
         from scipy.spatial import QhullError
 
-        try:
-            envelope = reference[ConvexHull(reference).vertices]
-        except QhullError:  # Exactly planar references are valid observations.
-            envelope = reference
+        envelope = reference
+        if config.require_full_mask_coverage:
+            try:
+                envelope = reference[ConvexHull(reference).vertices]
+            except QhullError:  # Exactly planar references are valid observations.
+                envelope = reference
         return cls(
             reference,
             config,
@@ -181,6 +184,7 @@ class WholeSurfaceFit:
         reference_intrinsics: np.ndarray | None = None,
         reference_views: tuple[SurfaceFitView, ...] = (),
         appearance_views: tuple[SurfaceFitView, ...] = (),
+        prepared_reverse_fits=None,
     ):
         """Fit reference-camera points into the current camera.
 
@@ -249,6 +253,22 @@ class WholeSurfaceFit:
         self.reference_views = tuple(reference_views)
         self.appearance_views = tuple(appearance_views) or self.reference_views
         self._registration_solver = None
+        self._residual_cache = OrderedDict()
+        # Image-conditioned and geometry-only objectives use identical measured
+        # views. Share their preparation, rather than rebuilding depth images,
+        # trees and hulls for the second objective in the same frame.
+        if prepared_reverse_fits is not None:
+            if len(prepared_reverse_fits) != len(self.reference_views) or any(
+                fit.reference is not self.target
+                or fit.config != replace(config, require_full_mask_coverage=False)
+                or not np.array_equal(fit.k, view.intrinsics)
+                or fit.observation is not view.observation
+                or not np.array_equal(camera, view.camera_from_reference)
+                for (camera, fit), view in zip(prepared_reverse_fits, self.reference_views, strict=True)
+            ):
+                raise ValueError("prepared views belong to another fit")
+            self.reverse_fits = prepared_reverse_fits
+            return
         self.reverse_fits = []
         for view in self.reference_views:
             reverse = WholeSurfaceFit(
@@ -264,6 +284,10 @@ class WholeSurfaceFit:
     @property
     def coverage_enabled(self) -> bool:
         return self.config.require_full_mask_coverage
+
+    @property
+    def has_image_evidence(self) -> bool:
+        return False
 
     def uncovered_mask(self, uv: np.ndarray) -> np.ndarray:
         if not self.coverage_enabled:
@@ -281,24 +305,55 @@ class WholeSurfaceFit:
         distance[inside] = 0
         return np.maximum(distance - self.config.mask_boundary_tolerance_px, 0)
 
-    def residual(self, pose: np.ndarray) -> np.ndarray:
+    def residual(self, pose: np.ndarray, *, include_coverage=True) -> np.ndarray:
+        key = self.config, include_coverage, pose.tobytes()
+        if key in self._residual_cache:
+            self._residual_cache.move_to_end(key)
+            return self._residual_cache[key]
         predicted = move(self.reference_queries, pose)
-        target_local = (self.target_queries - pose[:3, 3]) @ pose[:3, :3]
         model_distance = self.target_tree.query(predicted, workers=self.reference_query_workers)[0]
-        target_distance = self.reference_tree.query(target_local, workers=self.target_query_workers)[0]
-        return self._residual_with_distances(pose, predicted, model_distance, target_distance)
+        # Partial-view composition discards unconditional target coverage.
+        # Do not compute a nearest-neighbour search whose result is discarded.
+        target_distance = (
+            self.reference_tree.query(
+                (self.target_queries - pose[:3, 3]) @ pose[:3, :3], workers=self.target_query_workers
+            )[0]
+            if include_coverage and not self.reverse_fits
+            else np.zeros(len(self.target_queries))
+        )
+        return self._remember_residual(
+            key, self._residual_with_distances(pose, predicted, model_distance, target_distance)
+        )
+
+    def _remember_residual(self, key, residual):
+        # Bounded, frame-local workspace. 64 entries keep derivative batches and
+        # shortlisted poses without retaining every optimizer evaluation.
+        self._residual_cache[key] = residual
+        self._residual_cache.move_to_end(key)
+        if len(self._residual_cache) > 64:
+            self._residual_cache.popitem(last=False)
+        return residual
 
     def batch_residuals(self, poses: list[np.ndarray]) -> list[np.ndarray]:
         """Same residuals, with two exact tree searches for all candidate poses."""
         if not poses:
             return []
         predicted = [move(self.reference_queries, pose) for pose in poses]
-        local = [(self.target_queries - pose[:3, 3]) @ pose[:3, :3] for pose in poses]
         workers = min(cpu_count() or 1, self.config.batch_query_workers)
         model_distance = self.target_tree.query(np.concatenate(predicted), workers=workers)[0]
-        target_distance = self.reference_tree.query(np.concatenate(local), workers=workers)[0]
+        target_distance = (
+            self.reference_tree.query(
+                np.concatenate([(self.target_queries - pose[:3, 3]) @ pose[:3, :3] for pose in poses]),
+                workers=workers,
+            )[0]
+            if not self.reverse_fits
+            else np.zeros(len(poses) * len(self.target_queries))
+        )
         return [
-            self._residual_with_distances(pose, points, model, target)
+            self._remember_residual(
+                (self.config, True, pose.tobytes()),
+                self._residual_with_distances(pose, points, model, target),
+            )
             for pose, points, model, target in zip(
                 poses,
                 predicted,
@@ -315,7 +370,8 @@ class WholeSurfaceFit:
         n, m = len(self.reference_queries), len(self.target_queries)
         inverse = np.linalg.inv(pose)
         reverse = [
-            (fit.residual(camera @ inverse), len(fit.target_queries)) for camera, fit in self.reverse_fits
+            (fit.residual(camera @ inverse, include_coverage=False), len(fit.target_queries))
+            for camera, fit in self.reverse_fits
         ]
         # Keep the visibility-tested distance and silhouette terms from BOTH
         # cameras. Drop both unconditional coverage terms: a newly exposed side
@@ -388,7 +444,11 @@ class WholeSurfaceFit:
                 np.sqrt(depth_visibility / len(predicted)) * model_distance / tolerance,
                 target_distance / (tolerance * np.sqrt(len(self.target_queries))),
                 np.sqrt(visibility / len(predicted)) * silhouette_m / tolerance,
-                self.uncovered_mask(project(move(self.envelope, pose), self.k))
+                (
+                    self.uncovered_mask(project(move(self.envelope, pose), self.k))
+                    if self.coverage_enabled
+                    else np.zeros(len(self.mask_outline))
+                )
                 * np.sqrt(self.config.mask_coverage_weight)
                 * np.median(predicted[:, 2])
                 / (self.k[0, 0] * tolerance * np.sqrt(len(self.mask_outline))),
@@ -401,6 +461,17 @@ class WholeSurfaceFit:
         height, width = self.observation["depth"].shape
         coordinates = (np.clip(uv[:, 1], 0, height - 1), np.clip(uv[:, 0], 0, width - 1))
         mask_distance = map_coordinates(self.outside_mask, coordinates, order=1, mode="nearest")
+        if self.fit_kernels is not None:
+            return self.fit_kernels[2](
+                predicted,
+                uv,
+                mask_distance,
+                self.observation["depth"],
+                self.observation["mask"],
+                self.config.depth_tolerance_m,
+                self.config.mask_boundary_tolerance_px,
+                self.k[0, 0],
+            )
         inside = (uv[:, 0] >= 0) & (uv[:, 0] <= width - 1) & (uv[:, 1] >= 0) & (uv[:, 1] <= height - 1)
         tolerance = self.config.depth_tolerance_m
         # A nearer measured surface may hide a model point. Smoothly suppress
@@ -488,7 +559,9 @@ class WholeSurfaceFit:
         scene = self.scene_depth_check(pose)
         if max_outlier_fraction is None and min_overlap == 0:
             return {**scene, "accepted": not scene["scene_depth_coherent_protrusion"]}
-        distances = cKDTree(move(self.reference, pose)).query(self.observation["obs"]["points"])[0]
+        distances = self.prepared_reference.tree.query(
+            (self.observation["obs"]["points"] - pose[:3, 3]) @ pose[:3, :3]
+        )[0]
         if self.reverse_fits:
             direct = self.partial_surface_check(pose)
             overlap = 1.0 - direct["observed_outlier_fraction"] if direct["has_visible_overlap"] else 0.0
@@ -536,6 +609,8 @@ class WholeSurfaceFit:
         numerator. Interpolation combines evidence, never depth across a cliff.
         """
         uv = project(predicted, self.k)
+        if self.fit_kernels is not None:
+            return self.fit_kernels[3](predicted, uv, self.scene_nearest_depth, self.config.depth_tolerance_m)
         h, w = self.scene_nearest_depth.shape
         valid = (
             np.isfinite(uv).all(1)
@@ -605,16 +680,19 @@ class WholeSurfaceFit:
             self.config.mask_boundary_tolerance_px,
             np.ceil(self.k[0, 0] * self.config.surface_spacing_m / np.median(depth)),
         )
-        pairs = np.asarray(list(cKDTree(uv).query_pairs(neighborhood)), dtype=np.intp).reshape(-1, 2)
+        pairs = cKDTree(uv).query_pairs(neighborhood, output_type="ndarray")
         if not len(pairs):
             return False
         edges = np.concatenate((pairs, pairs[:, ::-1]))
         graph = csr_matrix((np.ones(len(edges)), (edges[:, 0], edges[:, 1])), shape=(len(uv), len(uv)))
-        _, labels = connected_components(graph, directed=False)
-        return any(
-            np.linalg.norm(np.ptp(uv[labels == label], axis=0)) > 2 * neighborhood
-            for label in np.unique(labels)
-        )
+        count, labels = connected_components(graph, directed=False)
+        # Reduce each component in one array pass. Scanning all pixels once
+        # per component made scattered depth disagreements quadratic in count.
+        low = np.full((count, 2), np.inf)
+        high = np.full((count, 2), -np.inf)
+        np.minimum.at(low, labels, uv)
+        np.maximum.at(high, labels, uv)
+        return bool(np.any(np.linalg.norm(high - low, axis=1) > 2 * neighborhood))
 
     def score(self, pose: np.ndarray) -> float:
         residual = self.residual(pose)
@@ -750,122 +828,20 @@ class WholeSurfaceFit:
         recovery_starts=0,
         evaluation_budget=None,
     ):
-        """One owner for all starts, validity checks, and retained alternatives.
+        """Compatibility entry point; all pose search goes through PoseMatcher."""
+        from .surface_matching import DEFAULT_MATCHER
 
-        Numerical fitting and correspondence updates only propose poses. Every
-        candidate uses the same cached check. A lower-cost invalid candidate can
-        never displace a valid one. Budgets count solver evaluations (excluding
-        finite-difference probes) and correspondence updates, as in max_nfev.
-        """
-        geometry = self if geometry is None else geometry
-        check = geometry.check_pose if check is None else check
-        branches = 1 if geometry is self else 3
-        # Preserve the previous maximum work, but account for it in one place:
-        # each branch had two starts, each with a solve and a corrective pass.
-        budget = (
-            evaluation_budget
-            if evaluation_budget is not None
-            else (self.config.max_evaluations * (branches * (4 if coarse else 2) + 2 * recovery_starts))
+        return DEFAULT_MATCHER.match(
+            self,
+            proposal,
+            geometry=geometry,
+            previous=previous,
+            check=check,
+            extra=extra,
+            coarse=coarse,
+            recovery_starts=recovery_starts,
+            evaluation_budget=evaluation_budget,
         )
-        remaining = budget
-        candidates, checks = [], {}
-
-        def checked(pose):
-            key = pose.tobytes()
-            if key not in checks:
-                checks[key] = check(pose)
-            return checks[key]
-
-        def add(pose, name, detail=None):
-            record = {
-                "pose": pose.copy(),
-                "name": name,
-                "check": checked(pose),
-                "cost": geometry.score(pose),
-                "detail": detail or {},
-            }
-            candidates.append(record)
-            return record
-
-        def run(objective, initial, name):
-            nonlocal remaining
-            if remaining <= 0:
-                return None
-            final, detail, iterates = objective._solve(initial, min(self.config.max_evaluations, remaining))
-            remaining -= detail["evaluations"]
-            # Evaluate promising iterates first; numerical derivative probes
-            # share the same cache as all other candidates.
-            valid = next((p for _, p in sorted(iterates, key=lambda x: x[0]) if checked(p)["accepted"]), None)
-            correction_count = 0
-            # A solver can slide off a flat surface and leave only its input
-            # admissible. Refine that input rather than treating it as a
-            # successful solve or correcting the diverged endpoint.
-            unchanged = valid is not None and np.array_equal(valid, initial)
-            if remaining > 0 and (
-                valid is None or (unchanged and objective.score(final) > objective.score(initial))
-            ):
-                corrected = []
-                for pose in objective._refine_visible_correspondences(
-                    initial if unchanged else final, min(self.config.max_evaluations, remaining)
-                ):
-                    correction_count += 1
-                    corrected.append(pose)
-                remaining -= correction_count
-                costs = [float(r @ r) for r in objective.batch_residuals(corrected)]
-                corrected_valid = next(
-                    (
-                        p
-                        for _, p in sorted(zip(costs, corrected, strict=True), key=lambda x: x[0])
-                        if checked(p)["accepted"]
-                    ),
-                    None,
-                )
-                if corrected_valid is not None and (
-                    valid is None or objective.score(corrected_valid) < objective.score(valid)
-                ):
-                    valid = corrected_valid
-            detail.update(
-                visible_correction_iterations=correction_count, retained_admissible_iterate=valid is not None
-            )
-            result = add(final if valid is None else valid, name, detail)
-            return result if result["check"]["accepted"] else None
-
-        def branch(objective, initial, name):
-            local = run(objective, initial, name)
-            if not coarse or remaining <= 0:
-                return local
-            predicted = move(self.reference, initial)
-            seed = min(
-                pca_candidates(self.reference, self.observation["obs"]["points"]),
-                key=(
-                    objective.score
-                    if self.config.registration.backend != "scipy"
-                    else lambda p: np.mean(np.sum((move(self.reference, p) - predicted) ** 2, axis=1))
-                ),
-            )
-            if local is not None and objective.score(seed) >= objective.score(local["pose"]):
-                return local
-            alternative = run(objective, seed, name + "_coarse")
-            valid = [r for r in (local, alternative) if r is not None]
-            return min(valid, key=lambda r: objective.score(r["pose"])) if valid else None
-
-        joint = branch(self, proposal, "joint_fit" if geometry is not self else "local")
-        if geometry is not self:
-            add(proposal, "proposal")
-            branch(geometry, joint["pose"] if joint is not None else proposal, "surface_from_joint")
-            branch(geometry, previous, "surface_from_previous")
-            add(previous, "previous")
-        for name, pose in extra:
-            add(pose, name)
-        if not any(c["check"]["accepted"] for c in candidates) and recovery_starts:
-            seeds = pca_candidates(self.reference, self.observation["obs"]["points"], all_axis_orders=True)
-            for i, seed in enumerate(sorted(seeds, key=geometry.score)[:recovery_starts]):
-                run(geometry, seed, f"recovery_{i}")
-        return candidates, {
-            "evaluations": budget - remaining,
-            "evaluation_budget": budget,
-            "validation_count": len(checks),
-        }
 
     def refine(self, initial, *, check=None):
         """Single-start search retained for registration experiments."""

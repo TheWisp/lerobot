@@ -187,3 +187,25 @@ def test_valid_numerical_iterate_survives_lower_cost_invalid_final_step(monkeypa
     monkeypatch.setattr(fit, "_refine_visible_correspondences", lambda *a: iter(()))
     result, _ = fit.refine(wrong)
     assert_static(fit, result)
+
+
+def test_stationary_frame_uses_one_numerical_fit(monkeypatch):
+    """The actual stationary fit cannot quietly regain three fitting routes."""
+    fit = fitter(
+        ImageConditionedFit,
+        image_reference=np.empty((0, 3)),
+        image_current=np.empty((0, 3)),
+        image_scale_m=0.005,
+        image_weight=1.0,
+    )
+    calls = []
+    original = WholeSurfaceFit._solve
+
+    def measured(self, initial, limit):
+        calls.append(initial.copy())
+        return original(self, initial, limit)
+
+    monkeypatch.setattr(WholeSurfaceFit, "_solve", measured)
+    pose, _ = fit.correct_surface_first(np.eye(4), np.eye(4))
+    assert_static(fit, pose)
+    assert len(calls) == 1

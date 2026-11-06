@@ -1,0 +1,1582 @@
+{
+  "artifact_root": "/home/feit/.cache/flash-tracker-restart/refactor-cost-audit-20261106",
+  "archived_source": "/home/feit/.cache/flash-tracker-restart/matcher-timing-20261105-214614/small_gicp/code",
+  "current_commit": "a298ef42182d343ba18036445426cff336965f8e",
+  "scope": "Sequential same-input runs; small_gicp, saved masks; core processing excludes initialization frame, capture, SAM, IO and display. No algorithm changes. Ablations are diagnostic and not quality-approved.",
+  "comparisons": {
+    "live-old": {
+      "frames": 60,
+      "poses_compared": 60,
+      "max_pose_matrix_difference": 0.003930372993857593,
+      "old": {
+        "code": "old",
+        "recipe": "old",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 132.66845019751275,
+        "median_ms": 130.45882002916187,
+        "fps": 7.537587109152406
+      },
+      "new": {
+        "code": "new",
+        "recipe": "old",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 132.96798503488083,
+        "median_ms": 133.87758895987645,
+        "fps": 7.520607308125148
+      },
+      "status_map_difference_counts": {
+        "map_points": 36,
+        "map_events": 17,
+        "map_version_after": 43
+      },
+      "first_status_map_differences": [
+        [
+          15,
+          "object",
+          "map_points"
+        ],
+        [
+          16,
+          "object",
+          "map_events"
+        ],
+        [
+          17,
+          "object",
+          "map_version_after"
+        ],
+        [
+          17,
+          "object",
+          "map_points"
+        ],
+        [
+          17,
+          "object",
+          "map_events"
+        ]
+      ]
+    },
+    "live-new": {
+      "frames": 60,
+      "poses_compared": 60,
+      "max_pose_matrix_difference": 1.0695925482112623e-14,
+      "old": {
+        "code": "old",
+        "recipe": "new",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 350.9241190829741,
+        "median_ms": 315.6385149923153,
+        "fps": 2.8496188937174636
+      },
+      "new": {
+        "code": "new",
+        "recipe": "new",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 352.22783772831275,
+        "median_ms": 323.6987650161609,
+        "fps": 2.839071455707426
+      },
+      "status_map_difference_counts": {},
+      "first_status_map_differences": []
+    },
+    "placement-old": {
+      "frames": 118,
+      "poses_compared": 236,
+      "max_pose_matrix_difference": 1.9234613901630837e-14,
+      "old": {
+        "code": "old",
+        "recipe": "old",
+        "scene": "placement",
+        "frames": 118,
+        "input_sha256": "09789572f8c3b30cc61951ab4ed51c49a500ee3c4713757751e11ba4c2652a04",
+        "mean_ms": 159.5084304512383,
+        "median_ms": 158.38585601886734,
+        "fps": 6.26926111159811
+      },
+      "new": {
+        "code": "new",
+        "recipe": "old",
+        "scene": "placement",
+        "frames": 118,
+        "input_sha256": "09789572f8c3b30cc61951ab4ed51c49a500ee3c4713757751e11ba4c2652a04",
+        "mean_ms": 163.11954124830663,
+        "median_ms": 161.01581696420908,
+        "fps": 6.130473347014647
+      },
+      "status_map_difference_counts": {},
+      "first_status_map_differences": []
+    }
+  },
+  "runs": {
+    "ablation-coverage": {
+      "timing": {
+        "disabled": "coverage",
+        "code": "new",
+        "recipe": "new",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 346.48025216992505,
+        "median_ms": 319.73522301996127,
+        "fps": 2.8861673753041712
+      },
+      "settings": {
+        "config": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": null,
+            "depth_outlier_sigma": 3,
+            "filtered_depth_for_fitting": true,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "registration": {
+              "backend": "small_gicp",
+              "voxel_sizes_m": [
+                0.006,
+                0.003
+              ],
+              "iterations_per_level": 20,
+              "correspondence_voxels": 3.0,
+              "threads": 2,
+              "translation_epsilon_m": 0.0001,
+              "rotation_epsilon_rad": 0.001,
+              "colored_geometry_weight": 0.968,
+              "appearance_weight": 1.0
+            },
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "require_full_mask_coverage": false,
+            "mask_coverage_weight": 0.5,
+            "scene_depth_constraints": true,
+            "prefer_observed_overlap": true,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        },
+        "surface_experiment": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1.0,
+          "surface_priority": true,
+          "partial_surface_matching": true,
+          "recovery_starts": 4,
+          "fit_view_limit": 1,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10.0,
+            "position_process_std_m_sqrt_s": 0.03,
+            "rotation_process_std_deg_sqrt_s": 2.0,
+            "reset_on_geometry_conflict": false,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.25,
+            "prefer_supported_prediction": true
+          }
+        },
+        "group_experiment": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "shared_matching": {
+          "backend": "lk",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "retain_motion_reference": true
+      }
+    },
+    "ablation-partial": {
+      "timing": {
+        "disabled": "partial",
+        "code": "new",
+        "recipe": "new",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 146.40141160807462,
+        "median_ms": 145.96566301770508,
+        "fps": 6.830535231976178
+      },
+      "settings": {
+        "config": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": null,
+            "depth_outlier_sigma": 3,
+            "filtered_depth_for_fitting": true,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "registration": {
+              "backend": "small_gicp",
+              "voxel_sizes_m": [
+                0.006,
+                0.003
+              ],
+              "iterations_per_level": 20,
+              "correspondence_voxels": 3.0,
+              "threads": 2,
+              "translation_epsilon_m": 0.0001,
+              "rotation_epsilon_rad": 0.001,
+              "colored_geometry_weight": 0.968,
+              "appearance_weight": 1.0
+            },
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "require_full_mask_coverage": true,
+            "mask_coverage_weight": 0.5,
+            "scene_depth_constraints": true,
+            "prefer_observed_overlap": true,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        },
+        "surface_experiment": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1.0,
+          "surface_priority": true,
+          "partial_surface_matching": false,
+          "recovery_starts": 4,
+          "fit_view_limit": 1,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10.0,
+            "position_process_std_m_sqrt_s": 0.03,
+            "rotation_process_std_deg_sqrt_s": 2.0,
+            "reset_on_geometry_conflict": false,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.25,
+            "prefer_supported_prediction": true
+          }
+        },
+        "group_experiment": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "shared_matching": {
+          "backend": "lk",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "retain_motion_reference": true
+      }
+    },
+    "ablation-scene_depth": {
+      "timing": {
+        "disabled": "scene_depth",
+        "code": "new",
+        "recipe": "new",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 326.8475515404874,
+        "median_ms": 299.5112360222265,
+        "fps": 3.0595303384921566
+      },
+      "settings": {
+        "config": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": null,
+            "depth_outlier_sigma": 3,
+            "filtered_depth_for_fitting": true,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "registration": {
+              "backend": "small_gicp",
+              "voxel_sizes_m": [
+                0.006,
+                0.003
+              ],
+              "iterations_per_level": 20,
+              "correspondence_voxels": 3.0,
+              "threads": 2,
+              "translation_epsilon_m": 0.0001,
+              "rotation_epsilon_rad": 0.001,
+              "colored_geometry_weight": 0.968,
+              "appearance_weight": 1.0
+            },
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "require_full_mask_coverage": true,
+            "mask_coverage_weight": 0.5,
+            "scene_depth_constraints": false,
+            "prefer_observed_overlap": true,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        },
+        "surface_experiment": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1.0,
+          "surface_priority": true,
+          "partial_surface_matching": true,
+          "recovery_starts": 4,
+          "fit_view_limit": 1,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10.0,
+            "position_process_std_m_sqrt_s": 0.03,
+            "rotation_process_std_deg_sqrt_s": 2.0,
+            "reset_on_geometry_conflict": false,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.25,
+            "prefer_supported_prediction": true
+          }
+        },
+        "group_experiment": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "shared_matching": {
+          "backend": "lk",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "retain_motion_reference": true
+      }
+    },
+    "live-new-new": {
+      "timing": {
+        "code": "new",
+        "recipe": "new",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 352.22783772831275,
+        "median_ms": 323.6987650161609,
+        "fps": 2.839071455707426
+      },
+      "settings": {
+        "config": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": null,
+            "depth_outlier_sigma": 3,
+            "filtered_depth_for_fitting": true,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "registration": {
+              "backend": "small_gicp",
+              "voxel_sizes_m": [
+                0.006,
+                0.003
+              ],
+              "iterations_per_level": 20,
+              "correspondence_voxels": 3.0,
+              "threads": 2,
+              "translation_epsilon_m": 0.0001,
+              "rotation_epsilon_rad": 0.001,
+              "colored_geometry_weight": 0.968,
+              "appearance_weight": 1.0
+            },
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "require_full_mask_coverage": true,
+            "mask_coverage_weight": 0.5,
+            "scene_depth_constraints": true,
+            "prefer_observed_overlap": true,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        },
+        "surface_experiment": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1.0,
+          "surface_priority": true,
+          "partial_surface_matching": true,
+          "recovery_starts": 4,
+          "fit_view_limit": 1,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10.0,
+            "position_process_std_m_sqrt_s": 0.03,
+            "rotation_process_std_deg_sqrt_s": 2.0,
+            "reset_on_geometry_conflict": false,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.25,
+            "prefer_supported_prediction": true
+          }
+        },
+        "group_experiment": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "shared_matching": {
+          "backend": "lk",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "retain_motion_reference": true
+      }
+    },
+    "live-new-old": {
+      "timing": {
+        "code": "new",
+        "recipe": "old",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 132.96798503488083,
+        "median_ms": 133.87758895987645,
+        "fps": 7.520607308125148
+      },
+      "settings": {
+        "config": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": 0.01,
+            "depth_outlier_sigma": null,
+            "filtered_depth_for_fitting": false,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "registration": {
+              "backend": "small_gicp",
+              "voxel_sizes_m": [
+                0.006,
+                0.003
+              ],
+              "iterations_per_level": 20,
+              "correspondence_voxels": 3.0,
+              "threads": 2,
+              "translation_epsilon_m": 0.0001,
+              "rotation_epsilon_rad": 0.001,
+              "colored_geometry_weight": 0.968,
+              "appearance_weight": 1.0
+            },
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "require_full_mask_coverage": false,
+            "mask_coverage_weight": 1.0,
+            "scene_depth_constraints": false,
+            "prefer_observed_overlap": false,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        },
+        "surface_experiment": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1.0,
+          "surface_priority": true,
+          "partial_surface_matching": false,
+          "recovery_starts": 0,
+          "fit_view_limit": null,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10.0,
+            "position_process_std_m_sqrt_s": 0.002,
+            "rotation_process_std_deg_sqrt_s": 2.0,
+            "reset_on_geometry_conflict": true,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.25,
+            "prefer_supported_prediction": true
+          }
+        },
+        "group_experiment": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "shared_matching": {
+          "backend": "lk",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "retain_motion_reference": true
+      }
+    },
+    "live-old-new": {
+      "timing": {
+        "code": "old",
+        "recipe": "new",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 350.9241190829741,
+        "median_ms": 315.6385149923153,
+        "fps": 2.8496188937174636
+      },
+      "settings": {
+        "config": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": null,
+            "depth_outlier_sigma": 3,
+            "filtered_depth_for_fitting": true,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "registration": {
+              "backend": "small_gicp",
+              "voxel_sizes_m": [
+                0.006,
+                0.003
+              ],
+              "iterations_per_level": 20,
+              "correspondence_voxels": 3.0,
+              "threads": 2,
+              "translation_epsilon_m": 0.0001,
+              "rotation_epsilon_rad": 0.001,
+              "colored_geometry_weight": 0.968,
+              "appearance_weight": 1.0
+            },
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "require_full_mask_coverage": true,
+            "mask_coverage_weight": 0.5,
+            "scene_depth_constraints": true,
+            "prefer_observed_overlap": true,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        },
+        "surface_experiment": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1.0,
+          "surface_priority": true,
+          "partial_surface_matching": true,
+          "recovery_starts": 4,
+          "fit_view_limit": 1,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10.0,
+            "position_process_std_m_sqrt_s": 0.03,
+            "rotation_process_std_deg_sqrt_s": 2.0,
+            "reset_on_geometry_conflict": false,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.25,
+            "prefer_supported_prediction": true
+          }
+        },
+        "group_experiment": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "shared_matching": {
+          "backend": "lk",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "retain_motion_reference": true
+      }
+    },
+    "live-old-old": {
+      "timing": {
+        "code": "old",
+        "recipe": "old",
+        "scene": "live",
+        "frames": 60,
+        "input_sha256": "1351d0c3b2c9edd5d5d822020629d9b7ffcbbd8388cbce5dd26af01d87196d20",
+        "mean_ms": 132.66845019751275,
+        "median_ms": 130.45882002916187,
+        "fps": 7.537587109152406
+      },
+      "settings": {
+        "config": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": 0.01,
+            "depth_outlier_sigma": null,
+            "filtered_depth_for_fitting": false,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "registration": {
+              "backend": "small_gicp",
+              "voxel_sizes_m": [
+                0.006,
+                0.003
+              ],
+              "iterations_per_level": 20,
+              "correspondence_voxels": 3.0,
+              "threads": 2,
+              "translation_epsilon_m": 0.0001,
+              "rotation_epsilon_rad": 0.001,
+              "colored_geometry_weight": 0.968,
+              "appearance_weight": 1.0
+            },
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "require_full_mask_coverage": false,
+            "mask_coverage_weight": 1.0,
+            "scene_depth_constraints": false,
+            "prefer_observed_overlap": false,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        },
+        "surface_experiment": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1.0,
+          "surface_priority": true,
+          "partial_surface_matching": false,
+          "recovery_starts": 0,
+          "fit_view_limit": null,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10.0,
+            "position_process_std_m_sqrt_s": 0.002,
+            "rotation_process_std_deg_sqrt_s": 2.0,
+            "reset_on_geometry_conflict": true,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.25,
+            "prefer_supported_prediction": true
+          }
+        },
+        "group_experiment": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "shared_matching": {
+          "backend": "lk",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "retain_motion_reference": true
+      }
+    },
+    "placement-new-old": {
+      "timing": {
+        "code": "new",
+        "recipe": "old",
+        "scene": "placement",
+        "frames": 118,
+        "input_sha256": "09789572f8c3b30cc61951ab4ed51c49a500ee3c4713757751e11ba4c2652a04",
+        "mean_ms": 163.11954124830663,
+        "median_ms": 161.01581696420908,
+        "fps": 6.130473347014647
+      },
+      "settings": {
+        "config": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": 0.01,
+            "depth_outlier_sigma": null,
+            "filtered_depth_for_fitting": false,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "registration": {
+              "backend": "small_gicp",
+              "voxel_sizes_m": [
+                0.006,
+                0.003
+              ],
+              "iterations_per_level": 20,
+              "correspondence_voxels": 3.0,
+              "threads": 2,
+              "translation_epsilon_m": 0.0001,
+              "rotation_epsilon_rad": 0.001,
+              "colored_geometry_weight": 0.968,
+              "appearance_weight": 1.0
+            },
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "require_full_mask_coverage": false,
+            "mask_coverage_weight": 1.0,
+            "scene_depth_constraints": false,
+            "prefer_observed_overlap": false,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        },
+        "surface_experiment": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1.0,
+          "surface_priority": true,
+          "partial_surface_matching": false,
+          "recovery_starts": 0,
+          "fit_view_limit": null,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10.0,
+            "position_process_std_m_sqrt_s": 0.002,
+            "rotation_process_std_deg_sqrt_s": 2.0,
+            "reset_on_geometry_conflict": true,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.25,
+            "prefer_supported_prediction": true
+          }
+        },
+        "group_experiment": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "shared_matching": {
+          "backend": "ufm",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "retain_motion_reference": true
+      }
+    },
+    "placement-old-old": {
+      "timing": {
+        "code": "old",
+        "recipe": "old",
+        "scene": "placement",
+        "frames": 118,
+        "input_sha256": "09789572f8c3b30cc61951ab4ed51c49a500ee3c4713757751e11ba4c2652a04",
+        "mean_ms": 159.5084304512383,
+        "median_ms": 158.38585601886734,
+        "fps": 6.26926111159811
+      },
+      "settings": {
+        "config": {
+          "backend": "surface",
+          "sam_resolution": 504,
+          "min_similarity": 0.75,
+          "registration_threshold_m": 0.005,
+          "registration_min_inliers": 12,
+          "registration_trials": 100,
+          "visible_shape_fallback": false,
+          "parallel_surface_objects": true,
+          "pipeline_surface_frames": true,
+          "surface_object_workers": 2,
+          "surface_reference_max_points_per_view": 15000,
+          "compiled_surface_fit": true,
+          "reuse_surface_search": true,
+          "detection_correction": {
+            "enabled": false,
+            "offline_interval_frames": 16,
+            "runtime_interval_frames": 60,
+            "min_detector_score": 0.8,
+            "min_tracker_score": 0.8,
+            "min_mask_overlap": 0.5
+          },
+          "observation": {
+            "mask_margin_px": 2,
+            "depth_span_m": 0.01,
+            "depth_neighborhood_px": 3,
+            "normal_bilateral_diameter_px": 5,
+            "normal_bilateral_sigma_px": 2.0,
+            "huber_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "samples_across_object": 64,
+            "min_surface_spacing_m": 0.001,
+            "component_gap_m": 0.01,
+            "depth_outlier_sigma": null,
+            "filtered_depth_for_fitting": false,
+            "validation_tile_px": 4
+          },
+          "shape": {
+            "registration": {
+              "backend": "small_gicp",
+              "voxel_sizes_m": [
+                0.006,
+                0.003
+              ],
+              "iterations_per_level": 20,
+              "correspondence_voxels": 3.0,
+              "threads": 2,
+              "translation_epsilon_m": 0.0001,
+              "rotation_epsilon_rad": 0.001,
+              "colored_geometry_weight": 0.968,
+              "appearance_weight": 1.0
+            },
+            "depth_tolerance_m": 0.005,
+            "surface_spacing_m": 0.003,
+            "mask_boundary_tolerance_px": 2.0,
+            "require_full_mask_coverage": false,
+            "mask_coverage_weight": 1.0,
+            "scene_depth_constraints": false,
+            "prefer_observed_overlap": false,
+            "max_surface_distance_m": 0.03,
+            "max_evaluations": 50,
+            "solver_tolerance": 1e-05,
+            "max_fit_points": 2048,
+            "nn_queries_per_worker": 512,
+            "batch_jacobian": true,
+            "batch_query_workers": 8
+          },
+          "motion": {
+            "crop_min_px": 160,
+            "crop_max_px": 480,
+            "crop_extent_multiplier": 2.5,
+            "input_size_px": 320,
+            "grid_step_px": 4,
+            "covisibility_min": 0.5,
+            "min_ransac_pairs": 6,
+            "ransac_distance_m": 0.006,
+            "ransac_confidence": 0.99,
+            "refinement_steps": 2,
+            "connected_dilation_px": 7
+          }
+        },
+        "surface_experiment": {
+          "spacing_m": 0.003,
+          "agreement_m": 0.005,
+          "min_overlap": 0.25,
+          "growth_agreement_m": 0.003,
+          "growth_min_overlap": 0.75,
+          "patch_consistency": 0.95,
+          "patch_overlap": 0.8,
+          "image_weight": 1.0,
+          "surface_priority": true,
+          "partial_surface_matching": false,
+          "recovery_starts": 0,
+          "fit_view_limit": null,
+          "confirmations": 2,
+          "max_patches": 32,
+          "max_pending": 8,
+          "points_per_patch": 1024,
+          "max_points": 8192,
+          "grow": true,
+          "retain_unobserved_pose": false,
+          "uncertainty": {
+            "enabled": true,
+            "mode": "kalman",
+            "initial_position_std_m": 0.005,
+            "initial_rotation_std_deg": 10.0,
+            "position_process_std_m_sqrt_s": 0.002,
+            "rotation_process_std_deg_sqrt_s": 2.0,
+            "reset_on_geometry_conflict": true,
+            "independent_error_m": 0.001,
+            "correlated_error_m": 0.002,
+            "correlation_length_m": 0.01,
+            "max_measurements": 256,
+            "compatibility_probability": 0.95,
+            "max_visible_outlier_fraction": 0.25,
+            "prefer_supported_prediction": true
+          }
+        },
+        "group_experiment": {
+          "context_radius_m": 0.25,
+          "min_inliers": 12,
+          "fit_threshold_m": 0.005,
+          "object_max_points": 120,
+          "object_max_frame_gap_s": 0.1,
+          "object_fb_threshold_px": 1.0,
+          "object_image_scale": 1.0,
+          "depth_support_radius_px": 1,
+          "support_confirmation_s": 1.0,
+          "point_evidence_weight": 1.0
+        },
+        "shared_matching": {
+          "backend": "ufm",
+          "max_image_size_px": 640,
+          "scene_points": 800,
+          "object_points": 256,
+          "spacing_px": 5,
+          "history_frames": 64,
+          "depth_support_radius_px": 1,
+          "lk": {
+            "window_size_px": 21,
+            "pyramid_levels": 3,
+            "forward_backward_limit_px": 1.0
+          },
+          "ufm": {
+            "covisibility_min": 0.5
+          }
+        },
+        "retain_motion_reference": true
+      }
+    }
+  }
+}

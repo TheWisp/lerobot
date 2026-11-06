@@ -93,6 +93,67 @@ def depth_blocks(
     return result
 
 
+def projection_evidence(predicted, uv, mask_distance, depth, mask, tolerance, margin, fx_camera):
+    """Four measured rays per point, without intermediate N×4 arrays."""
+    count = len(predicted)
+    visible = np.zeros(count, np.float64)
+    empty = np.zeros(count, np.float64)
+    silhouette = np.empty(count, np.float64)
+    height, width = depth.shape
+    for i in range(count):
+        u, v = uv[i, 0], uv[i, 1]
+        inside = 0 <= u <= width - 1 and 0 <= v <= height - 1
+        x, y = min(max(u, 0.0), width - 1.0), min(max(v, 0.0), height - 1.0)
+        x0, y0 = int(np.floor(x)), int(np.floor(y))
+        x1, y1 = min(x0 + 1, width - 1), min(y0 + 1, height - 1)
+        fx, fy = x - x0, y - y0
+        weights = ((1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy)
+        xs, ys = (x0, x1, x0, x1), (y0, y0, y1, y1)
+        for j in range(4):
+            ray = depth[ys[j], xs[j]]
+            known = ray > 0 and inside
+            v = min(max((ray - predicted[i, 2] + tolerance) / tolerance, 0.0), 1.0)
+            f = min(max((ray - predicted[i, 2] - tolerance) / tolerance, 0.0), 1.0)
+            visible[i] += weights[j] * known * mask[ys[j], xs[j]] * v
+            empty[i] += weights[j] * known * f
+        silhouette[i] = max(mask_distance[i] - margin, 0.0) * predicted[i, 2] / fx_camera
+    return visible, empty, silhouette
+
+
+def scene_evidence(predicted, uv, depth, tolerance):
+    """Evaluate empty space and occlusion on the same conservative depth rays."""
+    count = len(predicted)
+    free = np.zeros(count, np.float64)
+    exposed = np.zeros(count, np.float64)
+    contradicted = np.zeros(count, np.float64)
+    height, width = depth.shape
+    for i in range(count):
+        u, v = uv[i, 0], uv[i, 1]
+        valid = (
+            np.isfinite(u)
+            and np.isfinite(v)
+            and predicted[i, 2] > 0
+            and 0 <= u <= width - 1
+            and 0 <= v <= height - 1
+        )
+        x = min(max(0.0 if np.isnan(u) else u, 0.0), width - 1.0)
+        y = min(max(0.0 if np.isnan(v) else v, 0.0), height - 1.0)
+        x0, y0 = int(x), int(y)
+        x1, y1 = min(x0 + 1, width - 1), min(y0 + 1, height - 1)
+        fx, fy = x - x0, y - y0
+        weights = ((1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy)
+        xs, ys = (x0, x1, x0, x1), (y0, y0, y1, y1)
+        for j in range(4):
+            ray = depth[ys[j], xs[j]]
+            known = ray > 0 and valid
+            gap = ray - predicted[i, 2]
+            exposed[i] += weights[j] * known * min(max((gap + tolerance) / tolerance, 0.0), 1.0)
+            contradicted[i] += weights[j] * known * (gap > tolerance)
+            free[i] += weights[j] * known * max(gap - tolerance, 0.0) ** 2
+        free[i] = np.sqrt(free[i])
+    return free, exposed, contradicted
+
+
 def outline_distances(outline, polygon, margin):
     result = np.empty(len(outline), np.float64)
     for i in range(len(outline)):
@@ -128,6 +189,8 @@ def compiled_kernels():
     kernels = (
         njit(nogil=True, fastmath=False, cache=True)(depth_blocks),
         njit(nogil=True, fastmath=False, cache=True)(outline_distances),
+        njit(nogil=True, fastmath=False, cache=True)(projection_evidence),
+        njit(nogil=True, fastmath=False, cache=True)(scene_evidence),
     )
 
     # Compile before processing frames; float32 is metric_depth's live dtype.
@@ -149,5 +212,7 @@ def compiled_kernels():
             2.0,
             1.0,
         )
+        kernels[2](points, uv, distances, np.ones((2, 2), dtype), np.ones((2, 2), bool), 0.005, 2.0, 1.0)
+        kernels[3](points, uv, np.ones((2, 2), dtype), 0.005)
     kernels[1](uv, points[:, :2].copy(), 2.0)
     return kernels

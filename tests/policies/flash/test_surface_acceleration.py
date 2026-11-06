@@ -279,3 +279,90 @@ def test_first_debug_selection_and_replacement_both_initialize():
     result = new_runner.process_next(lambda: next(source, None))
     assert result[1].details["object"]["status"] == "reference"
     new_runner.close()
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_compiled_ray_evidence_matches_numpy_for_partial_views(dtype):
+    """Depth holes, occluders, empty space, edges and subpixel projections."""
+
+    from benchmarks.flash_partial_surface_control import box_observation
+    from lerobot.policies.flash.surface_acceleration import compiled_kernels
+    from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFit
+
+    source, k, _ = box_observation(0)
+    current, _, _ = box_observation(40)
+    current["depth"] = current["depth"].astype(dtype)
+    current["depth"][60:80, 100:130] = 0
+    current["depth"][80:100, 100:130] = 0.3
+    config = ShapeConfig(scene_depth_constraints=True, prefer_observed_overlap=True)
+    numpy_fit = WholeSurfaceFit(source["obs"]["points"], current, k, config)
+    native_fit = WholeSurfaceFit(source["obs"]["points"], current, k, config, fit_kernels=compiled_kernels())
+    rng = np.random.default_rng(14)
+    points = rng.uniform([-0.3, -0.2, 0.2], [0.3, 0.2, 1.8], size=(3000, 3))
+    # Include exact and fractional rays around all four image borders.
+    uv = np.array([[x, y] for x in (-0.1, 0, 0.5, 239, 239.1) for y in (-0.1, 0, 0.5, 179, 179.1)])
+    rays = np.column_stack(((uv - k[:2, 2]) / np.diag(k)[:2], np.ones(len(uv)))) * 0.7
+    points = np.concatenate((points, rays))
+    for method in ("_projection_evidence", "_scene_depth_evidence"):
+        expected = getattr(numpy_fit, method)(points)
+        actual = getattr(native_fit, method)(points)
+        for a, b in zip(actual, expected, strict=True):
+            np.testing.assert_allclose(a, b, rtol=1e-14, atol=1e-14)
+
+
+def test_image_and_geometry_objectives_share_prepared_views():
+    from benchmarks.flash_partial_surface_control import box_observation
+    from lerobot.policies.flash.surface_grounding import SurfaceFitView
+
+    source, k, _ = box_observation(0)
+    current, _, pose = box_observation(30)
+    config = ShapeConfig(scene_depth_constraints=True)
+    view = SurfaceFitView(source, k, np.eye(4))
+    a = WholeSurfaceFit(source["obs"]["points"], current, k, config, reference_views=(view,))
+    b = WholeSurfaceFit(
+        a.reference,
+        current,
+        k,
+        config,
+        prepared_reference=a.prepared_reference,
+        prepared_target=a.prepared_target,
+        reference_views=(view,),
+        prepared_reverse_fits=a.reverse_fits,
+    )
+    assert b.reverse_fits is a.reverse_fits
+    np.testing.assert_array_equal(a.residual(pose), b.residual(pose))
+    assert a.check_pose(pose, max_outlier_fraction=0.25) == b.check_pose(pose, max_outlier_fraction=0.25)
+    other, _, _ = box_observation(20)
+    with pytest.raises(ValueError, match="prepared views"):
+        WholeSurfaceFit(
+            a.reference, other, k, config, reference_views=(view,), prepared_reverse_fits=a.reverse_fits
+        )
+
+
+def test_reused_residuals_preserve_geometry_after_eviction_and_frame_change():
+    """A workspace cannot change costs, acceptance, or the next frame's evidence."""
+    from benchmarks.flash_partial_surface_control import box_observation
+    from lerobot.policies.flash.surface_grounding import SurfaceFitView
+
+    source, k, _ = box_observation(0)
+    current, _, pose = box_observation(30)
+    config = ShapeConfig(scene_depth_constraints=True)
+    views = (SurfaceFitView(source, k, np.eye(4)),)
+    fit = WholeSurfaceFit(source["obs"]["points"], current, k, config, reference_views=views)
+    expected = fit.residual(pose).copy()
+    expected_check = fit.check_pose(pose, max_outlier_fraction=0.25)
+    # Exceed the workspace capacity with distinct optimizer probes. Re-evaluating
+    # an evicted pose must agree with a fresh fitter, not a remembered score.
+    for delta in np.linspace(-0.01, 0.01, 96):
+        probe = pose.copy()
+        probe[0, 3] += delta
+        fit.residual(probe)
+    assert len(fit._residual_cache) <= 64
+    np.testing.assert_array_equal(fit.residual(pose), expected)
+    assert fit.check_pose(pose, max_outlier_fraction=0.25) == expected_check
+
+    # The same pose is not the same evidence after the object moves.
+    later, _, _ = box_observation(60)
+    next_fit = WholeSurfaceFit(source["obs"]["points"], later, k, config, reference_views=views)
+    assert not np.array_equal(next_fit.residual(pose), expected)
+    np.testing.assert_array_equal(fit.residual(pose), expected)

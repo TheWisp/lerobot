@@ -434,25 +434,7 @@ class ImageConditionedFit(WholeSurfaceFit):
         self.image_reference, self.image_current = image_reference, image_current
         self.image_scale_m, self.image_weight = image_scale_m, image_weight
         self.point_evidence = point_evidence
-
-    def _residual_with_distances(self, pose, predicted, model_distance, target_distance):
-        surface = super()._residual_with_distances(pose, predicted, model_distance, target_distance)
-        blocks = [surface]
-        sources = [(self.image_reference, self.image_current, self.image_scale_m, self.image_weight)]
-        sources.extend((p.reference, p.current, p.scale_m, p.weight) for p in self.point_evidence)
-        for reference, current, scale, weight in sources:
-            if not len(reference) or weight == 0:
-                continue
-            difference = (move(reference, pose) - current) / scale
-            squared = np.where(abs(difference) <= 1, difference**2, 2 * abs(difference) - 1)
-            residual = np.sign(difference) * np.sqrt(squared)
-            blocks.append(residual.ravel() * np.sqrt(weight / len(residual)))
-        return np.concatenate(blocks)
-
-    def correct_surface_first(self, proposal, previous, *, uncertainty=None, recovery_starts=0, check=None):
-        """Rank geometrically valid candidates, then optionally measure uncertainty."""
-        uncertainty = uncertainty or PoseUncertaintyConfig()
-        geometry = WholeSurfaceFit(
+        self.geometry = WholeSurfaceFit(
             self.reference,
             self.observation,
             self.k,
@@ -463,7 +445,43 @@ class ImageConditionedFit(WholeSurfaceFit):
             search_pool=self.search_pool,
             reference_views=self.reference_views,
             appearance_views=self.appearance_views,
+            prepared_reverse_fits=self.reverse_fits,
         )
+
+    @property
+    def has_image_evidence(self):
+        return bool(len(self.image_reference) and self.image_weight) or any(
+            len(p.reference) and p.weight for p in self.point_evidence
+        )
+
+    def _image_residual(self, pose):
+        blocks = []
+        sources = [(self.image_reference, self.image_current, self.image_scale_m, self.image_weight)]
+        sources.extend((p.reference, p.current, p.scale_m, p.weight) for p in self.point_evidence)
+        for reference, current, scale, weight in sources:
+            if not len(reference) or weight == 0:
+                continue
+            difference = (move(reference, pose) - current) / scale
+            squared = np.where(abs(difference) <= 1, difference**2, 2 * abs(difference) - 1)
+            residual = np.sign(difference) * np.sqrt(squared)
+            blocks.append(residual.ravel() * np.sqrt(weight / len(residual)))
+        return np.concatenate(blocks) if blocks else np.empty(0)
+
+    def residual(self, pose, *, include_coverage=True):
+        return np.concatenate(
+            (self.geometry.residual(pose, include_coverage=include_coverage), self._image_residual(pose))
+        )
+
+    def batch_residuals(self, poses):
+        return [
+            np.concatenate((surface, self._image_residual(pose)))
+            for surface, pose in zip(self.geometry.batch_residuals(poses), poses, strict=True)
+        ]
+
+    def correct_surface_first(self, proposal, previous, *, uncertainty=None, recovery_starts=0, check=None):
+        """Rank geometrically valid candidates, then optionally measure uncertainty."""
+        uncertainty = uncertainty or PoseUncertaintyConfig()
+        geometry = self.geometry
         if check is None:
 
             def check(pose):
