@@ -78,10 +78,6 @@ def test_static_prediction_fits_current_depth_alone(clip):
     assert not verdict["scene_depth_coherent_protrusion"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="retained rim depth of uncertain ownership still vetoes the static object",
-)
 def test_static_prediction_passes_the_retained_view_check(clip):
     verdict = clip["check"](clip["two"], clip["arrays"]["prediction_pose"])
     views = {v["direction"]: v for v in verdict["scene_depth_views"]}

@@ -3,8 +3,10 @@
 The reference is an observed surface, not a CAD model or a cylinder. When its
 source depth and mask are supplied, both observations are treated as partial:
 only mutually visible surface requires a correspondence. Either image can still
-rule out a placement in measured empty space. Callers without the source view
-retain the older, unconditional current-to-reference coverage objective.
+rule out a placement in measured empty space, except that one retained image
+cannot veto current surface lying on the saved surface: every view that built
+the surface measured it there. Callers without the source view retain the
+older, unconditional current-to-reference coverage objective.
 """
 
 from __future__ import annotations
@@ -658,12 +660,25 @@ class WholeSurfaceFit:
 
     def scene_depth_check(self, pose):
         # A solver's subsampling budget must not hide a contradictory patch.
-        directions = [(self, move(self.reference, pose))]
+        directions = [(self, move(self.reference, pose), False)]
         inverse = np.linalg.inv(pose)
-        directions.extend((fit, move(fit.reference, camera @ inverse)) for camera, fit in self.reverse_fits)
+        directions.extend(
+            (fit, move(fit.reference, camera @ inverse), True) for camera, fit in self.reverse_fits
+        )
         fractions, exposed_counts, coherent_protrusions = [], [], []
-        for fit, predicted in directions:
+        for fit, predicted, retained in directions:
             _, exposed, bad = fit._scene_depth_evidence(predicted)
+            if retained and bad.any():
+                # One retained frame measured this surface once; the saved
+                # surface aggregates every accepted view. A current sample on
+                # the saved surface under this pose therefore outvotes the one
+                # older reading that puts it in air (rim depth read millimetres
+                # farther in a single frame). Current surface beyond the saved
+                # surface, and the current image's own air, keep the full veto.
+                contradicted = np.flatnonzero(bad)
+                distance = self.reference_tree.query(move(fit.reference[contradicted], inverse))[0]
+                bad = bad.copy()
+                bad[contradicted[distance <= self.config.depth_tolerance_m]] = 0.0
             count = float(exposed.sum())
             exposed_counts.append(count)
             fractions.append(float(bad.sum() / count) if count else 0.0)
@@ -682,7 +697,7 @@ class WholeSurfaceFit:
                     "outlier_fraction": fractions[index],
                     "coherent_protrusion": coherent_protrusions[index],
                 }
-                for index, (fit, _) in enumerate(directions)
+                for index, (fit, _, _) in enumerate(directions)
             ],
         }
 

@@ -179,7 +179,13 @@ pose is necessary because fusion changes its position/orientation.
 **Acceptance and optimization have different jobs.** A returned measured pose
 must pass the geometry checks: no coherent protrusion into measured empty space,
 and agreement where the two measured surfaces are mutually visible, within the
-configured depth/boundary uncertainty. Texture similarity and outline coverage
+configured depth/boundary uncertainty. The retained depth view vetoes only
+current surface that lies beyond the saved surface under the tested pose: a
+current sample on the saved surface was measured there by every view that
+built it, so one older frame reading farther at that pixel (rim depth of
+uncertain ownership, read millimetres farther in a single frame) is the odd
+measurement out. The current image's own empty space keeps its full veto.
+Texture similarity and outline coverage
 rank poses that pass; neither can compensate for a failed geometry check.
 Uncovered outline is a preference, because the saved surface may be incomplete.
 Missing depth and occluded surface provide no direct contradiction. If no tested
