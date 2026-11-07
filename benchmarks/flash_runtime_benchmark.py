@@ -34,6 +34,22 @@ from lerobot.policies.flash.surface_tracking import load_ufm
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig, build_vision_backend
 
 
+def latency_distribution(values: list[float]) -> dict:
+    """Wall-time tails and variance; first frame is excluded by the caller."""
+    values = np.asarray(values, dtype=float)
+    if not len(values) or not np.isfinite(values).all():
+        raise ValueError("latency distribution requires finite frame times")
+    return {
+        "median": float(np.median(values)),
+        "p90": float(np.quantile(values, 0.9)),
+        "p99": float(np.quantile(values, 0.99)),
+        "max": float(values.max()),
+        "stddev": float(values.std()),
+        "over_100ms": int(np.count_nonzero(values > 100)),
+        "frames": int(len(values)),
+    }
+
+
 class FitProfile(ExitStack):
     """Opt-in wall-time attribution for the serial experiment, without changing results.
 
@@ -424,6 +440,15 @@ def main():
             if pool is not None:
                 pool.close()
         result["startup_s"] = startup_s
+        frame_file = destination / case["id"] / "frames.jsonl"
+        with frame_file.open() as stream:
+            next(stream)
+            result["processing"]["steady_ms"] = latency_distribution(
+                [json.loads(line)["processing_ms"] for line in stream]
+            )
+        (destination / case["id"] / "summary.json").write_text(
+            json.dumps(result, indent=2, allow_nan=False) + "\n"
+        )
         if args.compare_to is not None:
             comparison = compare_runs(
                 args.compare_to / f"{index:03d}" / case["id"],

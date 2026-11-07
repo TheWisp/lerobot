@@ -1,6 +1,6 @@
 """Generic controls for the opt-in recovery experiments, including false fits."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import numpy as np
 import pytest
@@ -89,17 +89,14 @@ def test_bounded_coarse_search_only_generates_proper_rigid_transforms():
         assert any(np.allclose(p, q) for q in expanded)
 
 
-@pytest.mark.parametrize("starts", [-1, 25, 1.5, True])
-def test_recovery_search_budget_is_bounded(starts):
-    with pytest.raises(ValueError):
-        GrowingSurfaceConfig(recovery_starts=starts)
+def test_retired_recovery_setting_is_only_accepted_for_old_recordings():
+    assert "recovery_starts" not in asdict(GrowingSurfaceConfig(recovery_starts=4))
 
 
 def test_experiments_are_opt_in_and_config_roundtrips():
     config = VisionPipelineConfig()
     assert config.observation.depth_outlier_sigma is None
     assert not config.observation.filtered_depth_for_fitting
-    assert GrowingSurfaceConfig().recovery_starts == 0
     changed = VisionPipelineConfig.from_dict({"observation": {"filtered_depth_for_fitting": True}})
     assert changed.observation.filtered_depth_for_fitting
     with pytest.raises(ValueError):

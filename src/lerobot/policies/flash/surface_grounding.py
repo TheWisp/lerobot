@@ -568,6 +568,18 @@ class WholeSurfaceFit:
         scene = self.scene_depth_check(pose)
         if max_outlier_fraction is None and min_overlap == 0:
             return {**scene, "accepted": not scene["scene_depth_coherent_protrusion"]}
+        if scene["scene_depth_coherent_protrusion"]:
+            # Measured empty space is a hard contradiction. No amount of
+            # object-surface overlap can accept this pose, so do not run the
+            # two-way nearest-neighbour check on a known rejected candidate.
+            return {
+                **scene,
+                "accepted": False,
+                "geometry_accepted": False,
+                "observed_overlap": 0.0,
+                "observed_overlap_basis": "not_tested_after_protrusion",
+                "surface_median_mm": None,
+            }
         distances = self.prepared_reference.tree.query(
             (self.observation["obs"]["points"] - pose[:3, 3]) @ pose[:3, :3]
         )[0]
@@ -713,7 +725,7 @@ class WholeSurfaceFit:
         return cost
 
     def _solve(self, initial, max_evaluations):
-        """Propose poses; shared search owns validation and selection."""
+        """Run the configured local registration solver from one starting pose."""
         if self.config.registration.backend == "visible_icp":
             from .surface_rigid_fit import solve
 
@@ -726,39 +738,61 @@ class WholeSurfaceFit:
         pose, detail = solver.refine(self, initial, max_evaluations=max_evaluations)
         return pose, detail, [(self.score(p), p) for p in solver._local.proposals]
 
-    def search(
+    def fit_once(
         self,
         proposal,
         *,
         geometry=None,
-        previous=None,
         check=None,
-        extra=(),
-        coarse=True,
-        recovery_starts=0,
-        evaluation_budget=None,
     ):
-        """Compatibility entry point; all pose search goes through PoseMatcher."""
-        from .surface_matching import DEFAULT_MATCHER
-
-        return DEFAULT_MATCHER.match(
-            self,
-            proposal,
-            geometry=geometry,
-            previous=previous,
-            check=check,
-            extra=extra,
-            coarse=coarse,
-            recovery_starts=recovery_starts,
-            evaluation_budget=evaluation_budget,
+        """Run one bounded registration; publish only an observed-compatible iterate."""
+        geometry = self if geometry is None else geometry
+        check = geometry.check_pose if check is None else check
+        objective = (
+            self
+            if self.has_image_evidence and self.config.registration.backend == "visible_icp"
+            else geometry
         )
+        final, detail, iterates = objective._solve(proposal, self.config.max_evaluations)
+        poses = list({pose.tobytes(): pose for _, pose in iterates}.values())
+        if final.tobytes() not in {pose.tobytes() for pose in poses}:
+            poses.append(final)
+        geometry.batch_residuals(poses)
+        ranked = sorted(poses, key=geometry.score)
+        checks = {}
+        chosen = None
+        for pose in ranked:
+            verdict = check(pose)
+            checks[pose.tobytes()] = verdict
+            if verdict["accepted"]:
+                chosen = pose
+                break
+        selected = chosen if chosen is not None else final
+        verdict = checks.get(selected.tobytes())
+        if verdict is None:
+            verdict = check(selected)
+            checks[selected.tobytes()] = verdict
+        detail["retained_admissible_iterate"] = chosen is not None
+        return [
+            {
+                "pose": selected.copy(),
+                "name": "local",
+                "check": verdict,
+                "cost": geometry.score(selected),
+                "detail": detail,
+            }
+        ], {
+            "evaluations": detail["evaluations"],
+            "evaluation_budget": self.config.max_evaluations,
+            "validation_count": len(checks),
+            "numerical_solves": 1,
+        }
 
     def refine(self, initial, *, check=None):
-        """Single-start search retained for registration experiments."""
-        candidates, detail = self.search(initial, check=check, coarse=False)
-        return self._search_result(candidates, detail, initial)
+        candidates, detail = self.fit_once(initial, check=check)
+        return self._fit_result(candidates, detail, initial)
 
-    def _search_result(self, candidates, detail, initial):
+    def _fit_result(self, candidates, detail, initial):
         valid = [c for c in candidates if c["check"]["accepted"]]
         if not valid:
             rejected = min(candidates, key=lambda c: c["cost"]) if candidates else None
@@ -767,7 +801,7 @@ class WholeSurfaceFit:
                 **detail,
                 **(rejected["check"] if rejected else {}),
                 "cost": rejected["cost"] if rejected else None,
-                "used_coarse": rejected["name"].endswith("_coarse") if rejected else False,
+                "used_coarse": False,
                 "converged": False,
                 "reason": "no_observation_compatible_candidate",
             }
@@ -778,9 +812,9 @@ class WholeSurfaceFit:
             "initial_cost": self.score(initial),
             "cost": best["cost"],
             "geometry_check": best["check"],
-            "used_coarse": best["name"].endswith("_coarse"),
+            "used_coarse": False,
         }
 
     def correct(self, proposal, *, check=None):
-        candidates, detail = self.search(proposal, check=check)
-        return self._search_result(candidates, detail, proposal)
+        candidates, detail = self.fit_once(proposal, check=check)
+        return self._fit_result(candidates, detail, proposal)

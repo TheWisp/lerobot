@@ -44,7 +44,7 @@ def configurations(provenance, fitting, filter_name):
     )
     if fitting == "partial":
         # Isolate the corrected partial-overlap rule from the additional
-        # depth cleanup, reduced source views and coarse recovery guesses.
+        # depth cleanup and reduced source views.
         surface = replace(surface, partial_surface_matching=True)
     if fitting == "recovery":
         vision = replace(
@@ -56,7 +56,7 @@ def configurations(provenance, fitting, filter_name):
                 filtered_depth_for_fitting=True,
             ),
         )
-        surface = replace(surface, partial_surface_matching=True, recovery_starts=4, fit_view_limit=1)
+        surface = replace(surface, partial_surface_matching=True, fit_view_limit=1)
     if filter_name in {"reset_broader", "strict_broader"}:
         surface = replace(
             surface, uncertainty=replace(surface.uncertainty, position_process_std_m_sqrt_s=0.03)

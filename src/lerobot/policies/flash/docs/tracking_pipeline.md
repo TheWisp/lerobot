@@ -150,24 +150,23 @@ the result and preserved by GUI reruns and cache keys.
 **Current experiment, 2026-11-02:** both endpoints of object matches must pass
 the configured mask erosion (2 px by default) and depth checks. A match can
 still drift inside a valid surface. With `GrowingSurfaceConfig.surface_priority`,
-one search collects image-, geometry- and group-seeded candidates. Each uses the
-same geometry validation before ranking; the group adapter does not make a
-second geometry decision. The weighted objective is retained as an ablation.
+image and group motion provide one starting pose to the surface fitter. The
+weighted objective is retained as an ablation.
 This is not a calibrated confidence model.
 
 Within a frame:
 
 ```text
-Search starts → check geometry → rank valid candidates → Kalman
-                                                        ↓
-                                     check resulting pose → publish
-                                                        ↓
-                                            stricter surface-growth checks
+One start → bounded correspondence/pose iterations → check visited poses → Kalman
+                                                                    ↓
+                                             check resulting pose → publish
+                                                                    ↓
+                                                  stricter growth checks
 ```
 
-`WholeSurfaceFit.search` owns the starts, cached checks and total search budget.
-Numerical solvers only propose poses. An invalid lower-cost result cannot replace
-a valid one, including intermediate corrective steps. No valid result means no
+`WholeSurfaceFit.fit_once` invokes one numerical solve. The poses visited by
+that solve are proposals, not separate restarts. An invalid lower-cost step
+cannot replace an earlier valid step. No valid step means no
 measured pose. Insufficient overlap can still leave a prediction available if
 it does not contradict the measurements; it cannot update the surface.
 `check_pose` reads measured geometry directly, independently of solver weights,
@@ -188,14 +187,16 @@ including a better texture score attached to an impossible pose.
 **Surface fitting:** the default `visible_icp` solver refreshes visible point
 correspondences and applies one weighted rigid update per iteration. Array and
 compiled operations perform transforms, nearest-neighbour queries and SVD.
-`shape.max_evaluations` caps iterations per start; `solver_tolerance` stops small
+`shape.max_evaluations` caps iterations of the single fit; `solver_tolerance` stops small
 updates. There is no second correction loop or numerical six-axis Jacobian.
 
-The shared matcher tries the image/group prediction and previous pose, with
-bounded recovery starts when needed. It checks candidate geometry and ranks only
-passing poses. Kalman fusion and the final geometry check remain downstream;
-surface growth has its own stricter checks. Removing the old solver did not
-change these checks or the reviewed single-loop results.
+The surface fitter starts from the image/group motion proposal and does not
+restart the fit from the previous pose or coarse orientations. It keeps the
+best geometry-compatible pose visited during that fit. Kalman fusion and the
+final geometry check remain downstream; surface growth has its own stricter
+checks. Recorded comparisons show faster fitting but less pose availability;
+the single-fit path is retained as the only production path while its quality
+is improved.
 
 FLASH offers **Video examples** and **Live camera**, each with image and 3D modes.
 Both use `SurfaceFrameSession`; the retired editor and separate camera tracker

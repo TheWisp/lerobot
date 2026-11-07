@@ -7,7 +7,7 @@ acceptance thresholds are experimental, not calibrated pose confidence.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import InitVar, dataclass, field, replace
 
 import cv2
 import numpy as np
@@ -15,7 +15,6 @@ from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
 from .geometry import transform
-from .surface_correspondence import rigid_fit
 from .surface_grounding import (
     PreparedReferenceSurface,
     SurfaceFitView,
@@ -57,9 +56,9 @@ class GrowingSurfaceConfig:
     # Experiment: use retained measured views to distinguish newly visible
     # surface from contradictions. False preserves the published baseline.
     partial_surface_matching: bool = False
-    # Disabled until wider validation. If ordinary candidates all fail, try
-    # this many distinct PCA orientations; no object-specific symmetry rules.
-    recovery_starts: int = 0
+    # Accept old recording settings without writing the retired search option
+    # back into new settings. Registration always performs one solve.
+    recovery_starts: InitVar[int] = 0
     # Experimental cost/consistency ablation: use the newest measured views
     # for visibility checks, while retaining the whole accumulated point map.
     # None preserves all retained views. This can forget old empty-space evidence.
@@ -78,15 +77,13 @@ class GrowingSurfaceConfig:
         )
     )
 
-    def __post_init__(self):
+    def __post_init__(self, recovery_starts):
         if isinstance(self.uncertainty, dict):
             object.__setattr__(self, "uncertainty", PoseUncertaintyConfig(**self.uncertainty))
         if not isinstance(self.uncertainty, PoseUncertaintyConfig):
             raise ValueError("uncertainty must be a PoseUncertaintyConfig or its JSON object")
         if self.uncertainty.enabled and not self.surface_priority:
             raise ValueError("uncertainty requires surface_priority")
-        if type(self.recovery_starts) is not int or not 0 <= self.recovery_starts <= 24:
-            raise ValueError("recovery_starts must be between 0 and 24")
         if self.fit_view_limit is not None and (
             type(self.fit_view_limit) is not int or self.fit_view_limit < 1
         ):
@@ -503,10 +500,8 @@ class ImageConditionedFit(WholeSurfaceFit):
             for surface, pose in zip(self.geometry.batch_residuals(poses), poses, strict=True)
         ]
 
-    def correct_surface_first(
-        self, proposal, previous, *, uncertainty=None, recovery_starts=0, check=None, extra=()
-    ):
-        """Rank geometrically valid candidates, then optionally measure uncertainty."""
+    def correct_surface_first(self, proposal, previous, *, uncertainty=None, check=None):
+        """Validate one fit, then optionally measure uncertainty."""
         uncertainty = uncertainty or PoseUncertaintyConfig()
         geometry = self.geometry
         if check is None:
@@ -516,17 +511,10 @@ class ImageConditionedFit(WholeSurfaceFit):
                     pose, max_outlier_fraction=uncertainty.max_visible_outlier_fraction
                 )
 
-        extra = list(extra)
-        extra.extend(
-            (p.source, rigid_fit(p.reference, p.current)) for p in self.point_evidence if p.weight > 0
-        )
-        candidates, detail = self.search(
+        candidates, detail = self.fit_once(
             proposal,
             geometry=geometry,
-            previous=previous,
             check=check,
-            extra=extra,
-            recovery_starts=recovery_starts,
         )
         valid = [c for c in candidates if c["check"]["accepted"]]
         detail.update(surface_priority=True, geometry_costs=[c["cost"] for c in candidates])
@@ -759,15 +747,8 @@ class GrowingSurfaceSession:
             fitter.correct_surface_first(
                 seed,
                 self.pose,
-                recovery_starts=self.config.recovery_starts,
                 uncertainty=self.config.uncertainty,
                 check=check_pose,
-                # Prediction can move away from the last accepted observation.
-                # Test that existing placement too; it still needs current
-                # geometry support and does not bypass search or Kalman.
-                extra=(("last_observation", self.connected_pose),)
-                if self.connected_pose is not None and not np.array_equal(self.connected_pose, self.pose)
-                else (),
             )
             if self.config.surface_priority
             else fitter.correct(seed, check=check_pose)

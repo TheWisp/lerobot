@@ -21,7 +21,7 @@ def result(name):
     if mode == "partial_depth_search":
         return replay(
             name,
-            surface_changes={"partial_surface_matching": True, "recovery_starts": 24},
+            surface_changes={"partial_surface_matching": True},
             observation_changes={"component_gap_m": None, "depth_outlier_sigma": 3.0},
         )
     if mode in {"partial_filtered_depth_search", "recent_view"}:
@@ -29,7 +29,6 @@ def result(name):
             name,
             surface_changes={
                 "partial_surface_matching": True,
-                "recovery_starts": 4,
                 "fit_view_limit": 1 if mode == "recent_view" else None,
             },
             observation_changes={

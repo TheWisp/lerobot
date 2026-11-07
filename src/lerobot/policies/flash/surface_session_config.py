@@ -21,7 +21,7 @@ def defaults():
         prefer_observed_overlap=True,
     )
     surface = asdict(GrowingSurfaceConfig())
-    surface.update(partial_surface_matching=True, recovery_starts=4, fit_view_limit=1)
+    surface.update(partial_surface_matching=True, fit_view_limit=1)
     surface["uncertainty"].update(position_process_std_m_sqrt_s=0.03, reset_on_geometry_conflict=False)
     return {
         "config": config,

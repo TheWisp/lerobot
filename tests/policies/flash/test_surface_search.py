@@ -37,7 +37,6 @@ def test_lower_cost_invalid_start_cannot_displace_valid_start(monkeypatch):
     assert not fit.check_pose(wrong)["accepted"]
     # Numerical cost is deliberately misleading; measured depth is real.
     monkeypatch.setattr(fit, "score", lambda pose: 0.0 if np.array_equal(pose, wrong) else 1.0)
-    monkeypatch.setattr("lerobot.policies.flash.surface_grounding.pca_candidates", lambda *a, **k: [wrong])
     monkeypatch.setattr(
         fit,
         "_solve",
@@ -62,7 +61,7 @@ def test_no_valid_pose_returns_no_pose_not_lowest_cost_invalid_pose(monkeypatch)
     assert detail["reason"] == "no_observation_compatible_candidate"
 
 
-def test_all_starts_share_a_budget_and_validate_unchanged_pose_once(monkeypatch):
+def test_one_fit_uses_iteration_budget_and_validates_unchanged_pose_once(monkeypatch):
     fit = fitter()
     checks = Counter()
     limits = []
@@ -76,11 +75,11 @@ def test_all_starts_share_a_budget_and_validate_unchanged_pose_once(monkeypatch)
         return initial, {"evaluations": limit, "converged": False}, [(0.0, initial)] * 3
 
     monkeypatch.setattr(fit, "_solve", solve)
-    candidates, detail = fit.search(
-        np.eye(4), check=check, evaluation_budget=1, recovery_starts=24, extra=[("same", np.eye(4))]
-    )
+    fit.config = replace(fit.config, max_evaluations=1)
+    candidates, detail = fit.fit_once(np.eye(4), check=check)
     assert limits == [1]
     assert detail["evaluations"] == 1
+    assert detail["numerical_solves"] == 1
     assert max(checks.values()) == 1
     assert any(c["check"]["accepted"] for c in candidates)
 
@@ -101,8 +100,14 @@ def test_uncertainty_switch_does_not_change_geometric_validity(enabled, mode):
         seen[pose.tobytes()] = verdict
         return verdict
 
-    pose, detail = fit.correct_surface_first(
+    pose, _ = fit.correct_surface_first(
         protruding(), np.eye(4), check=check, uncertainty=PoseUncertaintyConfig(enabled=enabled, mode=mode)
+    )
+    # The previous pose no longer starts a second solve or rescues a bad
+    # proposal. The fitter must never publish its invalid pose instead.
+    assert pose is None
+    pose, detail = fit.correct_surface_first(
+        np.eye(4), protruding(), check=check, uncertainty=PoseUncertaintyConfig(enabled=enabled, mode=mode)
     )
     assert pose is not None
     assert check(pose)["accepted"]
@@ -118,6 +123,17 @@ def test_geometry_validation_does_not_read_weighted_solver_residual(monkeypatch)
 
     monkeypatch.setattr(fit, "residual", forbidden)
     assert fit.check_pose(np.eye(4), max_outlier_fraction=0.25)["accepted"]
+    assert not fit.check_pose(protruding(), max_outlier_fraction=0.25)["accepted"]
+
+
+def test_protruding_pose_skips_two_way_surface_comparison(monkeypatch):
+    fit = fitter()
+    assert fit.scene_depth_check(protruding())["scene_depth_coherent_protrusion"]
+
+    def forbidden(*args):
+        raise AssertionError("Measured empty space already rejected this pose")
+
+    monkeypatch.setattr(fit, "partial_surface_check", forbidden)
     assert not fit.check_pose(protruding(), max_outlier_fraction=0.25)["accepted"]
 
 
@@ -197,7 +213,7 @@ def test_stationary_frame_uses_one_numerical_fit(monkeypatch):
     assert len(calls) == 1
 
 
-def test_independent_starts_do_not_refit_the_result_of_another_start(monkeypatch):
+def test_image_conditioned_fit_runs_only_once_from_motion_proposal(monkeypatch):
     fit = fitter(
         ImageConditionedFit,
         image_reference=np.empty((0, 3)),
@@ -205,8 +221,8 @@ def test_independent_starts_do_not_refit_the_result_of_another_start(monkeypatch
         image_scale_m=0.005,
         image_weight=1.0,
     )
-    proposal, previous = np.eye(4), np.eye(4)
-    proposal[0, 3], previous[0, 3] = 0.001, -0.001
+    proposal = np.eye(4)
+    proposal[0, 3] = 0.001
     calls = []
     original = WholeSurfaceFit._solve
 
@@ -215,10 +231,11 @@ def test_independent_starts_do_not_refit_the_result_of_another_start(monkeypatch
         return original(self, initial, limit)
 
     monkeypatch.setattr(WholeSurfaceFit, "_solve", measured)
-    candidates, _ = fit.search(proposal, geometry=fit.geometry, previous=previous, coarse=False)
+    candidates, detail = fit.fit_once(proposal, geometry=fit.geometry)
     assert any(c["check"]["accepted"] for c in candidates)
-    assert len(calls) == 2
-    np.testing.assert_array_equal(calls, [proposal, previous])
+    assert len(calls) == 1
+    assert detail["numerical_solves"] == 1
+    np.testing.assert_array_equal(calls, [proposal])
 
 
 @pytest.mark.parametrize("iterations", [1, 2, 8])

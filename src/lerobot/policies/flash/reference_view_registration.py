@@ -89,7 +89,7 @@ def fit_reference_view_candidates(
     for name, seed in seeds:
         # This is a review of attempted alignments, not pose publication.
         # Keep rejected alternatives visible, explicitly marked as rejected.
-        attempts, search_detail = fit.search(seed, coarse=False)
+        attempts, search_detail = fit.fit_once(seed)
         accepted = [item for item in attempts if item["check"]["accepted"]]
         selected = min(accepted or attempts, key=lambda item: item["cost"])
         pose = selected["pose"]

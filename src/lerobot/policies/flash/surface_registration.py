@@ -1,4 +1,4 @@
-"""Optional CPU registration solvers; shared search owns acceptance and recovery.
+"""Optional CPU registration solvers; the fitter checks every published pose.
 
 Imports of Open3D/small_gicp are lazy. Each fitter owns its solver and caches;
 selecting a backend never patches another object's running fitter.
