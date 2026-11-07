@@ -13,17 +13,12 @@ async function showFlashLive() {
     const generation = ++flashLive.generation;
     try {
         setFlashSource(true);
-        document.getElementById('flash-experiment-comparison').hidden = true;
         document.getElementById('flash-experiment-video').pause();
         flashLive.visible = true;
-        document.getElementById('flash-experiment-playback').hidden = true;
-        liveElement('panel').hidden = false;
         liveElement('status').textContent = 'Loading shared pipeline settings…';
         flashLive.busy = true;
         liveElement('start').disabled = true;
         for(const id of ['method','matching','matcher','config','camera']) liveElement(id).disabled = true;
-        document.getElementById('flash-experiment-title').textContent = 'Live tracking';
-        document.getElementById('flash-experiment-detail').hidden = true;
         const data = await liveRequest('shared-defaults');
         const current = await liveRequest('state');
         if (!flashLive.visible || generation !== flashLive.generation) return;
@@ -38,6 +33,7 @@ async function showFlashLive() {
         liveElement('config').value = JSON.stringify(data.settings, null, 2);
         liveElement('status').textContent = 'Open camera, then enter an object name or freeze and click. ';
         flashLive.busy = false;
+        void refreshFlashLiveCameras();
         await pollFlashLive();
     } catch (error) { liveElement('status').textContent = error.message; }
     finally { flashLive.busy = false; }
@@ -53,13 +49,23 @@ async function hideFlashLive(restore = true) {
     flashLive.visible = false; flashLive.generation++; clearTimeout(flashLive.timer);
     flashLive.viewer?.dispose(); flashLive.viewer = null;
     flashLive.bitmap?.close(); flashLive.bitmap = null; flashLive.packet = null;
-    liveElement('panel').hidden = true;
-    document.getElementById('flash-experiment-playback').hidden = false;
-    document.getElementById('flash-experiment-detail').hidden = false;
     const selected = flashExperiments.items?.find(item => item.id === flashExperiments.selected);
     if(restore && selected) await selectFlashExperiment(selected);
-    else document.getElementById('flash-experiment-title').textContent = 'Video examples';
     return true;
+}
+async function refreshFlashLiveCameras() {
+    const generation = flashLive.generation, picker = liveElement('camera'), saved = picker.value;
+    try {
+        const data = await liveRequest('cameras', {});
+        if (!flashLive.visible || generation !== flashLive.generation) return;
+        picker.replaceChildren(new Option('Auto camera', ''),
+            ...data.cameras.map(c => new Option(c.name || c.id, c.id)));
+        picker.value = saved;
+        if (!picker.value && data.cameras.length) picker.value = data.cameras[0].id;
+    } catch(error) {
+        if (flashLive.visible && generation === flashLive.generation)
+            liveElement('status').textContent = `Camera discovery: ${error.message}`;
+    }
 }
 async function startFlashLive() {
     if(flashLive.busy) return;
@@ -71,11 +77,9 @@ async function startFlashLive() {
         if(settings.shared_matching) settings.shared_matching.backend = liveElement('matching').value;
         else if(liveElement('matching').value === 'lk') throw new Error('Enable shared_matching in settings to use LK');
         flashLive.settings = settings;
-        const cameras = await liveRequest('cameras', {});
+        if(!liveElement('camera').value) await refreshFlashLiveCameras();
         if (!flashLive.visible || generation !== flashLive.generation) return;
-        const picker = liveElement('camera'), saved = picker.value;
-        picker.replaceChildren(...cameras.cameras.map(c => new Option(c.name || c.id, c.id)));
-        if(saved) picker.value = saved;
+        const picker = liveElement('camera');
         if(!picker.value) throw new Error('No RGB-D camera found');
         flashLive.starting = liveRequest('start', {engine: 'experiment', pipeline_settings: settings,
             method: liveElement('method').value, serial: picker.value, width:1280, height:720, fps:30});

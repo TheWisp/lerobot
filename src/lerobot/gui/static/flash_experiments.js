@@ -963,10 +963,10 @@ async function showFlashPipelineSettings() {
 function setFlashSource(live) {
     document.getElementById('flash-source-examples').setAttribute('aria-pressed', String(!live));
     document.getElementById('flash-source-live').setAttribute('aria-pressed', String(live));
-    document.getElementById('tab-flash').classList.toggle('flash-live-source', live);
+    document.getElementById('flash-examples-workspace').hidden = live;
+    document.getElementById('flash-live-workspace').hidden = !live;
 }
 async function showFlashExamples() {
     if (flashLive.visible && !(await hideFlashLive())) return;
     setFlashSource(false);
-    showFlashComparison(false);
 }

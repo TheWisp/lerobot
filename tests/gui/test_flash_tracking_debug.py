@@ -204,6 +204,12 @@ def test_flash_has_its_own_tab_with_video_and_live_subtabs(gui_page):
     page.route("**/api/run/flash/experiments", lambda r: r.fulfill(json=[]))
     page.route("**/api/run/flash/tracking/state", lambda r: r.fulfill(json={"running": False}))
     page.route(
+        "**/api/run/flash/tracking/cameras",
+        lambda r: r.fulfill(
+            json={"cameras": [{"id": "front", "name": "Front camera"}, {"id": "side", "name": "Side camera"}]}
+        ),
+    )
+    page.route(
         "**/api/run/flash/tracking/shared-defaults",
         lambda r: r.fulfill(json={"settings": defaults(), "matchers": MATCHERS}),
     )
@@ -213,16 +219,30 @@ def test_flash_has_its_own_tab_with_video_and_live_subtabs(gui_page):
     page.wait_for_function("document.getElementById('tab-flash').classList.contains('active')")
     assert page.locator("#flash-experiment-sidebar").is_visible()
     assert page.locator("#flash-experiment-view").is_visible()
+    assert (
+        page.locator("#flash-source-examples").evaluate("e => e.parentElement.parentElement.id")
+        == "tab-flash"
+    )
+    assert page.locator("#flash-examples-workspace").is_visible()
+    assert not page.locator("#flash-live-workspace").is_visible()
     assert not page.locator("#run-launch-btn").is_visible()
     assert page.locator('.workflow-btn[data-workflow="flash"]').count() == 0
 
     page.locator("#flash-source-live").click()
     page.wait_for_function("flashLive.visible && flashLive.settings !== null")
     assert page.locator("#flash-live-panel").is_visible()
+    assert page.locator("#flash-live-sidebar").is_visible()
+    assert not page.locator("#flash-examples-workspace").is_visible()
     assert not page.locator("#flash-experiment-sidebar").is_visible()
+    for setting in ("camera", "method", "matching", "matcher", "config", "start", "stop"):
+        assert page.locator(f"#flash-live-{setting}").evaluate("e => !!e.closest('#flash-live-sidebar')")
+    page.wait_for_function("document.getElementById('flash-live-camera').options.length === 3")
+    page.locator("#flash-live-camera").select_option("side")
+    assert page.locator("#flash-live-camera").input_value() == "side"
     page.locator("#flash-source-examples").click()
     page.wait_for_function("!flashLive.visible")
     assert page.locator("#flash-experiment-sidebar").is_visible()
+    assert not page.locator("#flash-live-sidebar").is_visible()
 
     # Saved links to the former Run workflow open the new top-level FLASH tab.
     page.locator('.tab[data-tab="run"]').click()
