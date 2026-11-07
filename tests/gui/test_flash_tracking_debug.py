@@ -211,7 +211,25 @@ def test_shared_live_view_freezes_clicked_frame_and_never_paints_new_preview_ove
         1.0,
         "test",
     )
-    packet = encode_rgbd_scene(frame, {"frame": 43, "time_s": 1.0, "method": "group_growing", "objects": {}})
+    packet = encode_rgbd_scene(
+        frame,
+        {
+            "frame": 43,
+            "time_s": 1.0,
+            "method": "group_growing",
+            "objects": {
+                "block": {
+                    "name": "block",
+                    "status": "lost",
+                    "reason": "Fit protrudes into measured empty space",
+                    "pose": None,
+                    "surface": [],
+                    "axis_points": [],
+                    "contours": [],
+                }
+            },
+        },
+    )
     page.route(
         "**/api/run/flash/tracking/scene",
         lambda r: r.fulfill(body=packet, content_type="application/octet-stream"),
@@ -220,6 +238,10 @@ def test_shared_live_view_freezes_clicked_frame_and_never_paints_new_preview_ove
     page.wait_for_function("flashLive.processed === 43")
     assert page.evaluate("flashLive.frame.frame_id") == 43
     assert page.evaluate("flashLive.packet.frame") == 43
+    assert (
+        "block: lost — Fit protrudes into measured empty space"
+        in page.locator("#flash-live-objects").inner_text()
+    )
     # The visible image must be the processed packet's pixels despite preview 99.
     assert page.evaluate(
         "Array.from(document.getElementById('flash-live-image').getContext('2d').getImageData(20,20,1,1).data)"

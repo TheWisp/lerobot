@@ -9,7 +9,7 @@ import pytest
 
 from benchmarks.flash_tracker_experiment import run_case
 from lerobot.gui.flash_group_overlay import GroupOverlay
-from lerobot.gui.flash_live_scene import live_scene_packet
+from lerobot.gui.flash_live_scene import live_scene_packet, loss_reason
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
 from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
@@ -17,6 +17,32 @@ from lerobot.policies.flash.surface_group_hints import GroupConfig
 from lerobot.policies.flash.surface_session_config import defaults
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 from tests.policies.flash.test_shared_image_tracking import TranslationModel, frame, masks
+
+
+@pytest.mark.parametrize(
+    "check,expected",
+    [
+        ({"scene_depth_coherent_protrusion": True}, "Fit protrudes into measured empty space"),
+        ({"has_visible_overlap": False}, "Fit misses the visible surface"),
+        ({"geometry_accepted": False}, "Fit disagrees with measured depth"),
+        ({"geometry_accepted": True, "accepted": False}, "Too little overlap with the saved surface"),
+    ],
+)
+def test_live_loss_reports_which_measured_geometry_check_rejected_the_fit(check, expected):
+    details = {"reason": "no_observation_compatible_candidate", "fit": {"candidate_check": check}}
+    assert loss_reason("lost", details) == expected
+    assert loss_reason("predicted", details) is None
+
+
+def test_live_loss_exposes_unused_point_group_when_local_fit_fails():
+    details = {
+        "reason": "no_observation_compatible_candidate",
+        "hint_source": "object_point_group",
+        "fit": {"candidate_check": {"has_visible_overlap": False}},
+    }
+    assert loss_reason("lost", details) == (
+        "Fit misses the visible surface; point-group fallback was not tried"
+    )
 
 
 def sequence():
@@ -114,7 +140,7 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
     live_model, recorded_model = TranslationModel(), TranslationModel()
     live = LiveSurfaceSession(settings, method, source, live_model)
     live_rows, maps = [], []
-    for f, _ in frames:
+    for i, (f, _) in enumerate(frames):
         row, _, mask = live.step(f)
         live_rows.append(row)
         maps.append(
@@ -127,6 +153,9 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
         header = json.loads(packet[4 : 4 + n])
         assert header["frame"] == f.frame_id
         assert header["time_s"] == f.source_time_s
+        if i == 2 and header["objects"]["left"]["status"] == "lost":
+            assert header["objects"]["left"]["reason"] == "Object mask missing"
+            assert header["objects"]["left"]["reason_code"] == "no_mask"
         np.testing.assert_array_equal(
             np.frombuffer(packet[4 + n : 4 + n + header["depth_bytes"]], "<f4").reshape(f.depth.shape),
             f.metric_depth().astype("f4"),

@@ -9,6 +9,37 @@ import numpy as np
 from .flash_pose_overlay import reference_axes
 
 
+def loss_reason(status, details):
+    """Explain an unavailable pose using the checks made on this frame."""
+    if status != "lost":
+        return None
+    reason = details.get("reason")
+    if reason == "no_mask":
+        return "Object mask missing"
+    if reason == "insufficient_depth":
+        return "Too few usable depth points"
+    if reason == "not_initialized":
+        return "No starting surface yet"
+    if reason == "surface_removed":
+        return "Saved surface unavailable"
+    if reason == "surface_group_disagreement":
+        return "Surface and tracked point group disagree"
+    check = (details.get("fit") or {}).get("candidate_check") or details.get("prediction_geometry") or {}
+    if check.get("scene_depth_coherent_protrusion"):
+        cause = "Fit protrudes into measured empty space"
+    elif check.get("has_visible_overlap") is False:
+        cause = "Fit misses the visible surface"
+    elif check.get("geometry_accepted") is False:
+        cause = "Fit disagrees with measured depth"
+    elif reason == "insufficient_surface_overlap" or check.get("accepted") is False:
+        cause = "Too little overlap with the saved surface"
+    else:
+        cause = "No pose passed the current image checks"
+    if reason == "no_observation_compatible_candidate" and details.get("hint_source"):
+        return f"{cause}; point-group fallback was not tried"
+    return cause
+
+
 def encode_rgbd_scene(frame, header):
     depth = frame.metric_depth()
     depth = np.where(np.isfinite(depth) & (depth > 0), depth, 0).astype("<f4")
@@ -37,24 +68,33 @@ def live_scene_packet(frame, live, row, masks, overlays):
             masks[role].astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
         group = result[live.method + "_details"].get("group", {})
+        status = result[live.method + "_status"]
+        details = result[live.method + "_details"]
         objects[role] = {
             "name": live.mask_source.prompts[role],
             "surface": track.store.points.tolist(),
             "pose": result[live.method],
             "axis_points": reference_axes(reference).tolist(),
-            "status": result[live.method + "_status"],
+            "status": status,
+            "reason": loss_reason(status, details),
+            "reason_code": details.get("reason") if status == "lost" else None,
             "contours": [c[:, 0].tolist() for c in contours],
             "group_tracks": {**group, "links": overlays[role].update(group)["links"]},
         }
     # A missing mask/initialization still needs a useful image and status.
     for role in live.engine.sessions:
+        result = row["objects"][role]
+        status = result[live.method + "_status"]
+        details = result[live.method + "_details"]
         objects.setdefault(
             role,
             {
                 "name": live.mask_source.prompts[role],
                 "surface": [],
                 "pose": None,
-                "status": row["objects"][role][live.method + "_status"],
+                "status": status,
+                "reason": loss_reason(status, details),
+                "reason_code": details.get("reason") if status == "lost" else None,
                 "contours": [],
             },
         )

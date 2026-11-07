@@ -519,7 +519,14 @@ class ImageConditionedFit(WholeSurfaceFit):
         valid = [c for c in candidates if c["check"]["accepted"]]
         detail.update(surface_priority=True, geometry_costs=[c["cost"] for c in candidates])
         if not valid:
-            return None, {**detail, "reason": "no_observation_compatible_candidate"}
+            # Keep the measured reason the one local solve failed. The caller
+            # must not have to infer it from a generic missing-pose status.
+            rejected = min(candidates, key=lambda c: c["cost"]) if candidates else None
+            return None, {
+                **detail,
+                "candidate_check": rejected["check"] if rejected else None,
+                "reason": "no_observation_compatible_candidate",
+            }
         best = min(valid, key=lambda c: c["cost"])
         if uncertainty.enabled:
             estimator = SurfacePoseUncertainty(geometry, best["pose"], uncertainty)

@@ -100,12 +100,13 @@ def test_uncertainty_switch_does_not_change_geometric_validity(enabled, mode):
         seen[pose.tobytes()] = verdict
         return verdict
 
-    pose, _ = fit.correct_surface_first(
+    pose, detail = fit.correct_surface_first(
         protruding(), np.eye(4), check=check, uncertainty=PoseUncertaintyConfig(enabled=enabled, mode=mode)
     )
     # The previous pose no longer starts a second solve or rescues a bad
     # proposal. The fitter must never publish its invalid pose instead.
     assert pose is None
+    assert any(detail["candidate_check"] == verdict for verdict in seen.values())
     pose, detail = fit.correct_surface_first(
         np.eye(4), protruding(), check=check, uncertainty=PoseUncertaintyConfig(enabled=enabled, mode=mode)
     )
