@@ -189,7 +189,7 @@ async function pollFlashLive() {
             flashLive.frame={frame_id:packet.frame, frozen:false};
             liveElement('objects').textContent=Object.values(packet.objects).map(o=>`${o.name}: ${o.status}`).join(' · ');
             await drawFlashLive();
-        } else if(running && ['preview','frozen','loading_models'].includes(estimate.status)) {
+        } else if(running && ['preview','frozen','loading_models','error'].includes(estimate.status)) {
             const frame=estimate.status==='frozen' || estimate.status==='loading_models' ? estimate.frame : data.preview;
             if(frame && (frame.frame_id!==flashLive.frame?.frame_id || flashLive.packet)) {
                 const image=new Image();image.src=frame.image;await image.decode();

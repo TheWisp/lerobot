@@ -91,14 +91,19 @@ def test_new_live_inspector_launches_shared_worker_and_passes_exact_settings(tmp
     async def launch(args, **kwargs):
         captured.update(args=args, **kwargs)
 
+    async def check_backend(backend):
+        captured["checked_backend"] = backend
+
     monkeypatch.setattr(run, "_launch_lock", asyncio.Lock())
     monkeypatch.setattr(run, "_ensure_no_active_process", lambda: None)
     monkeypatch.setattr(run, "_launch_subprocess", launch)
+    monkeypatch.setattr(flash_tracking, "_check_registration_backend", check_backend)
     monkeypatch.setattr("lerobot.gui.api.robot.release_preview_cameras", lambda: None)
     monkeypatch.setattr(flash_tracking, "_directory", None)
     monkeypatch.setattr(flash_tracking.tempfile, "mkdtemp", lambda **_: str(tmp_path))
     req = flash_tracking.TrackingStart(pipeline_settings=settings)
     asyncio.run(flash_tracking.start(req))
+    assert captured["checked_backend"] == "open3d_plane"
     assert captured["args"][-2] == "lerobot.policies.flash.live_surface_worker"
     assert captured["config"]["pipeline_settings"] == settings
     assert json.loads((tmp_path / "config.json").read_text())["pipeline_settings"] == json.loads(
@@ -107,6 +112,35 @@ def test_new_live_inspector_launches_shared_worker_and_passes_exact_settings(tmp
     settings["group_experiment"] = None
     with pytest.raises(ValidationError, match="requires group"):
         flash_tracking.TrackingStart(pipeline_settings=settings)
+
+
+def test_optional_registration_is_checked_in_the_worker_python_before_camera_launch(monkeypatch):
+    seen = []
+
+    class Probe:
+        returncode = 1
+
+        async def communicate(self):
+            return b"", b""
+
+    async def spawn(*args, **kwargs):
+        seen.append(args)
+        return Probe()
+
+    monkeypatch.setattr(flash_tracking, "_python", lambda: "/tracking/python")
+    monkeypatch.setattr(flash_tracking.asyncio, "create_subprocess_exec", spawn)
+    with pytest.raises(HTTPException, match="small_gicp is unavailable"):
+        asyncio.run(flash_tracking._check_registration_backend("small_gicp"))
+    assert seen == [
+        (
+            "/tracking/python",
+            "-c",
+            "import importlib.util, sys; sys.exit(importlib.util.find_spec(sys.argv[1]) is None)",
+            "small_gicp",
+        )
+    ]
+    asyncio.run(flash_tracking._check_registration_backend("visible_icp"))
+    assert len(seen) == 1
 
 
 @pytest.mark.requires_playwright
@@ -193,6 +227,9 @@ def test_shared_live_view_freezes_clicked_frame_and_never_paints_new_preview_ove
     page.locator("#flash-live-3d").click()
     page.wait_for_function("flashLive.viewer !== null")
     assert page.locator("#flash-live-scene").is_visible()
+    state["estimate"] = {"status": "error", "message": "small_gicp is unavailable"}
+    page.wait_for_function("flashLive.packet === null && flashLive.frame?.frame_id === 99")
+    assert "small_gicp is unavailable" in page.locator("#flash-live-status").inner_text()
 
 
 @pytest.mark.requires_playwright

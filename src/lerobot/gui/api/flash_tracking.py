@@ -71,6 +71,35 @@ def _python() -> str:
     return os.environ.get("LEROBOT_FLASH_TRACKING_PYTHON", sys.executable)
 
 
+async def _check_registration_backend(backend: str) -> None:
+    """Fail before camera launch if the selected worker lacks its optional solver."""
+    module = {"small_gicp": "small_gicp", "open3d_plane": "open3d", "open3d_color": "open3d"}.get(backend)
+    if module is None:
+        return
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            _python(),
+            "-c",
+            "import importlib.util, sys; sys.exit(importlib.util.find_spec(sys.argv[1]) is None)",
+            module,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except TimeoutError as exc:
+            proc.kill()
+            await proc.communicate()
+            raise HTTPException(504, f"Could not check {backend} in the tracking environment") from exc
+    except OSError as exc:
+        raise HTTPException(400, f"Cannot start the tracking Python environment: {exc}") from exc
+    if proc.returncode:
+        raise HTTPException(
+            400,
+            f"{backend} is unavailable in the tracking Python environment. Install {module} there or choose Surface fit.",
+        )
+
+
 @router.get("/defaults")
 async def defaults() -> dict:
     return TrackingStart().model_dump()
@@ -109,6 +138,7 @@ async def cameras() -> dict:
 async def start(req: TrackingStart) -> dict:
     from . import run
 
+    await _check_registration_backend(req.pipeline_settings["config"]["shape"]["registration"]["backend"])
     async with run._launch_lock:
         run._ensure_no_active_process()
         global _directory
