@@ -176,3 +176,151 @@ class TestGetObservationIntegration:
     over the unit tests above is small."""
 
     def test_placeholder(self): ...
+
+
+class TestRecordDepth:
+    """``record_depth`` decides what a depth-enabled RealSense contributes:
+    the historical depth-edge overlay burned into the RGB (default, what
+    every existing dataset and checkpoint was produced with), or the aligned
+    depth map stored as its own ``<camera>_depth`` feature."""
+
+    H, W = 720, 1280
+
+    def test_config_default_keeps_overlay(self):
+        cfg = BiSO107FollowerConfig(left_arm_port="/dev/null", right_arm_port="/dev/null")
+        assert cfg.record_depth is False
+
+    def _features(self, record_depth: bool) -> dict:
+        cams = {
+            "top": SimpleNamespace(height=self.H, width=self.W, use_depth=True),
+            "front": SimpleNamespace(height=self.H, width=self.W),
+        }
+        fake_self = SimpleNamespace(config=SimpleNamespace(record_depth=record_depth, cameras=cams))
+        return BiSO107Follower._cameras_ft.fget(fake_self)
+
+    def test_depth_feature_declared_only_when_recording(self):
+        assert self._features(False) == {"top": (self.H, self.W, 3), "front": (self.H, self.W, 3)}
+        assert self._features(True) == {
+            "top": (self.H, self.W, 3),
+            "top_depth": (self.H, self.W, 1),
+            "front": (self.H, self.W, 3),
+        }
+
+    def _realsense(self):
+        pytest.importorskip("pyrealsense2")
+        from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
+
+        return RealSenseCamera(
+            RealSenseCameraConfig(
+                serial_number_or_name="0", fps=30, width=self.W, height=self.H, use_depth=True
+            )
+        )
+
+    def _observe(self, cam, strategy: str = "latest") -> dict:
+        fake_self = SimpleNamespace(
+            config=SimpleNamespace(camera_read_strategy=strategy, record_depth=True),
+            left_arm=MagicMock(),
+            right_arm=MagicMock(),
+            cameras={"top": cam},
+        )
+        fake_self.left_arm.get_observation.return_value = {}
+        fake_self.right_arm.get_observation.return_value = {}
+        fake_self._read_color_and_depth = lambda c: BiSO107Follower._read_color_and_depth(fake_self, c)
+        fake_self._read_camera_frame = lambda c: BiSO107Follower._read_camera_frame(fake_self, c)
+        return BiSO107Follower.get_observation(fake_self)
+
+    def test_observation_carries_depth_from_the_same_grab(self):
+        """With no overlay processor the camera's paired peek is used, and the
+        depth map lands beside the RGB in the declared (H, W, 1) layout."""
+        import numpy as np
+
+        cam = self._realsense()
+        rgb = np.zeros((self.H, self.W, 3), np.uint8)
+        depth = np.full((self.H, self.W, 1), 443, np.uint16)
+        cam.read_latest_color_and_depth = lambda: (rgb, depth)
+        cam.read_color_and_aligned_depth = MagicMock(side_effect=AssertionError("must not block"))
+
+        obs = self._observe(cam)
+
+        assert obs["top"] is rgb
+        assert obs["top_depth"] is depth
+        assert obs["top_depth"].shape == (self.H, self.W, 1)
+
+    def test_first_frame_blocks_once_like_the_rgb_path(self):
+        """Before the grab thread has cached anything the peek raises; the
+        blocking pair read fills in, mirroring ``_read_camera_frame``."""
+        import numpy as np
+
+        cam = self._realsense()
+        pair = (np.zeros((self.H, self.W, 3), np.uint8), np.zeros((self.H, self.W, 1), np.uint16))
+        cam.read_latest_color_and_depth = MagicMock(side_effect=RuntimeError("not captured yet"))
+        cam.read_color_and_aligned_depth = MagicMock(return_value=pair)
+
+        obs = self._observe(cam)
+
+        cam.read_color_and_aligned_depth.assert_called_once()
+        assert obs["top_depth"] is pair[1]
+
+    def test_a_stale_peek_blocks_for_the_next_grab_instead_of_ending_the_episode(self):
+        """A peek older than it allows raises TimeoutError, not RuntimeError;
+        that too falls back to the blocking pair read, as the replaced
+        overlay path degraded rather than aborted."""
+        import numpy as np
+
+        cam = self._realsense()
+        pair = (np.zeros((self.H, self.W, 3), np.uint8), np.zeros((self.H, self.W, 1), np.uint16))
+        cam.read_latest_color_and_depth = MagicMock(side_effect=TimeoutError("too old"))
+        cam.read_color_and_aligned_depth = MagicMock(return_value=pair)
+
+        obs = self._observe(cam)
+
+        cam.read_color_and_aligned_depth.assert_called_once()
+        assert obs["top_depth"] is pair[1]
+
+    def test_any_camera_that_pairs_its_reads_fills_the_declared_depth(self):
+        """The feature is declared for every camera with use_depth, so the
+        read must not be keyed on one driver class: a camera of another make
+        with the paired peek fills it the same way."""
+        import numpy as np
+
+        rgb = np.zeros((self.H, self.W, 3), np.uint8)
+        depth = np.full((self.H, self.W, 1), 7, np.uint16)
+        cam = SimpleNamespace(
+            use_depth=True, post_grab_processor=None, read_latest_color_and_depth=lambda: (rgb, depth)
+        )
+
+        obs = self._observe(cam)
+
+        assert obs["top"] is rgb and obs["top_depth"] is depth
+
+    @pytest.mark.parametrize("record_depth", [False, True])
+    def test_overlay_installed_only_when_not_recording(self, record_depth):
+        """Constructing the robot installs the overlay processor on a depth
+        RealSense unless ``record_depth`` asks for the map itself."""
+        from unittest.mock import patch
+
+        pytest.importorskip("pyrealsense2")
+        from lerobot.cameras.realsense import RealSenseCameraConfig
+        from lerobot.processor import DepthEdgeOverlayProcessorStep
+
+        cfg = BiSO107FollowerConfig(
+            left_arm_port="/dev/null",
+            right_arm_port="/dev/null",
+            record_depth=record_depth,
+            cameras={
+                "top": RealSenseCameraConfig(
+                    serial_number_or_name="0", fps=30, width=self.W, height=self.H, use_depth=True
+                )
+            },
+        )
+        # The URDF parse for Cartesian IK is seconds of CPU and irrelevant here.
+        with patch("lerobot.robots.so107_description.cartesian_ik.make_so107_arm_kinematics"):
+            robot = BiSO107Follower(cfg)
+
+        processor = robot.cameras["top"].post_grab_processor
+        if record_depth:
+            assert processor is None
+            assert robot.observation_features["top_depth"] == (self.H, self.W, 1)
+        else:
+            assert isinstance(processor, DepthEdgeOverlayProcessorStep)
+            assert "top_depth" not in robot.observation_features

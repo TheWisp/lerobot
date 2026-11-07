@@ -7,6 +7,7 @@ LeRobot offers multiple options for video capture:
 | `OpenCVCamera`    | Phone, built-in laptop, USB webcams |
 | `ZMQCamera`       | Network-connected cameras           |
 | `RealSenseCamera` | Intel RealSense (with depth)        |
+| `ZEDCamera`       | Stereolabs ZED (with depth)         |
 | `Reachy2Camera`   | Reachy 2 robot cameras              |
 
 > [!TIP]
@@ -44,6 +45,36 @@ Camera #0:
 > When using Intel RealSense cameras in `macOS`, you could get this [error](https://github.com/IntelRealSense/librealsense/issues/12307): `Error finding RealSense cameras: failed to set power state`, this can be solved by running the same command with `sudo` permissions. Note that using RealSense cameras in `macOS` is unstable.
 
 `ZMQCamera` and `Reachy2Camera` do not support auto-discovery. They must be configured manually by providing their network address and port or robot SDK settings.
+
+### Stereolabs ZED
+
+`ZEDCamera` runs on the ZED SDK, which rectifies both eyes and computes depth on the GPU in the left eye's frame. The SDK is a system install, not a Python package: its Python API `pyzed` is a wheel that ships with it and links against the SDK's libraries, so a host needs both before the camera can open.
+
+1. Install the SDK on the host (one `sudo` run of the installer from [Stereolabs](https://www.stereolabs.com/developers/release); pick the build matching the host's CUDA). It puts the libraries under `/usr/local/zed` and the udev rule for the camera's IMU interface. Add your user to the `zed` group it creates.
+2. Install the SDK's Python wheel into the project environment, for example with `uv pip install --python .venv/bin/python <pyzed-wheel>`; `/usr/local/zed/get_python_api.py` fetches the wheel for your Python version.
+3. `lerobot-find-cameras zed` lists the units the SDK sees, by serial.
+
+A profile then names the camera by serial:
+
+```json
+"top": {"type": "zed", "serial_number": 11975257, "width": 1280, "height": 720, "fps": 30,
+        "use_depth": true, "depth_mode": "neural_light", "stereo_split": true}
+```
+
+`width` and `height` are one eye, as published: the camera is opened at the matching SDK resolution (HD2K, HD1080, HD1200, HD720, SVGA or VGA), and under a `rotation` of a quarter turn the frames are the sensor's frame transposed, so a portrait mount is configured as 720x1280. `stereo_split` publishes both eyes as `top_l` and `top_r`, the same channels a side-by-side UVC recording of the camera has, so datasets and checkpoints keep their keys. `use_depth` adds `top_depth`: `(H, W, 1)` uint16 millimetres aligned to the left eye, 0 where the SDK has no measurement; `fill_holes` lets the SDK fill those pixels and is off by default, so a 0 stays a measurement the sensor did not make. The neural depth modes optimize their model on first use on a host, which takes a few minutes once; without `use_depth` the SDK computes no depth at all, whatever `depth_mode` says. A host without the SDK can still open datasets recorded with it.
+
+### What a depth camera backend provides
+
+Everything downstream of a camera driver is sensor-agnostic. The RealSense and ZED backends differ only in how they get the numbers; the rest of the stack sees the same things from either, and a new depth sensor needs exactly these:
+
+| The driver provides                                                                                                                                                                                        | Who consumes it                                                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a depth map as `(H, W, 1)` uint16 millimetres, 0 for "no measurement", from `read_latest_depth()` and the paired reads (`read_latest_color_and_depth()`, or `read_latest_stereo_and_depth()` for two eyes) | the robot's `get_observation()`, which declares `<camera>_depth` from the camera's `use_depth`; the dataset writer stores it as 12-bit lossless video |
+| `intrinsics` (and `intrinsics_right` for a stereo pair) as `CameraIntrinsics` of the frames as published, after any rotation                                                                               | the recorder writes them into the dataset's camera block; the 3D view back-projects with them                                                         |
+| `serial_number` and `device_name`                                                                                                                                                                          | the camera block, so a dataset says which unit made it                                                                                                |
+| `depth_processing`, what the driver did to the depth pixels before publishing them: the RealSense's four filters by flag, the ZED's depth mode and fill mode                                               | the depth feature's camera block, so a consumer knows whether a 0 is the sensor's own hole or one a filter was told to leave                          |
+
+The mount pose of the camera relative to the robot is not something a driver can know; it is a calibration, and today it is per machine (see the visualizer doc).
 
 ## Use cameras
 
@@ -162,6 +193,8 @@ finally:
 The Intel RealSense and Reachy 2 cameras can capture both color and depth in lockstep. Calling `read()` returns the **color** frame as `(H, W, 3)` `uint8`. Calling `read_depth()` returns the **depth map** as `(H, W, 1)` `uint16`, where each pixel value is the distance from the sensor expressed in **millimetres**. A pixel value of `0` typically means "no measurement available" (out-of-range, occluded, or low-confidence).
 
 During recording, the control loop peeks the freshest buffered frames non-blockingly via `read_latest()` (color) and `read_latest_depth()` (depth), adding the depth map as a sibling feature (e.g. `front_depth` next to `front`).
+
+The RealSense driver runs librealsense's decimation, spatial, temporal and hole-filling filters on every depth map before it is published, all on by default (`enable_decimation`, `enable_spatial`, `enable_temporal` and `enable_hole_filling` on `RealSenseCameraConfig`); the ZED's `fill_holes` is off by default. Whatever is on is baked into the recording, and the depth feature's camera block records it under `depth_processing`. The Robots tab offers each flag as a checkbox under the camera once its depth is on.
 
 For how depth streams are stored and encoded when recording a dataset, see the [Depth streams](./video_encoding_parameters#depth-streams) section of the video encoding guide.
 

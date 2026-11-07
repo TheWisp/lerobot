@@ -226,3 +226,14 @@ def test_rotation(rotation):
             assert camera.width == 640
             assert camera.height == 480
             assert img.shape[:2] == (480, 640)
+
+
+def test_intrinsics_describe_the_published_frames():
+    """A connected camera reports the calibration of the frames it publishes:
+    the colour stream's, at the configured size, from the device itself."""
+    config = RealSenseCameraConfig(serial_number_or_name="042", width=640, height=480, fps=30, warmup_s=0)
+    with RealSenseCamera(config) as camera:
+        i = camera.intrinsics
+        assert i is not None
+        assert (i.width, i.height) == (640, 480)
+        assert i.fx > 0 and i.fy > 0 and 0 < i.cx < 640 and 0 < i.cy < 480

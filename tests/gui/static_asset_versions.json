@@ -8,8 +8,8 @@
     "v": "6"
   },
   "app.js": {
-    "sha256_16": "dfab2eb5f0b349ee",
-    "v": "90"
+    "sha256_16": "c440e7a60fe1bd0e",
+    "v": "92"
   },
   "apply_completion.js": {
     "sha256_16": "02caba238a16fe46",
@@ -24,12 +24,12 @@
     "v": "1"
   },
   "bridge.js": {
-    "sha256_16": "2291ba63c489789d",
-    "v": "3"
+    "sha256_16": "20cbc598a28ca6cb",
+    "v": "4"
   },
   "bridge_consumers.js": {
-    "sha256_16": "dae8a0616091754c",
-    "v": "3"
+    "sha256_16": "9382f6c2d5cc8cec",
+    "v": "4"
   },
   "bug_report.js": {
     "sha256_16": "494caaadacba39e3",
@@ -44,12 +44,16 @@
     "v": "5"
   },
   "chunk_player.js": {
-    "sha256_16": "ac3153fa2fa7b795",
-    "v": "22"
+    "sha256_16": "be2c357473a11999",
+    "v": "23"
   },
   "dataset_browser.js": {
     "sha256_16": "8ed58e70ceba9f0b",
     "v": "3"
+  },
+  "depth_chip.js": {
+    "sha256_16": "924832f930c9b13d",
+    "v": "1"
   },
   "dialogs.js": {
     "sha256_16": "a3cf9886d48139ea",
@@ -60,16 +64,20 @@
     "v": "89"
   },
   "flash_experiments.css": {
-    "v": "13",
-    "sha256_16": "7dce81a91523a8fe"
+    "sha256_16": "f0a501e379f6fca6",
+    "v": "19"
   },
   "flash_experiments.js": {
-    "v": "34",
-    "sha256_16": "5c6041b5fa1cf85f"
+    "sha256_16": "7407e11f5919993a",
+    "v": "44"
   },
   "flash_live.js": {
-    "v": "4",
-    "sha256_16": "b8f60f4b4bb8e90b"
+    "sha256_16": "293fc7f8acaa9830",
+    "v": "16"
+  },
+  "flash_pipeline_settings.js": {
+    "sha256_16": "e424f6e3f7138ff1",
+    "v": "1"
   },
   "live_video.js": {
     "sha256_16": "6c7352e2876a04e6",
@@ -116,20 +124,20 @@
     "v": "16"
   },
   "rgbd_scene.js": {
-    "sha256_16": "80a9e1c4c1377fd7",
-    "v": "6"
+    "sha256_16": "6d855e87e5208717",
+    "v": "7"
   },
   "robot.js": {
-    "sha256_16": "76ad2fd8e83e4f79",
-    "v": "27"
+    "sha256_16": "24e128f6381038d4",
+    "v": "31"
   },
   "run.js": {
-    "v": "194",
-    "sha256_16": "046205f9552c993a"
+    "sha256_16": "210bb012669829f7",
+    "v": "195"
   },
   "style.css": {
-    "v": "173",
-    "sha256_16": "8d7c9b87552b13c3"
+    "sha256_16": "aa0f25ae355aa4ac",
+    "v": "173"
   },
   "timeline_lanes.js": {
     "sha256_16": "e77d56c09759662d",
@@ -160,7 +168,7 @@
     "v": "4"
   },
   "urdf_viz.html": {
-    "sha256_16": "01a0d5cf8a133698",
-    "v": "8"
+    "sha256_16": "ccb071f48b60ca49",
+    "v": "10"
   }
 }

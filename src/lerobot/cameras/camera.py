@@ -21,6 +21,7 @@ from typing import Any
 from numpy.typing import NDArray  # type: ignore  # TODO: add type stubs for numpy.typing
 
 from .configs import CameraConfig
+from .intrinsics import CameraIntrinsics
 
 
 class Camera(abc.ABC):
@@ -48,6 +49,10 @@ class Camera(abc.ABC):
         self.fps: int | None = config.fps
         self.width: int | None = config.width
         self.height: int | None = config.height
+        # A ``CameraIntrinsics`` for the frames this camera publishes, filled
+        # by drivers that can read their calibration once connected. None for
+        # a camera that does not know it.
+        self.intrinsics: CameraIntrinsics | None = None
 
     def __enter__(self):
         """

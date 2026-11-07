@@ -31,10 +31,11 @@ consumers after it explicitly adds and tests the stricter critical-path
 contract.
 
 Layout (all created dynamically based on observation_features/action_features):
-  - meta block:  JSON descriptor (feature names, image dims) — written once
+  - meta block:  JSON descriptor (feature names, image dims, depth keys) — written once
   - obs block:   float32[N_obs]  — scalar observation values
   - act block:   float32[N_act]  — scalar action values (last sent)
-  - img blocks:  uint8[H*W*C]   — one per camera
+  - img blocks:  uint8[H*W*C]   — one per camera; a depth camera's is its
+                 uint16[H*W] millimetres, coloured by the reader
 
 Torn-read protection via sequence counters (same pattern as policies.hvla.ipc).
 """
@@ -55,6 +56,8 @@ from multiprocessing import resource_tracker
 from typing import NamedTuple
 
 import numpy as np
+
+from lerobot.utils.depth_preview import depth_to_rgb_preview
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +324,16 @@ class _Block:
                 resource_tracker.unregister = _orig
 
 
+def _image_block_bytes(dims: list[int] | tuple[int, ...], is_depth: bool) -> int:
+    """A colour block is uint8 (H, W, C); a depth block is the uint16 map,
+    two bytes a pixel. One rule for the writer that creates and the reader
+    that attaches, so the two cannot disagree on a size."""
+    h, w = int(dims[0]), int(dims[1])
+    if is_depth:
+        return h * w * 2
+    return h * w * (int(dims[2]) if len(dims) > 2 else 3)
+
+
 # ============================================================================
 # Writer (robot side)
 # ============================================================================
@@ -340,9 +353,18 @@ class ObservationStream:
             k for k, v in obs_features.items() if not isinstance(v, tuple)
         )
         self.action_keys: list[str] = sorted(action_features.keys())
-        self.image_keys: dict[str, tuple[int, ...]] = dict(
-            sorted((k, v) for k, v in obs_features.items() if isinstance(v, tuple))
-        )
+        # The tap is a display stream: readers render RGB, so a single-channel
+        # feature, a depth map in uint16 millimetres, is advertised as the
+        # (H, W, 3) colour preview a reader gets for it. The block holds the
+        # millimetres as they are and the reader colours them: this writer
+        # runs inside the robot's control loop and only copies.
+        self._depth_keys: set[str] = set()
+        self.image_keys: dict[str, tuple[int, ...]] = {}
+        for k, v in sorted((k, v) for k, v in obs_features.items() if isinstance(v, tuple)):
+            if len(v) == 3 and v[2] == 1:
+                self._depth_keys.add(k)
+                v = (v[0], v[1], 3)
+            self.image_keys[k] = v
         self._cycle = 0
         self._mark: float | None = None
         self._stamp = _NO_STAMP
@@ -353,6 +375,7 @@ class ObservationStream:
                 "obs_scalar_keys": self.obs_scalar_keys,
                 "action_keys": self.action_keys,
                 "image_keys": {k: list(v) for k, v in self.image_keys.items()},
+                "depth_keys": sorted(self._depth_keys),
             }
         ).encode()
         self._meta = _Block(f"{SHM_PREFIX}meta", len(meta_json), create=True)
@@ -369,10 +392,9 @@ class ObservationStream:
         # One image block per camera
         self._img_blocks: dict[str, _Block] = {}
         for cam_key, dims in self.image_keys.items():
-            h, w = dims[0], dims[1]
-            c = dims[2] if len(dims) > 2 else 3
             safe = cam_key.replace("/", "_")
-            self._img_blocks[cam_key] = _Block(f"{SHM_PREFIX}img_{safe}", h * w * c, create=True)
+            size = _image_block_bytes(dims, cam_key in self._depth_keys)
+            self._img_blocks[cam_key] = _Block(f"{SHM_PREFIX}img_{safe}", size, create=True)
 
         logger.info(
             "ObservationStream started: %d obs scalars, %d action scalars, %d cameras",
@@ -402,7 +424,8 @@ class ObservationStream:
         for cam_key, block in self._img_blocks.items():
             img = obs.get(cam_key)
             if img is not None:
-                block.write_array(np.ascontiguousarray(img, dtype=np.uint8), self._stamp)
+                dtype = np.uint16 if cam_key in self._depth_keys else np.uint8
+                block.write_array(np.ascontiguousarray(img, dtype=dtype), self._stamp)
 
     def image_seq(self, cam_key: str) -> int:
         """This camera's image sequence, as the reader sees it. Cheap.
@@ -466,15 +489,17 @@ class ObservationStreamReader:
         self.obs_scalar_keys: list[str] = meta["obs_scalar_keys"]
         self.action_keys: list[str] = meta["action_keys"]
         self.image_keys: dict[str, list[int]] = meta["image_keys"]
+        # Blocks holding uint16 millimetres that ``read_image`` colours; a tap
+        # from before the field has none.
+        self.depth_keys: set[str] = set(meta.get("depth_keys", ()))
 
         self._obs_block = _Block(f"{SHM_PREFIX}obs", len(self.obs_scalar_keys) * 4, create=False)
         self._act_block = _Block(f"{SHM_PREFIX}act", len(self.action_keys) * 4, create=False)
         self._img_blocks: dict[str, _Block] = {}
         for cam_key, dims in self.image_keys.items():
             safe = cam_key.replace("/", "_")
-            h, w = dims[0], dims[1]
-            c = dims[2] if len(dims) > 2 else 3
-            self._img_blocks[cam_key] = _Block(f"{SHM_PREFIX}img_{safe}", h * w * c, create=False)
+            size = _image_block_bytes(dims, cam_key in self.depth_keys)
+            self._img_blocks[cam_key] = _Block(f"{SHM_PREFIX}img_{safe}", size, create=False)
 
     def read_obs(self) -> tuple[dict[str, float], float] | None:
         """Returns (obs_dict, timestamp) or None if no data."""
@@ -499,6 +524,15 @@ class ObservationStreamReader:
         block = self._img_blocks.get(cam_key)
         return block.seq if block is not None else 0
 
+    def _image(self, cam_key: str, data: bytes) -> np.ndarray:
+        """A block as the HWC uint8 picture ``image_keys`` advertises. A depth
+        block's millimetres are coloured here, on the reader's side, so the
+        robot loop that wrote them paid a copy and nothing more."""
+        dims = self.image_keys[cam_key]
+        if cam_key in self.depth_keys:
+            return depth_to_rgb_preview(np.frombuffer(data, dtype=np.uint16).reshape(dims[0], dims[1], 1))
+        return np.frombuffer(data, dtype=np.uint8).reshape(dims)
+
     def read_image(self, cam_key: str) -> tuple[np.ndarray, float] | None:
         """Returns (HWC uint8 array, timestamp) or None."""
         block = self._img_blocks.get(cam_key)
@@ -508,8 +542,7 @@ class ObservationStreamReader:
         if result is None:
             return None
         data, ts = result
-        dims = self.image_keys[cam_key]
-        return np.frombuffer(data, dtype=np.uint8).reshape(dims), ts
+        return self._image(cam_key, data), ts
 
     def read_obs_stamped(self) -> tuple[dict[str, float], BlockStamp] | None:
         """``read_obs`` with the cycle's stamp in place of the write time alone."""
@@ -538,8 +571,7 @@ class ObservationStreamReader:
         if result is None:
             return None
         data, stamp = result
-        dims = self.image_keys[cam_key]
-        return np.frombuffer(data, dtype=np.uint8).reshape(dims), stamp
+        return self._image(cam_key, data), stamp
 
     def close(self) -> None:
         self._meta.cleanup()

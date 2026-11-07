@@ -40,6 +40,7 @@ from PIL import Image
 from lerobot.cameras import ColorMode
 from lerobot.cameras.opencv import OpenCVCamera, OpenCVCameraConfig
 from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
+from lerobot.cameras.zed import ZEDCamera, ZEDCameraConfig
 from lerobot.utils.utils import init_logging
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,20 @@ def find_all_realsense_cameras() -> list[dict[str, Any]]:
     return all_realsense_cameras_info
 
 
+def find_all_zed_cameras() -> list[dict[str, Any]]:
+    """Every ZED the ZED SDK sees; nothing when the SDK's Python API is not installed."""
+    found: list[dict[str, Any]] = []
+    logger.info("Searching for ZED cameras...")
+    try:
+        found = ZEDCamera.find_cameras()
+        logger.info(f"Found {len(found)} ZED cameras.")
+    except ImportError:
+        logger.warning("Skipping ZED camera search: pyzed (the ZED SDK Python API) is not importable.")
+    except Exception as e:
+        logger.error(f"Error finding ZED cameras: {e}")
+    return found
+
+
 def find_and_print_cameras(camera_type_filter: str | None = None) -> list[dict[str, Any]]:
     """
     Finds available cameras based on an optional filter and prints their information.
@@ -107,12 +122,14 @@ def find_and_print_cameras(camera_type_filter: str | None = None) -> list[dict[s
         all_cameras_info.extend(find_all_opencv_cameras())
     if camera_type_filter is None or camera_type_filter == "realsense":
         all_cameras_info.extend(find_all_realsense_cameras())
+    if camera_type_filter is None or camera_type_filter == "zed":
+        all_cameras_info.extend(find_all_zed_cameras())
 
     if not all_cameras_info:
         if camera_type_filter:
             logger.warning(f"No {camera_type_filter} cameras were detected.")
         else:
-            logger.warning("No cameras (OpenCV or RealSense) were detected.")
+            logger.warning("No cameras (OpenCV, RealSense or ZED) were detected.")
     else:
         print("\n--- Detected Cameras ---")
         for i, cam_info in enumerate(all_cameras_info):
@@ -173,6 +190,8 @@ def create_camera_instance(cam_meta: dict[str, Any]) -> dict[str, Any] | None:
                 color_mode=ColorMode.RGB,
             )
             instance = RealSenseCamera(rs_config)
+        elif cam_type == "ZED":
+            instance = ZEDCamera(ZEDCameraConfig(serial_number=int(cam_id), color_mode=ColorMode.RGB))
         else:
             logger.warning(f"Unknown camera type: {cam_type} for ID {cam_id}. Skipping.")
             return None
@@ -299,8 +318,8 @@ def main():
         type=str,
         nargs="?",
         default=None,
-        choices=["realsense", "opencv"],
-        help="Specify camera type to capture from (e.g., 'realsense', 'opencv'). Captures from all if omitted.",
+        choices=["realsense", "opencv", "zed"],
+        help="Specify camera type to capture from (e.g., 'realsense', 'opencv', 'zed'). Captures from all if omitted.",
     )
     parser.add_argument(
         "--output-dir",

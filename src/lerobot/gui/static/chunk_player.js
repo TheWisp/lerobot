@@ -185,6 +185,8 @@
     const T0 = performance.now();
     const now = () => performance.now() - T0;
     const { datasetId, fps, length, cameras } = opts;
+    // Extra request parameters the page wants on every chunk, e.g. the depth display mapping.
+    const query = opts.query ? `&${opts.query}` : '';
     const tiles = opts.tiles || (() => null);
     const drawMasks = opts.drawMasks || (() => {});
     const recipeFor = opts.recipeFor || (() => null);
@@ -284,7 +286,7 @@
       const done = () => { if (inflight.get(start) === mine) inflight.delete(start); };
       const t = performance.now();
       const ep = episode;
-      const url = `${base()}/chunk?start=${start}&profile=${PROFILE}`;
+      const url = `${base()}/chunk?start=${start}&profile=${PROFILE}${query}`;
       let resp, buf;
       try {
         resp = await fetch(url, { signal: abort.signal, cache: 'no-store', headers: { 'X-Player': playerState() } });
