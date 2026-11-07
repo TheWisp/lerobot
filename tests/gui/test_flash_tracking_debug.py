@@ -40,6 +40,8 @@ def test_retired_camera_engine_is_not_a_hidden_alternative():
     with pytest.raises(ValidationError):
         flash_tracking.TrackingStart(engine="legacy")
     with pytest.raises(ValidationError):
+        flash_tracking.TrackingStart(method="conditioned_fixed")
+    with pytest.raises(ValidationError):
         flash_tracking.TrackingStart(fps=0)
 
 
@@ -106,6 +108,7 @@ def test_new_live_inspector_launches_shared_worker_and_passes_exact_settings(tmp
     assert captured["checked_backend"] == "open3d_plane"
     assert captured["args"][-2] == "lerobot.policies.flash.live_surface_worker"
     assert captured["config"]["pipeline_settings"] == settings
+    assert "method" not in captured["config"]
     assert json.loads((tmp_path / "config.json").read_text())["pipeline_settings"] == json.loads(
         json.dumps(settings)
     )
@@ -166,7 +169,7 @@ def test_shared_live_view_freezes_clicked_frame_and_never_paints_new_preview_ove
     }
     state = {
         "running": True,
-        "config": {"engine": "experiment", "pipeline_settings": defaults(), "method": "group_growing"},
+        "config": {"engine": "experiment", "pipeline_settings": defaults()},
         "estimate": {"status": "frozen", "frame": frozen},
         "preview": {**frozen, "frame_id": 99},
     }
@@ -185,6 +188,7 @@ def test_shared_live_view_freezes_clicked_frame_and_never_paints_new_preview_ove
     page.evaluate("async () => {switchTab('run'); await runTabInit(); await selectWorkflow('flash');}")
     page.get_by_role("button", name="Live camera", exact=True).click()
     page.wait_for_function("flashLive.frame?.frozen === true")
+    assert page.locator("#flash-live-method").count() == 0
     # A delayed experiment-list response must not replace the live view.
     page.route(
         "**/api/run/flash/experiments",
@@ -293,8 +297,9 @@ def test_flash_has_its_own_tab_with_video_and_live_subtabs(gui_page):
     assert page.locator("#flash-live-sidebar").is_visible()
     assert not page.locator("#flash-examples-workspace").is_visible()
     assert not page.locator("#flash-experiment-sidebar").is_visible()
-    for setting in ("camera", "method", "matching", "matcher", "config", "start", "stop"):
+    for setting in ("camera", "matching", "matcher", "config", "start", "stop"):
         assert page.locator(f"#flash-live-{setting}").evaluate("e => !!e.closest('#flash-live-sidebar')")
+    assert page.locator("#flash-live-method").count() == 0
     page.wait_for_function("document.getElementById('flash-live-camera').options.length === 3")
     page.locator("#flash-live-camera").select_option("side")
     assert page.locator("#flash-live-camera").input_value() == "side"

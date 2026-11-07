@@ -523,12 +523,6 @@
                 <div class="sidebar-header"><h1>Live camera</h1></div>
                 <div class="flash-live-settings">
                     <label>RGB-D camera <select id="flash-live-camera" aria-label="Live RGB-D camera"><option value="">Auto camera</option></select></label>
-                    <label>Pose calculation <select id="flash-live-method">
-                        <option value="conditioned_fixed">Depth + mask + image</option>
-                        <option value="conditioned_growing">Depth + mask + grow surface</option>
-                        <option value="group_fixed">Depth + mask + groups</option>
-                        <option value="group_growing">Depth + mask + groups + grow</option>
-                    </select></label>
                     <label>Image matching <select id="flash-live-matching"><option value="lk">LK</option><option value="ufm">UFM</option></select></label>
                     <label>Surface matcher <select id="flash-live-matcher" aria-label="Live surface matcher"></select></label>
                     <details><summary>Advanced pipeline settings</summary>
@@ -913,7 +907,7 @@ nebius iam auth-public-key generate \
     <script src="/static/robot.js?v=27"></script>
     <script src="/static/run.js?v=195"></script>
     <script src="/static/flash_experiments.js?v=36"></script>
-    <script src="/static/flash_live.js?v=6"></script>
+    <script src="/static/flash_live.js?v=7"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>

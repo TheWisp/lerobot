@@ -24,19 +24,19 @@ def loss_reason(status, details):
         return "Saved surface unavailable"
     if reason == "surface_group_disagreement":
         return "Surface and tracked point group disagree"
-    check = (details.get("fit") or {}).get("candidate_check") or details.get("prediction_geometry") or {}
+    prediction = details.get("prediction_geometry")
+    check = prediction or (details.get("fit") or {}).get("candidate_check") or {}
+    subject = "Prediction" if prediction else "Fit"
     if check.get("scene_depth_coherent_protrusion"):
-        cause = "Fit protrudes into measured empty space"
+        cause = f"{subject} protrudes into measured empty space"
     elif check.get("has_visible_overlap") is False:
-        cause = "Fit misses the visible surface"
+        cause = f"{subject} misses the visible surface"
     elif check.get("geometry_accepted") is False:
-        cause = "Fit disagrees with measured depth"
+        cause = f"{subject} disagrees with measured depth"
     elif reason == "insufficient_surface_overlap" or check.get("accepted") is False:
         cause = "Too little overlap with the saved surface"
     else:
         cause = "No pose passed the current image checks"
-    if reason == "no_observation_compatible_candidate" and details.get("hint_source"):
-        return f"{cause}; point-group fallback was not tried"
     return cause
 
 

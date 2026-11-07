@@ -94,7 +94,7 @@ def main():
                             detection_correction=config.detection_correction.control(offline=False),
                         )
                     live = LiveSurfaceSession(
-                        settings, "group_growing", source, model=model, kernels=kernels, search_pool=pool
+                        settings, source, model=model, kernels=kernels, search_pool=pool
                     )
                 started = time.perf_counter()
                 row, _, masks = live.step(frame)

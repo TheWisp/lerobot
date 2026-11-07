@@ -774,8 +774,18 @@ class GrowingSurfaceSession:
                 # Too little overlap for a new measurement does not contradict
                 # an existing prediction. It cannot update the filter or map.
                 return self._missing(hint, time_s, details, "insufficient_surface_overlap", geometry=fitter)
-            details["reason"] = "no_observation_compatible_candidate"
-            return self._result("lost", time_s, details, available=False)
+            # A failed local solve is not evidence that the independent motion
+            # prediction failed. Check that prediction against this observation
+            # before withholding the pose. It remains a prediction and cannot
+            # update the stored surface or connected image.
+            return self._missing(
+                hint,
+                time_s,
+                details,
+                "no_observation_compatible_candidate",
+                geometry=fitter,
+                require_overlap=True,
+            )
         kalman_prior = None
         if self.kalman is not None:
             prior_valid = check_pose(self.pose)["accepted"]
@@ -910,7 +920,7 @@ class GrowingSurfaceSession:
         # discarded by a later acceptance check as an accepted correction.
         details["kalman"].update(accepted=False, reason=reason)
 
-    def _missing(self, hint, time_s, details, reason, *, geometry=None):
+    def _missing(self, hint, time_s, details, reason, *, geometry=None, require_overlap=False):
         details["reason"] = reason
         if self.kalman is not None:
             # Prediction already propagated the posterior and group-motion
@@ -937,7 +947,16 @@ class GrowingSurfaceSession:
             # A failed alignment is not an empty observation. The fallback
             # still has to satisfy the current measured geometry. With no
             # usable observation, callers omit geometry and retain prediction.
-            check = check_surface_contradiction(geometry, self.pose, self.config.uncertainty)
+            check = (
+                geometry.check_pose(
+                    self.pose,
+                    max_outlier_fraction=self.config.uncertainty.max_visible_outlier_fraction,
+                    agreement_m=self.config.agreement_m,
+                    min_overlap=self.config.min_overlap,
+                )
+                if require_overlap
+                else check_surface_contradiction(geometry, self.pose, self.config.uncertainty)
+            )
             details["prediction_geometry"] = check
             if not check["accepted"]:
                 return self._result("lost", time_s, details, available=False)

@@ -34,15 +34,13 @@ def test_live_loss_reports_which_measured_geometry_check_rejected_the_fit(check,
     assert loss_reason("predicted", details) is None
 
 
-def test_live_loss_exposes_unused_point_group_when_local_fit_fails():
+def test_live_loss_reports_rejected_point_group_prediction():
     details = {
         "reason": "no_observation_compatible_candidate",
         "hint_source": "object_point_group",
-        "fit": {"candidate_check": {"has_visible_overlap": False}},
+        "prediction_geometry": {"has_visible_overlap": False, "accepted": False},
     }
-    assert loss_reason("lost", details) == (
-        "Fit misses the visible surface; point-group fallback was not tried"
-    )
+    assert loss_reason("lost", details) == "Prediction misses the visible surface"
 
 
 def sequence():
@@ -120,11 +118,8 @@ def test_live_timing_command_loads_the_selected_image_matcher(tmp_path, monkeypa
 
 @pytest.mark.parametrize("backend", ["lk", "ufm"])
 @pytest.mark.parametrize("matcher", ["visible_icp"])
-@pytest.mark.parametrize(
-    "method", ["conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"]
-)
 def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covariance(
-    tmp_path, monkeypatch, backend, method, matcher
+    tmp_path, monkeypatch, backend, matcher
 ):
     import torch
 
@@ -136,9 +131,10 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
     settings["config"]["shape"]["registration"]["backend"] = matcher
     settings["shared_matching"]["backend"] = backend
     settings["group_experiment"]["support_confirmation_s"] = 0.03
+    method = "group_growing"
     source = SuppliedMasks(frames)
     live_model, recorded_model = TranslationModel(), TranslationModel()
-    live = LiveSurfaceSession(settings, method, source, live_model)
+    live = LiveSurfaceSession(settings, source, live_model)
     live_rows, maps = [], []
     for i, (f, _) in enumerate(frames):
         row, _, mask = live.step(f)
@@ -201,11 +197,11 @@ def test_new_selection_has_no_old_surface_or_point_memory():
     settings = defaults()
     settings["shared_matching"]["backend"] = "lk"
     frames = list(sequence())
-    old = LiveSurfaceSession(settings, "group_growing", SuppliedMasks(frames))
+    old = LiveSurfaceSession(settings, SuppliedMasks(frames))
     old.step(frames[0][0])
     old.step(frames[1][0])
     old.close()
-    new = LiveSurfaceSession(settings, "group_growing", SuppliedMasks(frames))
+    new = LiveSurfaceSession(settings, SuppliedMasks(frames))
     assert not new.engine.references and new.engine.shared.previous is None
     assert new.engine.candidates["group_growing"]["left"].reference is None
     new.close()
@@ -234,7 +230,7 @@ def test_group_checks_and_matching_share_the_current_frame_geometry(monkeypatch)
     monkeypatch.setattr(GroupHints, "predict", predict)
     monkeypatch.setattr(ImageConditionedFit, "correct_surface_first", correct)
     frames = list(sequence())
-    live = LiveSurfaceSession(defaults(), "group_growing", SuppliedMasks(frames))
+    live = LiveSurfaceSession(defaults(), SuppliedMasks(frames))
     try:
         for frame, _ in frames:
             live.step(frame)

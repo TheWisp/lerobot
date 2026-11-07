@@ -11,18 +11,20 @@ from .surface_group_hints import GroupConfig
 from .surface_session_config import validate
 from .vision_pipeline import VisionPipelineConfig
 
+LIVE_METHOD = "group_growing"
+
 
 class LiveSurfaceSession:
-    def __init__(self, settings, method, mask_source, model=None, kernels=None, search_pool=None):
+    def __init__(self, settings, mask_source, model=None, kernels=None, search_pool=None):
         self.settings = validate(settings)
-        self.method, self.mask_source = method, mask_source
+        self.method, self.mask_source = LIVE_METHOD, mask_source
         self.engine = SurfaceFrameSession(
             tuple(mask_source.prompts),
             model,
             VisionPipelineConfig.from_dict(self.settings["config"]),
             kernels,
             search_pool,
-            single_method=method,
+            single_method=LIVE_METHOD,
             record_correspondences=True,
             surface_experiment=GrowingSurfaceConfig(**self.settings["surface_experiment"]),
             group_experiment=GroupConfig.from_dict(self.settings["group_experiment"])

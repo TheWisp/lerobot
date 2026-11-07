@@ -63,6 +63,48 @@ def frame(index, *, extension=0):
 
 
 @pytest.mark.parametrize("kalman", [False, True])
+@pytest.mark.parametrize("compatible_group", [False, True])
+def test_failed_local_fit_only_publishes_depth_compatible_group_prediction(
+    monkeypatch, kalman, compatible_group
+):
+    config = GrowingSurfaceConfig(
+        retain_unobserved_pose=False,
+        uncertainty=PoseUncertaintyConfig(enabled=kalman, mode="kalman"),
+    )
+    session = GrowingSurfaceSession(ShapeConfig(), config)
+    session.update(frame(0), 0.0)
+    original = session.store.points.copy()
+    wrong = np.eye(4)
+    wrong[0, 3] = 0.05
+
+    def propose_wrong(fitter, seed, limit):
+        return wrong.copy(), {"evaluations": 1, "converged": True}, [(0.0, wrong.copy())]
+
+    monkeypatch.setattr(WholeSurfaceFit, "_solve", propose_wrong)
+    support = np.array([[x, y, z] for x in (-0.1, 0.1) for y in (-0.06, 0.06) for z in (0.6, 0.7)])
+    group_pose = np.eye(4)
+    if not compatible_group:
+        group_pose[0, 3] = 0.05
+    hint = PoseHint(
+        group_pose,
+        "measured_support",
+        0.1,
+        0.1,
+        0,
+        motion=MeasuredGroupMotion(support, support + group_pose[:3, 3], 0.0, 0.1, "measured_support"),
+    )
+    result = session.update(frame(1), 0.1, hint=hint)
+    assert result["status"] == ("predicted" if compatible_group else "lost")
+    assert result["diagnostics"]["prediction_geometry"]["accepted"] == compatible_group
+    if compatible_group:
+        np.testing.assert_allclose(result["camera_from_reference"], np.eye(4), atol=1e-6)
+    else:
+        assert result["camera_from_reference"] is None
+    assert session.connected_frame == 0
+    np.testing.assert_array_equal(session.store.points, original)
+
+
+@pytest.mark.parametrize("kalman", [False, True])
 @pytest.mark.parametrize("wrong_support", [False, True])
 @pytest.mark.parametrize("partial", [False, True])
 @pytest.mark.parametrize("scene_depth", [False, True])

@@ -1,5 +1,8 @@
 # FLASH tracking pipeline
 
+**Current code path:** [one-frame architecture diagram](frame_architecture.md).
+Update that diagram when changing the per-frame data flow or publication rules.
+
 Status: experimental implementation; accuracy and runtime remain limited.
 
 ## Shared execution and outputs
@@ -324,8 +327,9 @@ test uses the sum of prediction and observation covariance. If current depth and
 mask clearly contradict the prediction, the compatibility option
 `reset_on_geometry_conflict` can restart at a valid observed fit. Fresh shared
 sessions disable this option and retain the normal innovation test. The final
-fused pose is checked against depth and mask again. When every fitted candidate contradicts the observation, the output
-is lost rather than presenting a contradicted pose as valid. Predictions and
+fused pose is checked against depth and mask again. When no fitted pose or
+independent prediction passes the applicable geometry checks, the output is
+lost rather than presenting a contradicted pose as valid. Predictions and
 rejected corrections never add surface measurements.
 
 **Limitations:** the information matrix describes depth-normal constraints only.

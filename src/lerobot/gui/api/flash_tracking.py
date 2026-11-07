@@ -29,9 +29,6 @@ class TrackingStart(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     engine: Literal["experiment"] = "experiment"
     pipeline_settings: dict | None = None
-    method: Literal["conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"] = (
-        "group_growing"
-    )
     serial: str = ""
     width: int = Field(default=1280, gt=0)
     height: int = Field(default=720, gt=0)
@@ -49,11 +46,8 @@ class TrackingStart(BaseModel):
             raise ValueError("Camera inspection requires the shared surface pipeline")
         if settings["surface_experiment"] is None:
             raise ValueError("Live surface inspection requires surface settings")
-        if (
-            values.get("method", "group_growing").startswith("group_")
-            and settings["group_experiment"] is None
-        ):
-            raise ValueError("Selected method requires group settings")
+        if settings["group_experiment"] is None:
+            raise ValueError("Live tracking requires group settings")
         values["pipeline_settings"] = settings
         return values
 

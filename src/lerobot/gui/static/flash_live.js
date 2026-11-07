@@ -18,14 +18,13 @@ async function showFlashLive() {
         liveElement('status').textContent = 'Loading shared pipeline settings…';
         flashLive.busy = true;
         liveElement('start').disabled = true;
-        for(const id of ['method','matching','matcher','config','camera']) liveElement(id).disabled = true;
+        for(const id of ['matching','matcher','config','camera']) liveElement(id).disabled = true;
         const data = await liveRequest('shared-defaults');
         const current = await liveRequest('state');
         if (!flashLive.visible || generation !== flashLive.generation) return;
         if(current.running && current.config?.engine === 'experiment') {
             data.settings = current.config.pipeline_settings;
-            liveElement('method').value = current.config.method;
-        } else liveElement('method').value = 'group_growing';
+        }
         flashLive.settings = data.settings;
         liveElement('matching').value = data.settings.shared_matching?.backend || 'lk';
         liveElement('matcher').replaceChildren(...Object.entries(data.matchers).map(([value,text]) => new Option(text,value)));
@@ -82,7 +81,7 @@ async function startFlashLive() {
         const picker = liveElement('camera');
         if(!picker.value) throw new Error('No RGB-D camera found');
         flashLive.starting = liveRequest('start', {engine: 'experiment', pipeline_settings: settings,
-            method: liveElement('method').value, serial: picker.value, width:1280, height:720, fps:30});
+            serial: picker.value, width:1280, height:720, fps:30});
         await flashLive.starting;
         if (!flashLive.visible || generation !== flashLive.generation) return;
         flashLive.processed = null; flashLive.packet = null; flashLive.frame = null;
@@ -167,7 +166,7 @@ async function pollFlashLive() {
         const data=await liveRequest('state');
         if(!flashLive.visible || generation!==flashLive.generation)return;
         const estimate=data.estimate || {}, running=data.running && data.config?.engine==='experiment';
-        for(const id of ['method','matching','matcher','config','camera']) liveElement(id).disabled=running;
+        for(const id of ['matching','matcher','config','camera']) liveElement(id).disabled=running;
         liveElement('start').disabled=data.running || flashLive.busy;
         liveElement('stop').disabled=!running;
         liveElement('freeze').disabled=!running;

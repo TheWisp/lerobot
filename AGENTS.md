@@ -141,6 +141,11 @@ how several defects went unnoticed for months.
 
 ## Architecture (`src/lerobot/`)
 
+- **FLASH perception:** [`src/lerobot/policies/flash/docs/frame_architecture.md`](src/lerobot/policies/flash/docs/frame_architecture.md)
+  is the canonical diagram of the running frame path. Update it in the same
+  change when altering frame inputs, group evidence, fitting, pose publication,
+  or surface growth. Keep it descriptive of code that runs; put proposed
+  behavior elsewhere.
 - **`scripts/`** — CLI entry points (`lerobot-train`, `lerobot-eval`, `lerobot-record`, etc.), mapped in `pyproject.toml [project.scripts]`.
 - **`configs/`** — Dataclass configs parsed by draccus. `train.py` has `TrainPipelineConfig` (top-level). `policies.py` has `PreTrainedConfig` base. Polymorphism via `draccus.ChoiceRegistry` with `@register_subclass("name")` decorators.
 - **`policies/`** — Each policy in its own subdir. All inherit `PreTrainedPolicy` (`nn.Module` + `HubMixin`) from `pretrained.py`. Factory with lazy imports in `factory.py`.

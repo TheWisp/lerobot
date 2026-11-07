@@ -21,7 +21,7 @@ import cv2
 import numpy as np
 
 from .live_surface_io import image_snapshot, new_selection, seed_frame, write_snapshot
-from .live_surface_session import LiveSurfaceSession
+from .live_surface_session import LIVE_METHOD, LiveSurfaceSession
 from .perception import LatestRGBDFrameStore, RGBDFrame
 from .surface_acceleration import SearchPool, compiled_kernels
 from .surface_tracking import load_ufm
@@ -165,7 +165,7 @@ def run(directory: Path, config: dict):
                             sequence,
                         )
                         source.detection_correction = vision.detection_correction.control(offline=False)
-                        live = LiveSurfaceSession(settings, config["method"], source, model, kernels, pool)
+                        live = LiveSurfaceSession(settings, source, model, kernels, pool)
                         overlays.clear()
                         frozen, last_id, paused = None, -1, False
                     else:
@@ -192,7 +192,7 @@ def run(directory: Path, config: dict):
                 state(
                     "tracking",
                     frame_id=frame.frame_id,
-                    method=config["method"],
+                    method=LIVE_METHOD,
                     timings={
                         "processed_fps": 1 / elapsed,
                         "processing_ms": row["processing_ms"],
