@@ -616,6 +616,63 @@ def _detect_and_open_cameras() -> list[dict]:
     except Exception as e:
         logger.warning(f"RealSense camera detection failed: {e}")
 
+    # --- Phase 1b: detect + open ZED cameras through the SDK ---
+    # The camera is offered as a ZED (both eyes, depth) rather than a UVC
+    # device. The SDK names each unit's V4L2 node, and that node is dropped
+    # from the OpenCV scan below: held by the SDK it cannot open, and a card
+    # calling the same camera "disconnected" would be wrong twice over.
+    # Preview opens without depth: the GPU model is not needed to show a picture.
+    zed_nodes: set[str] = set()
+    try:
+        from lerobot.cameras.zed.camera_zed import ZEDCamera
+        from lerobot.cameras.zed.configuration_zed import ZEDCameraConfig
+
+        zed_cams = ZEDCamera.find_cameras()
+        logger.info(f"Found {len(zed_cams)} ZED camera(s)")
+        for cam_info in zed_cams:
+            cam_id = cam_info.get("id")
+            camera = None
+            try:
+                config = ZEDCameraConfig(
+                    serial_number=int(str(cam_id)), color_mode=ColorMode.BGR, stereo_split=False
+                )
+                camera = ZEDCamera(config)
+                camera.connect(warmup=True)
+                preview_info = {
+                    **cam_info,
+                    "preview_index": len(_preview_cameras),
+                    "default_stream_profile": {
+                        "width": camera.width,
+                        "height": camera.height,
+                        "fps": camera.fps,
+                    },
+                }
+                _preview_cameras.append(camera)
+                _preview_camera_info.append(preview_info)
+                all_cameras.append(preview_info)
+                camera = None  # ownership transferred
+                if cam_info.get("path"):
+                    zed_nodes.add(str(cam_info["path"]))
+                logger.info(f"Opened preview camera: ZED {cam_id}")
+            except Exception as e:
+                logger.warning(f"Failed to open ZED {cam_id}: {e}")
+                error = f"{type(e).__name__}: {e}"
+                all_cameras.append(
+                    {
+                        **cam_info,
+                        "error": error,
+                        **_camera_open_error_details(error, str(cam_id)),
+                    }
+                )
+            finally:
+                if camera is not None:
+                    with contextlib.suppress(Exception):
+                        camera.disconnect()
+    except ImportError:
+        logger.info("ZED SDK Python API not installed; skipping ZED detection")
+    except Exception as e:
+        logger.warning(f"ZED camera detection failed: {e}")
+
     # --- Phase 2: detect + open OpenCV cameras ---
     # RealSense V4L2 nodes are now busy, so find_cameras() skips most.
     # We also explicitly filter any remaining RealSense nodes via sysfs.
@@ -623,7 +680,11 @@ def _detect_and_open_cameras() -> list[dict]:
         from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
         from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 
-        opencv_cams = _merge_opencv_discovery_errors(OpenCVCamera.find_cameras())
+        opencv_cams = [
+            cam
+            for cam in _merge_opencv_discovery_errors(OpenCVCamera.find_cameras())
+            if str(cam.get("id")) not in zed_nodes
+        ]
         available_count = sum("error" not in camera for camera in opencv_cams)
         logger.info(
             f"Found {available_count} usable OpenCV camera(s), {len(opencv_cams) - available_count} unavailable"

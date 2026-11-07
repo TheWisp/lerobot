@@ -38,6 +38,7 @@ from lerobot.utils.errors import DeviceNotConnectedError
 
 from ..camera import Camera
 from ..configs import ColorMode
+from ..intrinsics import CameraIntrinsics
 from ..utils import get_cv2_rotation
 from .configuration_realsense import RealSenseCameraConfig
 
@@ -186,6 +187,21 @@ class RealSenseCamera(Camera):
         """Checks if the camera pipeline is started and streams are active."""
         return self.rs_pipeline is not None and self.rs_profile is not None
 
+    @property
+    def depth_processing(self) -> dict[str, bool]:
+        """What the grab thread does to a depth map before publishing it, by
+        filter. A recording carries this next to the depth's intrinsics so a
+        consumer knows whether a 0 is the sensor's own hole or one a filter
+        left. The filters run only on the aligned colour+depth path; a
+        depth-only stream is published as the sensor gives it."""
+        filtered = bool(self.use_rgb and self.use_depth)
+        return {
+            "decimation": filtered and self.enable_decimation,
+            "spatial": filtered and self.enable_spatial,
+            "temporal": filtered and self.enable_temporal,
+            "hole_filling": filtered and self.enable_hole_filling,
+        }
+
     @check_if_already_connected
     def connect(self, warmup: bool = True) -> None:
         """
@@ -219,6 +235,8 @@ class RealSenseCamera(Camera):
             ) from e
 
         self._configure_capture_settings()
+        self.intrinsics = self._read_intrinsics()
+        self.device_name = str(self.rs_profile.get_device().get_info(rs.camera_info.name))
 
         # Create align object and depth filters BEFORE starting the read thread,
         # so the background thread can perform alignment + filtering per frame.
@@ -391,6 +409,20 @@ class RealSenseCamera(Camera):
                 self.width, self.height = actual_width, actual_height
                 self.capture_width, self.capture_height = actual_width, actual_height
 
+    def _read_intrinsics(self) -> CameraIntrinsics:
+        """The published frames' intrinsics from the device's own calibration:
+        the colour stream's, which aligned depth shares, or the depth stream's
+        when colour is off, turned with the frames by the rotation setting."""
+        if self.rs_profile is None:
+            raise RuntimeError(f"{self}: rs_profile must be initialized before use.")
+        stream = self.rs_profile.get_stream(rs.stream.color if self.use_rgb else rs.stream.depth)
+        i = stream.as_video_stream_profile().get_intrinsics()
+        return CameraIntrinsics(
+            width=int(i.width), height=int(i.height), fx=float(i.fx), fy=float(i.fy),
+            cx=float(i.ppx), cy=float(i.ppy), model=str(i.model).rsplit(".", 1)[-1],
+            coeffs=tuple(float(c) for c in i.coeffs),
+        ).rotated(self.rotation)  # fmt: skip
+
     def _read(self, read_depth: bool = False) -> NDArray[Any]:
         """Shared helper for :meth:`read`/:meth:`read_depth`: wait for a fresh color or depth frame."""
         if self.thread is None or not self.thread.is_alive():
@@ -501,7 +533,7 @@ class RealSenseCamera(Camera):
         Returns:
             tuple[np.ndarray, np.ndarray]:
                 - color_image: The captured color frame (height, width, 3) uint8
-                - depth_image: The aligned depth map (height, width) uint16 in millimeters
+                - depth_image: The aligned depth map (height, width, 1) uint16 in millimeters
 
         Raises:
             DeviceNotConnectedError: If the camera is not connected.
@@ -676,10 +708,15 @@ class RealSenseCamera(Camera):
                         depth_frame_raw = frameset.get_depth_frame()
                         depth_frame = np.asanyarray(depth_frame_raw.get_data())
                         processed_depth_frame = self._postprocess_image(depth_frame, depth_frame=True)
-                        if processed_depth_frame.ndim == 2:  # (H, W) -> (H, W, 1)
-                            processed_depth_frame = processed_depth_frame[..., np.newaxis]
                     else:
                         processed_depth_frame = None
+
+                # Consumers always see depth as (H, W, 1): that is the shape a
+                # robot declares for its ``<cam>_depth`` feature and the only
+                # layout the dataset writer accepts. The aligned branch used to
+                # skip this and hand out (H, W), which add_frame rejects.
+                if processed_depth_frame is not None and processed_depth_frame.ndim == 2:
+                    processed_depth_frame = processed_depth_frame[..., np.newaxis]
 
                 # Run the optional in-camera post-processor on (color, depth)
                 # BEFORE we cache. Pushes depth-aware image processing (e.g.
@@ -689,8 +726,9 @@ class RealSenseCamera(Camera):
                 # one-off processor bug never bricks the camera stream.
                 if self.post_grab_processor is not None and processed_depth_frame is not None:
                     try:
+                        # The processor protocol takes the plain (H, W) map.
                         processed_color_frame = self.post_grab_processor.process_frame_with_depth(
-                            processed_color_frame, processed_depth_frame
+                            processed_color_frame, processed_depth_frame[..., 0]
                         )
                     except Exception as e:
                         logger.warning(
@@ -796,16 +834,24 @@ class RealSenseCamera(Camera):
 
         return self._async_read(timeout_ms=timeout_ms)
 
-    def _read_latest(self, max_age_ms: int, read_depth: bool = False) -> NDArray[Any]:
-        """Shared helper for :meth:`read_latest`/:meth:`read_latest_depth`: peek the latest buffered frame."""
+    def _latest_frames(self, max_age_ms: int) -> tuple[NDArray[Any] | None, NDArray[Any] | None]:
+        """Peek both cached frames under one lock: the colour frame and the
+        depth map of the same grab, either ``None`` until it has been captured.
+
+        Raises:
+            RuntimeError: If the read thread is not running or nothing has been
+                captured yet.
+            TimeoutError: If the latest grab is older than ``max_age_ms``.
+        """
         if self.thread is None or not self.thread.is_alive():
             raise RuntimeError(f"{self} read thread is not running.")
 
         with self.frame_lock:
-            frame = self.latest_depth_frame if read_depth else self.latest_color_frame
+            color = self.latest_color_frame
+            depth = self.latest_depth_frame
             timestamp = self.latest_timestamp
 
-        if frame is None or timestamp is None:
+        if timestamp is None:
             raise RuntimeError(f"{self} has not captured any frames yet.")
 
         age_ms = (time.perf_counter() - timestamp) * 1e3
@@ -814,6 +860,14 @@ class RealSenseCamera(Camera):
                 f"{self} latest frame is too old: {age_ms:.1f} ms (max allowed: {max_age_ms} ms)."
             )
 
+        return color, depth
+
+    def _read_latest(self, max_age_ms: int, read_depth: bool = False) -> NDArray[Any]:
+        """Shared helper for :meth:`read_latest`/:meth:`read_latest_depth`: peek the latest buffered frame."""
+        color, depth = self._latest_frames(max_age_ms)
+        frame = depth if read_depth else color
+        if frame is None:
+            raise RuntimeError(f"{self} has not captured any frames yet.")
         return frame
 
     @check_if_not_connected
@@ -874,6 +928,35 @@ class RealSenseCamera(Camera):
             raise RuntimeError(f"{self}: cannot read depth — camera was configured with use_depth=False.")
 
         return self._read_latest(max_age_ms=max_age_ms, read_depth=True)
+
+    @check_if_not_connected
+    def read_latest_color_and_depth(self, max_age_ms: int = 500) -> tuple[NDArray[Any], NDArray[np.uint16]]:
+        """Peek the latest color frame and its aligned depth map from one grab.
+
+        Non-blocking counterpart of :meth:`read_color_and_aligned_depth`. Both
+        arrays are taken under one lock so they come from the same frameset;
+        peeking them one at a time can straddle a grab and pair a color frame
+        with the next frame's depth.
+
+        Returns:
+            ``(color (H, W, 3) uint8, depth (H, W, 1) uint16 millimetres)``.
+
+        Raises:
+            RuntimeError: If depth is disabled, has been consumed by a
+                post-grab processor, or nothing has been captured yet.
+            TimeoutError: If the latest frame is older than ``max_age_ms``.
+        """
+        if not self.use_depth:
+            raise RuntimeError(f"{self}: cannot read depth — camera was configured with use_depth=False.")
+        if self.post_grab_processor is not None:
+            raise RuntimeError(
+                f"{self}: depth has been consumed by post_grab_processor "
+                f"({type(self.post_grab_processor).__name__}); detach it first if you need raw depth."
+            )
+        color_frame, depth_frame = self._latest_frames(max_age_ms)
+        if color_frame is None or depth_frame is None:
+            raise RuntimeError(f"{self} has not captured any aligned frames yet.")
+        return color_frame, depth_frame
 
     def disconnect(self) -> None:
         """

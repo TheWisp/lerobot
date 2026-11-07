@@ -24,6 +24,7 @@ command so the MIT slots (kp, kd, pos, vel, torque) can be asserted.
 import logging
 import time
 from contextlib import nullcontext
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -156,6 +157,68 @@ def test_observation_labels_can_refresh_context(tmp_path, monkeypatch):
     follower.get_observation()
 
     assert follower.bus.sync_reads[-1] == "test_arm.observation"
+
+
+def _fail(what):
+    def read():
+        pytest.fail(what)
+
+    return read
+
+
+def test_a_depth_camera_is_read_with_its_colour_from_one_grab(tmp_path, monkeypatch):
+    """A camera that pairs its reads hands out colour and depth together, so
+    the stored depth is of the frame beside it; a second peek could land on
+    the next grab."""
+    follower = make_follower(tmp_path, monkeypatch)
+    rgb, depth = object(), object()
+    follower.cameras = {
+        "top": SimpleNamespace(
+            is_connected=True,
+            use_depth=True,
+            read_latest_color_and_depth=lambda: (rgb, depth),
+            read_latest=_fail("colour peeked apart from its depth"),
+            read_latest_depth=_fail("depth peeked apart from its colour"),
+        )
+    }
+
+    obs = follower.get_observation()
+
+    assert obs["top"] is rgb and obs["top_depth"] is depth
+
+
+def test_a_stereo_depth_camera_hands_out_both_eyes_and_depth_from_one_grab(tmp_path, monkeypatch):
+    follower = make_follower(tmp_path, monkeypatch)
+    left, right, depth = object(), object(), object()
+    follower.cameras = {
+        "top": SimpleNamespace(
+            is_connected=True,
+            stereo_split=True,
+            use_depth=True,
+            read_latest_stereo_and_depth=lambda: (left, right, depth),
+            read_latest_stereo=_fail("eyes peeked apart from their depth"),
+            read_latest_depth=_fail("depth peeked apart from its eyes"),
+        )
+    }
+
+    obs = follower.get_observation()
+
+    left_key, right_key = of.stereo_channel_keys("top")
+    assert obs[left_key] is left and obs[right_key] is right and obs["top_depth"] is depth
+
+
+def test_a_depth_camera_without_a_paired_read_is_peeked_for_each(tmp_path, monkeypatch):
+    follower = make_follower(tmp_path, monkeypatch)
+    rgb, depth = object(), object()
+    follower.cameras = {
+        "top": SimpleNamespace(
+            is_connected=True, use_depth=True, read_latest=lambda: rgb, read_latest_depth=lambda: depth
+        )
+    }
+
+    obs = follower.get_observation()
+
+    assert obs["top"] is rgb and obs["top_depth"] is depth
 
 
 def test_connect_does_not_rewrite_motor_zero(tmp_path, monkeypatch):

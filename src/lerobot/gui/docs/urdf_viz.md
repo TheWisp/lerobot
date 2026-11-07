@@ -122,7 +122,7 @@ ones — state and action — read from `ObservationStreamReader.read_obs()` /
 a handler that reads from wherever the model's output is buffered, and
 return the same `frames[]` shape.
 
-The frontend UI today is a single "show action" toggle. When a second
+The frontend UI today is a single "action" toggle. When a second
 candidate overlay source appears in meta (e.g. `"prediction"`), the toggle
 will need to become a multi-pick — but the API contract doesn't change.
 
@@ -138,7 +138,7 @@ comparison is still available there.
 How the tube is computed (entirely in JS, no extra backend work):
 
 1. The frontend already keeps a hidden _ghost_ URDF tree per arm (loaded
-   lazily on first "show action" toggle).
+   lazily on first "action" toggle).
 2. For each frame in `frames`, the renderer briefly sets the ghost's
    joint values, calls `updateMatrixWorld`, reads the EE link's world
    position, and collects it.
@@ -305,3 +305,53 @@ for sources and the one local modification. `urdf-loader` clamps
 `setJointValue` to the URDF `<limit>` by default; the viewer sets
 `ignoreLimits = true` because layer-2 offsets legitimately exceed the CAD
 limits, and the goal is to show the _true_ observed pose.
+
+## Depth point cloud
+
+A recording whose depth camera carries its intrinsics can be drawn as a point
+cloud in the same scene as the robot. The tile has three controls in one row
+at its bottom-left, in the pill style of the main app's camera pills:
+
+| Control  | What it does                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scene`  | On/off. Back-projects every pixel of the frame's depth map through the recorded intrinsics and the camera's mount transform, coloured from the RGB frame, as one point per pixel: the scene the camera saw, beside the robot. The calibrated camera is drawn as a small frustum.                                                                                                                   |
+| `action` | On/off. The commanded pose as a translucent robot over the recorded one.                                                                                                                                                                                                                                                                                                                           |
+| `view`   | A split button. The button recentres the view on its camera, with that camera's field of view, every time it is clicked: through the camera the cloud is the photograph by construction, so any offset of the robot model from it is the calibration's error. The arrow beside it picks which depth camera the button looks through. Dragging the orbit leaves the camera; the next click returns. |
+
+The mount transform is taken relative to the right arm's base, the arm the
+click-target calibration forward-kinematics by default; the viewer places each
+arm at its own offset, so a transform measured against the other arm would
+need its own entry.
+
+![The orbit view with the cloud on and the calibrated camera's frustum.](images/urdf_viz_depth_cloud.png)
+
+![Through the camera: the cloud is the photo; the robot model shows the calibration error.](images/urdf_viz_from_camera.png)
+
+What it reads, and where it comes from:
+
+- **Intrinsics** from the dataset: the `camera` block in the depth feature's
+  `info`, written at record time from the camera's own calibration
+  (`lerobot/datasets/camera_calibration.py`). Without it the tile hides the
+  control and says so.
+- **The mount transform** from this machine's
+  `~/.config/lerobot/click_target_extrinsics.json`, not from the dataset.
+  **NOT IMPLEMENTED** in the dataset yet: a dataset viewed elsewhere draws the
+  cloud in camera frame and the status line says so. That placeholder puts
+  the camera at the arm base looking along +x, which is wrong for any real
+  mount; on fc500t the ZED looks down at the desk, so from the side the
+  desk stands up as a wall in front of the arm, and from the camera the
+  cloud is the photograph while the model floats off by the missing
+  transform (issue #268).
+
+  ![Placeholder pose from the side: the desk as a wall in front of the arm](images/zed_cloud_placeholder.png)
+
+  ![Placeholder pose from the camera: the cloud is the photograph, the model is off](images/zed_cloud_placeholder_pov.png)
+
+- **Depth pixels** from `GET …/frame/{i}/depth?camera=`, raw uint16
+  millimetres over gzip, with pixels at or below the quantizer's floor
+  zeroed: a stored "no measurement" reads back as `depth_min`, so that is the
+  only marker left.
+
+The depth tile itself takes a display mapping, `Auto` (the episode's 1st to
+99th percentile) or `Fixed` (a range in metres), from a select beside its
+enlarge button; the same mapping colours the Low Bandwidth chunks.

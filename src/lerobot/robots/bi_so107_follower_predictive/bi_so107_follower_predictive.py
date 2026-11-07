@@ -130,8 +130,10 @@ class BiSO107FollowerPredictive(BiSO107Follower):
         from lerobot.processor import DepthEdgeOverlayProcessorStep
 
         self.cameras = make_cameras_from_configs(config.cameras)
+        # The overlay is to be retired (see DepthEdgeOverlayProcessorStep);
+        # ``record_depth`` is its replacement.
         for cam_key, cam in self.cameras.items():
-            if isinstance(cam, RealSenseCamera) and cam.use_depth:
+            if isinstance(cam, RealSenseCamera) and cam.use_depth and not config.record_depth:
                 cam.post_grab_processor = DepthEdgeOverlayProcessorStep(
                     camera_key=cam_key,
                     threshold_percentile=90,

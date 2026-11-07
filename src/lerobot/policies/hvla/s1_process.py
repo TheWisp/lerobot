@@ -701,6 +701,7 @@ def run_s1(
     import lerobot.teleoperators as _lr_teleops
     from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
     from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
+    from lerobot.cameras.zed.configuration_zed import ZEDCameraConfig  # noqa: F401
     from lerobot.policies.hvla.s1.protocol import S2_LATENT_KEY
     from lerobot.robots import make_robot_from_config
     from lerobot.robots.config import RobotConfig

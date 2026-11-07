@@ -317,12 +317,29 @@ class OpenArmFollower(Robot):
                 left_key, right_key = stereo_channel_keys(cam_key)
                 # One capture, two eyes, one lock acquisition. Two separate
                 # reads would let the grab thread slip a new frame between them
-                # and pair eye A of frame N with eye B of frame N+1.
+                # and pair eye A of frame N with eye B of frame N+1. A camera
+                # that also computes depth hands all three out of that grab.
+                if getattr(cam, "use_depth", False) and hasattr(cam, "read_latest_stereo_and_depth"):
+                    obs_dict[left_key], obs_dict[right_key], obs_dict[f"{cam_key}_depth"] = (
+                        cam.read_latest_stereo_and_depth()
+                    )
+                    logger.debug(
+                        f"{self} read {cam_key} both eyes and depth: {(time.perf_counter() - start) * 1e3:.1f}ms"
+                    )
+                    continue
                 obs_dict[left_key], obs_dict[right_key] = cam.read_latest_stereo()
                 dt_ms = (time.perf_counter() - start) * 1e3
                 logger.debug(f"{self} read {cam_key} both eyes: {dt_ms:.1f}ms")
             elif getattr(cam, "use_rgb", True):
                 start = time.perf_counter()
+                if getattr(cam, "use_depth", False) and hasattr(cam, "read_latest_color_and_depth"):
+                    # One grab for both, so the depth map lines up with the
+                    # frame it is stored beside; two peeks could straddle a grab.
+                    obs_dict[cam_key], obs_dict[f"{cam_key}_depth"] = cam.read_latest_color_and_depth()
+                    logger.debug(
+                        f"{self} read {cam_key} and depth: {(time.perf_counter() - start) * 1e3:.1f}ms"
+                    )
+                    continue
                 obs_dict[cam_key] = cam.read_latest()
                 dt_ms = (time.perf_counter() - start) * 1e3
                 logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
