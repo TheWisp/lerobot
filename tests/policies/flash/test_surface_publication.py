@@ -100,7 +100,47 @@ def test_failed_local_fit_only_publishes_depth_compatible_group_prediction(
         np.testing.assert_allclose(result["camera_from_reference"], np.eye(4), atol=1e-6)
     else:
         assert result["camera_from_reference"] is None
-    assert session.connected_frame == 0
+        # Cross the real live display transport: losing the public pose must
+        # not lose the failing estimate or its geometry verdict for debugging.
+        import json
+        import struct
+        from types import SimpleNamespace
+
+        from lerobot.gui.flash_live_scene import live_scene_packet
+        from lerobot.policies.flash.perception import RGBDFrame
+
+        current = frame(1)["current"]
+        measured = RGBDFrame(
+            1, current["rgb"], current["depth"], current["intrinsics"], 1, np.eye(4), 0.1, 0.1, "fixture"
+        )
+        method = "group_growing"
+        live = SimpleNamespace(
+            method=method,
+            mask_source=SimpleNamespace(prompts={"object": "test object"}),
+            engine=SimpleNamespace(
+                references={"object": session.reference},
+                candidates={method: {"object": session}},
+                sessions={"object": None},
+            ),
+        )
+        row = {
+            "objects": {
+                "object": {
+                    method: None,
+                    method + "_status": result["status"],
+                    method + "_details": result["diagnostics"],
+                }
+            }
+        }
+        packet = live_scene_packet(measured, live, row, {"object": current["mask"]})
+        size = struct.unpack("<I", packet[:4])[0]
+        saved = json.loads(packet[4 : 4 + size])["objects"]["object"]
+        assert saved["pose"] is None  # Rejected estimates stay out of the scene.
+        diagnostics = saved["diagnostics"]
+        np.testing.assert_allclose(diagnostics["unpublished_camera_from_reference"], session.pose)
+        np.testing.assert_allclose(diagnostics["fit"]["rejected_camera_from_reference"], wrong)
+        assert diagnostics["prediction_geometry"]["scene_depth_coherent_protrusion"]
+    assert session.accepted_frame == 0
     np.testing.assert_array_equal(session.store.points, original)
 
 
@@ -149,7 +189,7 @@ def test_downstream_rejection_cannot_publish_a_geometrically_impossible_fallback
         geometry = WholeSurfaceFit(original, current["current"], current["intrinsics"], session.shape_config)
         assert check_surface_contradiction(geometry, np.asarray(returned), config.uncertainty)["accepted"]
     np.testing.assert_array_equal(session.store.points, original)
-    assert session.connected_frame == 0
+    assert session.accepted_frame == 0
     if kalman:
         assert not result["diagnostics"]["kalman"]["accepted"], (
             "Rolled-back correction must not be reported as accepted"
@@ -202,4 +242,4 @@ def test_insufficient_overlap_checks_fallback_and_rolls_back_filter(wrong_suppor
         )
     assert (result["camera_from_reference"] is None) == wrong_support
     np.testing.assert_array_equal(session.store.points, original)
-    assert session.connected_frame == 0
+    assert session.accepted_frame == 0

@@ -31,16 +31,16 @@ def image_snapshot(frame: RGBDFrame) -> dict:
     }
 
 
-def seed_frame(command: dict, frozen: RGBDFrame | None, latest: RGBDFrame | None) -> RGBDFrame:
-    """Never reinterpret a click on a later camera image."""
+def seed_frame(command: dict, displayed: RGBDFrame | None, latest: RGBDFrame | None) -> RGBDFrame:
+    """Bind a click to the RGB-D frame that produced the displayed image."""
     if command.get("point") is not None:
-        if frozen is None or command.get("frame_id") != frozen.frame_id:
-            raise ValueError("Freeze the camera image again before selecting a point")
+        if displayed is None or command.get("frame_id") != displayed.frame_id:
+            raise ValueError("That image is no longer available; click the current image again")
         x, y = command["point"]
-        if not (0 <= x < frozen.rgb.shape[1] and 0 <= y < frozen.rgb.shape[0]):
+        if not (0 <= x < displayed.rgb.shape[1] and 0 <= y < displayed.rgb.shape[0]):
             raise ValueError("The selected point is outside the camera image")
-        return frozen
-    frame = frozen if frozen is not None else latest
+        return displayed
+    frame = latest
     if frame is None:
         raise ValueError("Wait for the camera image")
     return frame

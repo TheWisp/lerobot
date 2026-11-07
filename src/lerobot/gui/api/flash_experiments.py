@@ -141,6 +141,7 @@ def _cancel_rebuild():
 
 def _settings(identity):
     from benchmarks.flash_pipeline_settings import catalog, from_recording
+    from lerobot.gui.flash_pipeline_fields import pipeline_fields
     from lerobot.policies.flash.surface_registration import MATCHERS
 
     items = [item for item in _list() if item["id"] == identity]
@@ -151,6 +152,7 @@ def _settings(identity):
     return {
         "settings": from_recording(provenance, item["methods"]),
         "options": catalog(),
+        "fields": pipeline_fields(),
         "matchers": MATCHERS,
     }
 

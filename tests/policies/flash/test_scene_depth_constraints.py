@@ -45,6 +45,60 @@ def test_background_contradiction_is_not_diluted_by_hidden_model_points():
     assert fit.score(wrong) > fit.score(np.eye(4))
 
 
+def test_depth_diagnostics_identify_current_or_retained_image_conflict():
+    source, _, k = scene()
+    source["frame_id"] = 12
+    depth = source["depth"].copy()
+    depth[source["mask"]] = 0.39
+    current = SurfaceTrackingSession(None).prepare(source["rgb"], depth, source["mask"], k, 19)["current"]
+    fit = WholeSurfaceFit(source["obs"]["points"], current, k, ShapeConfig(), reference_observation=source)
+    result = fit.scene_depth_check(np.eye(4))
+    # Current nearer depth can hide the old surface. But today's nearer
+    # surface would occupy measured air in the retained image at this pose.
+    current_check, retained_check = result["scene_depth_views"]
+    assert current_check["frame_id"] == 19
+    assert current_check["direction"] == "map_to_current"
+    assert not current_check["coherent_protrusion"]
+    assert retained_check["frame_id"] == 12
+    assert retained_check["direction"] == "current_to_retained"
+    assert retained_check["coherent_protrusion"]
+
+
+def test_visible_live_controller_has_a_depth_compatible_local_fit():
+    """Real last-live-frame evidence, not a replay of the unsaved filter/history.
+
+    The group pose has a plausible silhouette but is too near the camera.
+    The same bounded solver can correct it using this frame's geometry alone.
+    Keep this distinction: passing this test does not prove live recovery.
+    """
+    import json
+    from pathlib import Path
+
+    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+
+    with np.load(Path(__file__).parent / "fixtures/green_controller_live_loss_20261107.npz") as saved:
+        config = VisionPipelineConfig.from_dict(json.loads(str(saved["settings_json"]))["config"])
+        observation = SurfaceTrackingSession(
+            None,
+            observation_config=config.observation,
+            shape_config=config.shape,
+            motion_config=config.motion,
+        ).prepare(saved["rgb"], saved["depth"], saved["mask"], saved["intrinsics"], 1695)
+        fit = WholeSurfaceFit(saved["surface"], observation["current"], saved["intrinsics"], config.shape)
+
+        def check(pose):
+            return fit.check_pose(pose, max_outlier_fraction=0.25, agreement_m=0.005, min_overlap=0.25)
+
+        assert check(saved["group_pose"])["scene_depth_coherent_protrusion"]
+        pose, detail = fit.correct(saved["group_pose"], check=check)
+        assert pose is not None
+        verdict = check(pose)
+        assert verdict["accepted"]
+        assert not verdict["scene_depth_coherent_protrusion"]
+        assert verdict["surface_median_mm"] < 3
+        assert detail["numerical_solves"] == 1
+
+
 def test_coherent_protrusion_cannot_hide_below_global_outlier_fraction():
     """A local strip in measured empty space is a contradiction, even if most points fit.
 

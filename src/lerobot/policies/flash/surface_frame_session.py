@@ -10,17 +10,17 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from functools import partial
 
 import numpy as np
 
 from .experimental_surface_session import GrowingSurfaceConfig, GrowingSurfaceSession
 from .flow_paths import DenseFlow, FlowPaths
+from .motion_groups import SceneMotionGroups
+from .object_group_association import ObjectGroupAssociation, ObjectMotionSource
 from .scene_groups import ScenePointTracker
 from .shared_image_tracking import SharedFrameTracker
 from .surface_correspondence import crop_pair, measured_pairs, robust_fit, ufm_pairs
-from .surface_group_hints import GroupHints
-from .surface_observation import prepare_surface_frame
+from .surface_observation import move, prepare_surface_frame
 from .surface_tracking import SurfaceTrackingSession
 
 
@@ -47,6 +47,48 @@ class MotionChain:
         else:
             self.pose = prepared["step"] @ self.pose
         return self.pose.copy()
+
+
+def scene_group_record(snapshot, scene, frame):
+    """All measured scene points, preserving the identities used by the wireframe."""
+    visible = {int(point_id): index for index, point_id in enumerate(scene.ids)}
+    camera_from_base = np.linalg.inv(frame.base_from_camera)
+    record = []
+    for group in snapshot.groups.values():
+        measured = [int(point_id) for point_id in group.ids if int(point_id) in visible]
+        indices = [visible[point_id] for point_id in measured]
+        hidden = group.base_xyz[~group.measured]
+        predicted_xyz = move(hidden, camera_from_base)
+        z = predicted_xyz[:, 2] if len(predicted_xyz) else np.empty(0)
+        valid = z > 0
+        predicted_xyz = predicted_xyz[valid]
+        z = z[valid]
+        pixels = (
+            np.column_stack(
+                (
+                    frame.intrinsics[0, 0] * predicted_xyz[:, 0] / z + frame.intrinsics[0, 2],
+                    frame.intrinsics[1, 1] * predicted_xyz[:, 1] / z + frame.intrinsics[1, 2],
+                )
+            )
+            if len(z)
+            else np.empty((0, 2))
+        )
+        record.append(
+            {
+                "id": group.id,
+                "confirmed": group.confirmed,
+                "supported": group.supported,
+                "member_count": len(group.ids),
+                "measured_count": int(group.measured.sum()),
+                "residual_mm": 1000 * group.residual_m if np.isfinite(group.residual_m) else None,
+                "ids": measured,
+                "pixels": np.rint(scene.xy[indices]).astype(int).tolist(),
+                "camera_xyz": np.round(move(scene.base_xyz[indices], camera_from_base), 4).tolist(),
+                "predicted_pixels": np.rint(pixels).astype(int).tolist(),
+                "predicted_camera_xyz": np.round(predicted_xyz, 4).tolist(),
+            }
+        )
+    return record
 
 
 class RetainedMotionReference:
@@ -243,18 +285,13 @@ class SurfaceFrameSession:
             else {}
         )
         scene_tracker = ScenePointTracker() if group_experiment is not None and shared is None else None
-        groups = {
-            name: {
-                role: GroupHints(
-                    group_experiment,
-                    shared_image_points=shared is not None,
-                    uncertainty_config=surface_experiment.uncertainty,
-                )
-                for role in sessions
-            }
+        scene_groups = SceneMotionGroups(group_experiment) if group_experiment is not None else None
+        sources: dict[str, dict[str, ObjectMotionSource]] = {
+            name: {role: ObjectGroupAssociation(scene_groups.config) for role in sessions}
             for name in candidates
             if name.startswith("group_")
         }
+        self.scene_groups = scene_groups
         self.shared = shared
         self.sessions = sessions
         self.chains = chains
@@ -262,7 +299,7 @@ class SurfaceFrameSession:
         self.retained = retained
         self.candidates = candidates
         self.scene_tracker = scene_tracker
-        self.groups = groups
+        self.motion_sources = sources
         self.config, self.model = config, model
         self.single_method = single_method
         self.retain_motion_reference = retain_motion_reference
@@ -294,7 +331,7 @@ class SurfaceFrameSession:
         retained = self.retained
         candidates = self.candidates
         scene_tracker = self.scene_tracker
-        groups = self.groups
+        sources = self.motion_sources
         config = self.config
         model = self.model
         single_method = self.single_method
@@ -311,6 +348,17 @@ class SurfaceFrameSession:
             begin = time.perf_counter()
             scene = scene_tracker.update(frame)
             row["scene_point_tracking_ms"] = (time.perf_counter() - begin) * 1000
+        if self.scene_groups is not None:
+            begin = time.perf_counter()
+            group_frame = self.scene_groups.update(scene)
+            row["group_update_ms"] = (time.perf_counter() - begin) * 1000
+            row["scene_groups"] = {
+                "groups": len(group_frame.groups),
+                "points": group_frame.point_count,
+                "supported": sum(g.supported for g in group_frame.groups.values()),
+                "confirmed": sum(g.confirmed for g in group_frame.groups.values()),
+            }
+            row["scene_group_tracks"] = scene_group_record(group_frame, scene, frame)
         depth_m = frame.depth.astype(np.float32) * frame.depth_m_per_unit
         frame_filters = prepare_surface_frame(depth_m, asdict(config.observation))
         match_row = {"frame": frame.frame_id, "objects": {}}
@@ -379,15 +427,15 @@ class SurfaceFrameSession:
                 begin = time.perf_counter()
                 track = tracks[role]
                 candidate_input = prepared
-                # A missed frame cannot silently become the source of the next
-                # motion estimate. Retry from this track's connected image.
+                # Match against this track's last accepted RGB-D observation.
+                # A rejected/predicted frame cannot replace that reference.
                 if (
                     prepared["status"] is None
-                    and track.connected_observation is not None
-                    and prepared.get("match_source_frame") != track.connected_frame
+                    and track.accepted_observation is not None
+                    and prepared.get("match_source_frame") != track.accepted_frame
                 ):
                     candidate_input = dict(prepared)
-                    old = track.connected_observation
+                    old = track.accepted_observation
                     current = prepared["current"]
                     if shared is not None:
                         source, target = shared.pairs(old, current, prepared["intrinsics"])
@@ -398,54 +446,32 @@ class SurfaceFrameSession:
                         )
                     step, _, _ = robust_fit(source, target, config.motion)
                     candidate_input.update(
-                        step=step, point_pairs=(source, target), match_source_frame=track.connected_frame
+                        step=step, point_pairs=(source, target), match_source_frame=track.accepted_frame
                     )
                 geometry = track.prepare_geometry(candidate_input)
                 hint = None
-                if name in groups:
-                    hint, group_details = groups[name][role].predict(
+                if name in sources:
+                    hint, group_details = sources[name][role].query(
+                        group_frame,
                         frame,
                         scene,
-                        masks,
-                        role,
-                        track.reference_frame,
-                        **({"object_usable": prepared["current"]["usable"]} if shared else {}),
-                        observation=prepared["current"] if prepared["status"] is None else None,
-                        shape_config=config.shape,
-                        reference_views=track._fit_views(),
-                        surface_reference=track.store.points
-                        if track.config.partial_surface_matching
-                        else None,
-                        prepared_geometry=geometry if track.config.partial_surface_matching else None,
-                    )
-                candidate_check = (
-                    partial(
-                        groups[name][role].compare_candidate,
-                        frame,
                         masks[role],
-                        hint,
-                        observation=prepared["current"] if track.config.surface_priority else None,
-                        shape_config=config.shape,
-                        reference_views=track._fit_views(),
+                        track.reference_frame,
+                        object_usable=prepared["current"]["usable"] if shared else None,
                     )
-                    if hint is not None and not track.config.surface_priority
-                    else None
-                )
                 result = track.update(
                     candidate_input,
                     frame.source_time_s,
                     hint=hint,
-                    candidate_check=candidate_check,
                     base_from_camera=frame.base_from_camera,
                     geometry=geometry,
                 )
                 details = result["diagnostics"]
-                if name in groups:
-                    groups[name][role].observe(
+                if name in sources:
+                    sources[name][role].record_observation(
                         frame,
                         scene,
-                        masks,
-                        role,
+                        masks[role],
                         result,
                         track.reference,
                         **({"object_usable": prepared["current"]["usable"]} if shared else {}),

@@ -19,6 +19,20 @@ const FLASH_POSE_EXPLANATIONS = {
 };
 const flashExperiments = { items: [], selected: null, data: null, frame: 0, request: null, listRequest: null, initialized: false };
 
+function flashGroupMode(id) {
+    return document.getElementById(id).dataset.mode;
+}
+
+function setFlashGroupMode(id, mode) {
+    const control = document.getElementById(id);
+    if (!['none', 'objects', 'all'].includes(mode)) throw new Error('Unknown group display mode');
+    control.dataset.mode = mode;
+    for (const button of control.querySelectorAll('button'))
+        button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
+    if (id === 'flash-live-groups') drawFlashLive();
+    else changeFlashGroupDisplay();
+}
+
 function flashImageBackend(data = flashExperiments.data) {
     return (data?.shared_matching?.backend || data?.metrics?.shared_matching?.config?.backend || 'ufm').toUpperCase();
 }
@@ -224,11 +238,6 @@ async function selectFlashExperiment(item) {
         const previous = select.value;
         select.replaceChildren(...Object.entries(data.methods).map(([value, label]) => new Option(flashMethodLabel(value, data), value)));
         if (Object.hasOwn(data.methods, previous)) select.value = previous;
-        const groupRoles = document.getElementById('flash-experiment-group-role');
-        const previousRole = groupRoles.value;
-        groupRoles.replaceChildren(new Option('All objects', 'all'),
-            ...Object.keys(data.frames[0].objects).map(role => new Option(role, `object:${role}`)));
-        if (Array.from(groupRoles.options).some(option => option.value === previousRole)) groupRoles.value = previousRole;
         refreshFlashMetrics();
         const matches = document.getElementById('flash-experiment-matches');
         matches.disabled = !data.has_correspondences;
@@ -289,12 +298,7 @@ function initFlashExperimentPlayer() {
 function drawFlashExperiment() {
     const canvas = document.getElementById('flash-experiment-overlay');
     if (!canvas) return;
-    const hasGroups = document.getElementById('flash-experiment-method').value.startsWith('group_');
-    document.getElementById('flash-experiment-groups').disabled = !hasGroups;
-    document.getElementById('flash-experiment-group-control').title =
-        hasGroups ? 'Show measured group support as a wireframe; does not change the tracking result.' : 'Choose a pose calculation with groups to show its support.';
-    document.getElementById('flash-experiment-group-role').hidden =
-        !hasGroups || !document.getElementById('flash-experiment-groups').checked;
+    const groupMode = flashGroupMode('flash-experiment-groups');
     const context = canvas.getContext('2d');
     context.resetTransform();
     context.clearRect(0, 0, canvas.width, canvas.height);
@@ -316,6 +320,11 @@ function drawFlashExperiment() {
     context.setTransform(width / data.width, 0, 0, height / data.height, 0, 0);
     const row = data.frames[flashExperiments.frame];
     const method = document.getElementById('flash-experiment-method').value;
+    const visibleGroups = flashSceneGroups(row.scene_group_tracks, row.objects, groupMode, method);
+    const totalGroups = row.scene_group_tracks?.length ??
+        flashSceneGroups(null, row.objects, 'objects', method).length;
+    document.getElementById('flash-experiment-group-count').textContent =
+        `${totalGroups} groups · ${visibleGroups.length} shown`;
     const showMask = document.getElementById('flash-experiment-mask').checked;
     const showPose = document.getElementById('flash-experiment-pose').checked;
     const matchMode = document.getElementById('flash-experiment-matches').value;
@@ -326,7 +335,8 @@ function drawFlashExperiment() {
         ' White points: accumulated measured surface at this frame; axes keep their original reference.' :
         ' White points: depth measured in the first usable image, moved by the estimated pose.';
     document.getElementById('flash-experiment-explanation').textContent = flashMethodExplanation(method) +
-        (showPose ? surfaceDescription : '') + (hasGroups && document.getElementById('flash-experiment-groups').checked ? ' Purple wireframe: group support.' : '');
+        (showPose ? surfaceDescription : '') +
+        (groupMode !== 'none' ? ' Group colors identify independent scene groups; lines connect measured points.' : '');
     const lost = [], predicted = [];
     for (const [role, object] of Object.entries(row.objects)) {
         if (showMask) {
@@ -383,7 +393,7 @@ function drawFlashExperiment() {
     if (matchMode !== 'off') {
         drawFlashPointPaths(context, data, flashExperiments.frame, method, matchMode, trailFrames, displayScale);
     }
-    if (method.startsWith('group_')) drawFlashGroupTracks(context, data, flashExperiments.frame, method, displayScale);
+    drawFlashGroupTracks(context, data, flashExperiments.frame, method, displayScale);
     // Keep detailed evidence available on hover, without a changing paragraph
     // below the player or a second label covering the video.
     document.getElementById('flash-experiment-matches').title = matchMode === 'off' ? '' :
@@ -397,7 +407,7 @@ function drawFlashExperiment() {
         (next ? ` · Next recorded image: +${(next.t - row.t).toFixed(2)} s` : '') +
         (lost.length ? ` · No pose: ${lost.join(', ')}` : '') +
         (predicted.length ? ` · Predicted: ${predicted.join(', ')}` : '');
-    if (method.startsWith('group_')) {
+    if (method.startsWith('group_') && !row.scene_group_tracks) {
         const counts = Object.entries(row.objects).filter(([role]) => flashGroupVisible(role)).map(([role, object]) => {
             const group = object.group_tracks?.[method];
             return group?.ids ? `${role} ${(group.display_ids || group.ids).length}` : `${role}: not recorded (rerun)`;
@@ -410,35 +420,71 @@ function flashGroupDisplay(group) {
     return group?.display_ids ? {...group, ids: group.display_ids, pixels: group.display_pixels} : group;
 }
 
-function flashGroupVisible(role) {
-    if (!document.getElementById('flash-experiment-groups').checked) return false;
-    const selected = document.getElementById('flash-experiment-group-role').value;
-    return selected === 'all' || selected === `object:${role}`;
+function flashGroupLinks(group) {
+    return group.links || [];
+}
+
+function flashGroupWirePoints(group) {
+    // A wireframe point without an edge looks like a separate motion track.
+    // Keep the measured group record intact; only the wireframe drawing omits it.
+    const connected = new Set();
+    for (const [a, b] of flashGroupLinks(group)) { connected.add(a); connected.add(b); }
+    return [...connected].sort((a, b) => a - b);
+}
+
+function flashGroupColor(id) {
+    return `hsl(${(id * 137.508 + 278) % 360} 92% 68%)`;
+}
+
+function flashGroupHex(id) {
+    const hue = ((id * 137.508 + 278) % 360) / 30;
+    const light = 0.68, amplitude = 0.92 * Math.min(light, 1 - light);
+    const channel = offset => {
+        const k = (offset + hue) % 12;
+        return Math.round(255 * (light - amplitude * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+    };
+    return (channel(0) << 16) | (channel(8) << 8) | channel(4);
+}
+
+function flashSceneGroups(record, objects, mode, method) {
+    if (mode === 'none') return [];
+    const association = object => method
+        ? object.group_tracks?.group_growing || object.group_tracks?.group_fixed || object.group_tracks?.[method]
+        : object.group_tracks;
+    const selected = new Set(Object.values(objects).map(object => association(object)?.group_id)
+        .filter(id => id !== undefined && id !== null));
+    if (record) return mode === 'all' ? record : record.filter(group => selected.has(group.id));
+    // Older recordings did not retain the independent scene state. Only their
+    // selected object group can be shown; never call this an all-scene view.
+    if (mode === 'all') return [];
+    return Object.values(objects).map(object => flashGroupDisplay(association(object)))
+        .filter(group => group?.ids?.length).map(group => ({...group, id: group.group_id}));
 }
 
 function changeFlashGroupDisplay() {
-    document.getElementById('flash-experiment-group-role').hidden =
-        !document.getElementById('flash-experiment-groups').checked ||
-        !document.getElementById('flash-experiment-method').value.startsWith('group_');
     drawFlashExperiment();
     if (flashSceneState.enabled) drawFlashExperimentScene(true);
 }
 
 function drawFlashGroupTracks(context, data, index, method, displayScale) {
-    // Measured object and surrounding-group inliers. Show borrowed support
-    // even while own-object motion is selected; never synthesize model points.
+    const frame = data.frames[index];
+    const mode = flashGroupMode('flash-experiment-groups');
     const scale = Math.max(displayScale, 0.1);
-    for (const [role, object] of Object.entries(data.frames[index].objects)) {
-        if (!flashGroupVisible(role)) continue;
-        const group = flashGroupDisplay(object.group_tracks?.[method]);
-        if (!group?.ids?.length) continue;
-        context.save(); context.strokeStyle = '#df8cff';
+    for (const group of flashSceneGroups(frame.scene_group_tracks, frame.objects, mode, method)) {
+        if (!group.pixels?.length) continue;
+        context.save(); context.strokeStyle = flashGroupColor(group.id || 0);
+        context.fillStyle = context.strokeStyle;
         context.lineWidth = 1.5 / scale;
         context.beginPath();
-        for (const [a, b] of group.links || []) {
+        for (const [a, b] of flashGroupLinks(group)) {
             context.moveTo(...group.pixels[a]); context.lineTo(...group.pixels[b]);
         }
-        context.stroke(); context.restore();
+        context.stroke();
+        for (const index of flashGroupWirePoints(group)) {
+            const [x, y] = group.pixels[index];
+            context.beginPath(); context.arc(x, y, 1.6 / scale, 0, Math.PI * 2); context.fill();
+        }
+        context.restore();
     }
 }
 
@@ -784,19 +830,19 @@ function drawFlashExperimentScene(rebuild = false) {
                 points: expanded ? object.surface : object.initial_surface, axisPoints: object.axis_points});
             descriptions.push({layer: 'labelled', color: 0x34e5a1, pose: object.labelled_pose,
                 points: object.labelled_surface, axisPoints: object.axis_points});
-            const groupPoints = object.group_tracks?.display_camera_xyz || object.group_tracks?.camera_xyz;
-            const links = flashExperiments.data.frames[state.packet.frame].objects[role].group_tracks?.[state.packet.method]?.links;
-            if (state.packet.method.startsWith('group_') && flashGroupVisible(role) && groupPoints?.length) {
-                descriptions.push({layer: 'groups', color: 0xdf8cff, points: groupPoints,
-                    pose: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], axes: false, links: links || []});
-            }
         }
+        const mode = flashGroupMode('flash-experiment-groups');
+        const groups = flashSceneGroups(state.packet.scene_group_tracks, state.packet.objects, mode);
+        for (const group of groups) descriptions.push({layer: 'groups', color: flashGroupHex(group.id || 0),
+            points: flashGroupWirePoints(group).map(index => (group.camera_xyz || group.display_camera_xyz || [])[index]),
+            pose: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], axes: false, pointSize: 3});
         state.viewer.update(state.packet.depth, state.bitmap, state.packet.camera, descriptions);
     }
     state.viewer.setOptions({scene: document.getElementById('flash-scene-context').checked,
         estimate: document.getElementById('flash-scene-estimate').checked,
         labelled: document.getElementById('flash-scene-label').checked,
-        axes: document.getElementById('flash-scene-axes').checked, groups: state.packet.method.startsWith('group_')});
+        axes: document.getElementById('flash-scene-axes').checked,
+        groups: flashGroupMode('flash-experiment-groups') !== 'none'});
 }
 
 async function requestFlashExperimentScene() {
@@ -829,7 +875,7 @@ async function requestFlashExperimentScene() {
         const bitmap = await createImageBitmap(new Blob([buffer.slice(depthStart + packet.depth_bytes)], {type: 'image/png'}));
         if (generation !== state.generation || !state.enabled || identity !== flashExperiments.selected ||
             method !== document.getElementById('flash-experiment-method').value) { bitmap.close(); return; }
-        const module = await import('/static/rgbd_scene.js?v=6');
+        const module = await import('/static/rgbd_scene.js?v=7');
         if (generation !== state.generation || !state.enabled || identity !== flashExperiments.selected ||
             method !== document.getElementById('flash-experiment-method').value) { bitmap.close(); return; }
         if (!state.viewer) state.viewer = module.createRgbdScene(document.getElementById('flash-experiment-scene'));
@@ -884,61 +930,23 @@ async function showFlashPipelineSettings() {
         if (!response.ok) throw new Error('Could not load pipeline settings');
         const data = await response.json();
         if (!dialog.isConnected) return;
-        status.textContent = 'Settings for the next rerun. Old SciPy configurations use the new surface fitter; saved playback is unchanged. Changes take effect only after rerunning this scene. Saved masks are reused; SAM and robot-control settings are not executed by this benchmark.';
-        const matcherLabel = document.createElement('label');
-        matcherLabel.append('Surface matcher ');
-        const matcher = document.createElement('select');
-        matcher.setAttribute('aria-label', 'Surface matcher');
-        for (const [value, text] of Object.entries(data.matchers)) {
-            const option = document.createElement('option');
-            option.value = value; option.textContent = text; matcher.append(option);
-        }
-        matcher.value = data.settings.config.shape.registration.backend;
-        matcherLabel.append(matcher); dialog.append(matcherLabel);
-        flashText(dialog, 'p', 'Select the 3D surface fitting algorithm, then rerun. UFM/LK image matching and depth rejection remain separate.');
-        const label = document.createElement('label');
-        const toggle = document.createElement('input'); toggle.type = 'checkbox';
-        toggle.checked = !!data.settings.surface_experiment?.uncertainty?.enabled;
-        toggle.disabled = !data.settings.surface_experiment;
-        label.append(toggle, ' Use pose uncertainty (experimental)'); dialog.append(label);
-        const mode = document.createElement('select'); mode.setAttribute('aria-label', 'Pose uncertainty method');
-        for (const [value, text] of [['selection', 'Candidate selection'], ['kalman', 'Kalman filter']]) {
-            const option = document.createElement('option'); option.value = value; option.textContent = text; mode.append(option);
-        }
-        mode.value = data.settings.surface_experiment?.uncertainty?.mode || 'selection';
-        mode.disabled = toggle.disabled; dialog.append(mode);
-        flashText(dialog, 'p', 'Kalman filtering carries pose covariance between frames, predicts with measured group motion and corrects with depth. Noise settings are assumptions, not calibrated confidence.');
-        const editor = document.createElement('textarea');
-        editor.setAttribute('aria-label', 'Pipeline configuration JSON');
-        editor.value = JSON.stringify(data.settings, null, 2); dialog.append(editor);
-        matcher.onchange = () => {
-            try {
-                const value = JSON.parse(editor.value);
-                value.config.shape.registration.backend = matcher.value;
-                editor.value = JSON.stringify(value, null, 2);
-            } catch (error) { status.textContent = error.message; }
-        };
-        toggle.onchange = mode.onchange = () => {
-            try {
-                const value = JSON.parse(editor.value);
-                value.surface_experiment.uncertainty.enabled = toggle.checked;
-                value.surface_experiment.uncertainty.mode = mode.value;
-                editor.value = JSON.stringify(value, null, 2);
-            } catch (error) { status.textContent = error.message; }
-        };
-        editor.oninput = () => {
-            try {
-                const settings = JSON.parse(editor.value);
-                const value = settings.surface_experiment?.uncertainty;
-                matcher.value = settings.config.shape.registration.backend;
-                toggle.checked = !!value?.enabled; mode.value = value?.mode || 'selection';
-            }
-            catch (_) { /* Preserve unfinished JSON while editing. */ }
-        };
+        status.textContent = 'Changes apply on rerun; saved playback stays unchanged. This rerun reuses recorded masks.';
+        const matcherLabel = document.createElement('label');matcherLabel.append('Surface matcher ');
+        const matcher = document.createElement('select');matcher.setAttribute('aria-label','Surface matcher');
+        matcher.replaceChildren(...Object.entries(data.matchers).map(([value,text])=>new Option(text,value)));
+        matcher.value=data.settings.config.shape.registration.backend;
+        matcherLabel.append(matcher);dialog.append(matcherLabel);
+        const matchingLabel=document.createElement('label');matchingLabel.append(' Image matching ');
+        const matching=document.createElement('select');matching.setAttribute('aria-label','Image matching');
+        matching.replaceChildren(new Option('LK','lk'),new Option('UFM','ufm'));
+        matching.value=data.settings.shared_matching?.backend||'lk';matchingLabel.append(matching);dialog.append(matchingLabel);
+        const form=document.createElement('form');form.onsubmit=event=>event.preventDefault();dialog.append(form);
+        const controls=createFlashPipelineForm(form,data.fields,data.settings,()=>({matcher:matcher.value,matching:matching.value,live:false}));
+        matcher.onchange=matching.onchange=controls.update;
         const run = document.createElement('button'); run.textContent = 'Rerun this scene with these settings';
         run.onclick = async () => {
             try {
-                const settings = JSON.parse(editor.value);
+                const settings = controls.read();
                 run.disabled = true;
                 const response = await fetch(`/api/run/flash/experiments/rebuild?identity=${identity}`, {
                     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings),
@@ -947,15 +955,6 @@ async function showFlashPipelineSettings() {
                 dialog.close(); flashRebuild.completed = null; await pollFlashRebuild();
             } catch (error) { status.textContent = String(error.message); run.disabled = false; }
         }; dialog.append(run);
-        const details = document.createElement('details');
-        flashText(details, 'summary', `All ${data.options.length} options and defaults`);
-        const table = document.createElement('table');
-        for (const option of data.options) {
-            const row = document.createElement('tr');
-            flashText(row, 'th', option.path); flashText(row, 'td', JSON.stringify(option.default));
-            flashText(row, 'td', option.description); table.append(row);
-        }
-        details.append(table); dialog.append(details);
     } catch (error) { status.textContent = error.message; }
 }
 

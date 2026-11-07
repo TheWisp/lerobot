@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -18,6 +19,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lerobot.policies.flash.tracking_history import history_root, read_index, read_packet, save_window
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 router = APIRouter(prefix="/api/run/flash/tracking", tags=["flash-tracking"])
@@ -34,6 +36,7 @@ class TrackingStart(BaseModel):
     height: int = Field(default=720, gt=0)
     fps: int = Field(default=30, gt=0)
     preview_fps: int = Field(default=10, gt=0)
+    history_seconds: int = Field(default=60, ge=1, le=600)
 
     @model_validator(mode="before")
     @classmethod
@@ -54,7 +57,7 @@ class TrackingStart(BaseModel):
 
 class TrackingControl(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    action: Literal["freeze", "clear", "select"]
+    action: Literal["freeze", "clear", "select", "clear_history"]
     id: str
     prompt: str = ""
     point: tuple[float, float] | None = None
@@ -101,10 +104,11 @@ async def defaults() -> dict:
 
 @router.get("/shared-defaults")
 async def shared_defaults() -> dict:
+    from lerobot.gui.flash_pipeline_fields import pipeline_fields
     from lerobot.policies.flash.surface_registration import MATCHERS
     from lerobot.policies.flash.surface_session_config import defaults
 
-    return {"settings": defaults(), "matchers": MATCHERS}
+    return {"settings": defaults(), "matchers": MATCHERS, "fields": pipeline_fields()}
 
 
 @router.post("/cameras")
@@ -142,7 +146,17 @@ async def start(req: TrackingStart) -> dict:
                 # safe-destruct: our own mkdtemp snapshot directory; the previous worker has stopped.
                 shutil.rmtree(_directory, ignore_errors=True)
             directory = Path(tempfile.mkdtemp(prefix="lerobot-surface-debug-"))
-            (directory / "config.json").write_text(json.dumps(req.model_dump()))
+            recent = history_root() / "recent"
+            # The prior worker is stopped. Explicitly saved windows have their
+            # own hard links and survive replacement of the rolling buffer.
+            if recent.exists():
+                # safe-destruct: replace only this application's stopped rolling buffer.
+                shutil.rmtree(recent)
+            recent.mkdir(parents=True)
+            (recent / "config.json").write_text(req.model_dump_json())
+            (directory / "config.json").write_text(
+                json.dumps({**req.model_dump(), "history_directory": str(recent)})
+            )
             return directory
 
         _directory = await asyncio.get_running_loop().run_in_executor(_io, prepare)
@@ -221,3 +235,89 @@ async def scene():
 
     packet = await asyncio.get_running_loop().run_in_executor(_io, read)
     return Response(packet, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
+
+
+def _history_directory(identity):
+    if identity != "recent" and not re.fullmatch(r"saved-[0-9a-f]{32}", identity):
+        raise HTTPException(404, "Unknown recording")
+    directory = history_root() / identity
+    if not directory.is_dir():
+        raise HTTPException(404, "Recording is unavailable")
+    return directory
+
+
+@router.get("/history")
+async def history(recording: str = "recent"):
+    def read():
+        root = history_root()
+        recordings = []
+        for directory in root.glob("saved-*"):
+            index = read_index(directory)
+            names = sorted(
+                {
+                    obj.get("name")
+                    for row in index["frames"]
+                    for obj in row.get("objects", {}).values()
+                    if obj.get("name")
+                }
+            )
+            recordings.append(
+                {
+                    "id": directory.name,
+                    "saved_at": index.get("saved_at"),
+                    "frames": len(index["frames"]),
+                    "objects": names,
+                }
+            )
+        recordings.sort(key=lambda row: row["saved_at"] or 0, reverse=True)
+        index = (
+            read_index(root / "recent")
+            if recording == "recent"
+            else read_index(_history_directory(recording))
+        )
+        return {**index, "recording": recording, "recordings": recordings}
+
+    return await asyncio.get_running_loop().run_in_executor(_io, read)
+
+
+@router.get("/history/scene")
+async def history_scene(frame: int, recording: str = "recent"):
+    def read():
+        try:
+            return read_packet(_history_directory(recording), frame)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "Frame expired from recent history; choose a retained frame") from exc
+
+    packet = await asyncio.get_running_loop().run_in_executor(_io, read)
+    return Response(packet, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
+
+
+@router.post("/history/save")
+async def save_history():
+    def save():
+        try:
+            return {"id": save_window(_history_directory("recent"), history_root())}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    return await asyncio.get_running_loop().run_in_executor(_io, save)
+
+
+@router.delete("/history")
+async def delete_history(recording: str):
+    from . import run
+
+    if recording == "recent" and run._active_command == "flash_surface_live" and run.is_run_active():
+        await control(TrackingControl(action="clear_history", id=f"history-{time.time_ns()}"))
+        return {"status": "clearing"}
+
+    def remove():
+        directory = _history_directory(recording)
+        # Only the stopped rolling window or a validated saved-* recording is removable.
+        # safe-destruct: user requested deletion of this validated recording through the GUI.
+        shutil.rmtree(directory)
+        if recording == "recent":
+            directory.mkdir(parents=True)
+        return {"status": "deleted"}
+
+    return await asyncio.get_running_loop().run_in_executor(_io, remove)

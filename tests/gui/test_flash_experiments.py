@@ -731,10 +731,11 @@ def test_growing_method_does_not_show_matches_from_a_different_source_frame(
     for i, row in enumerate(rows):
         row["objects"]["object"].update(
             {
-                method: np.eye(4).tolist(),
+                method: None if i == 2 else np.eye(4).tolist(),
                 method + "_details": {
                     "image_source_frame": 0,
                     "group": {
+                        "group_id": 7,
                         "source": "object_point_group",
                         "ids": [1, 2, 3],
                         "pixels": [[20, 20], [30, 20], [20, 30]],
@@ -746,12 +747,37 @@ def test_growing_method_does_not_show_matches_from_a_different_source_frame(
                         "display_camera_xyz": [[0, 0, 1], [0.01, 0, 1], [0, 0.01, 1], [0.02, 0.02, 1]],
                     },
                 },
-                method + "_status": "predicted" if i == 2 else "observed_candidate",
+                method + "_status": "lost" if i == 2 else "observed_candidate",
             }
         )
+        row["scene_group_tracks"] = [
+            {
+                "id": 7,
+                "ids": [1, 2, 3],
+                "pixels": [[20, 20], [30, 20], [20, 30]],
+                "camera_xyz": [[0, 0, 1], [0.01, 0, 1], [0, 0.01, 1]],
+                "supported": True,
+            },
+            {
+                "id": 9,
+                "ids": [100, 101, 102],
+                "pixels": [[40, 40], [50, 40], [40, 50]],
+                "camera_xyz": [[0.02, 0.02, 1], [0.03, 0.02, 1], [0.02, 0.03, 1]],
+                "supported": True,
+            },
+        ]
     (run / "frames.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
     root = tmp_path / "browser"
-    export(run, root)
+    result = export(run, root)
+    # This test exercises browser rendering of an already recorded packet.
+    # Three fixture frames are too short for the persistent wireframe to
+    # confirm links; supply the same link field a longer recording produces.
+    overlays = result / "overlays.json"
+    saved = json.loads(overlays.read_text())
+    for frame in saved["frames"]:
+        for group in frame["scene_group_tracks"]:
+            group["links"] = [[0, 1], [1, 2], [2, 0]]
+    overlays.write_text(json.dumps(saved))
     monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(root))
     page = gui_page
     page.evaluate("async () => { switchTab('run'); await runTabInit(); await selectWorkflow('flash'); }")
@@ -771,65 +797,75 @@ def test_growing_method_does_not_show_matches_from_a_different_source_frame(
     )
     page.evaluate("seekFlashExperiment(2)")
     page.wait_for_selector('#flash-experiment-overlay[data-frame="2"]')
-    assert "Predicted: object" in page.locator("#flash-experiment-status").inner_text()
+    assert "No pose: object" in page.locator("#flash-experiment-status").inner_text()
 
     if method.startswith("group_"):
-        assert "Group points: object 4" in page.locator("#flash-experiment-status").inner_text()
+        # The scene snapshot is displayed even when the object's pose is absent.
+        assert page.evaluate("flashExperiments.data.frames[2].scene_group_tracks.length") == 2
         assert page.evaluate(
-            "method => flashExperiments.data.frames[2].objects.object.group_tracks[method].ids", method
-        ) == [1, 2, 3]
-        calls = page.evaluate(
-            """method => {
-            const ops = [];
-            const ctx = new Proxy({}, {get: (_, key) => (...args) => ops.push([key, ...args]), set: () => true});
-            drawFlashGroupTracks(ctx, flashExperiments.data, 2, method, 1);
-            return ops;
-        }""",
-            method,
+            "flashExperiments.data.frames[2].scene_group_tracks.every(group => Array.isArray(group.links))"
         )
-        assert not any(call[0] == "arc" for call in calls)
-        assert sum(call[0] == "lineTo" for call in calls) >= 3
-        page.uncheck("#flash-experiment-groups")
-        assert not page.evaluate("flashGroupVisible('object')")
+        assert page.evaluate("flashGroupLinks({camera_xyz:[[0,0,1],[0.01,0,1]]}).length") == 0
         assert (
             page.evaluate(
-                """method => {
-            let count = 0;
-            const ctx = new Proxy({}, {get: (_, key) => () => {if (key === 'lineTo') count++;}, set: () => true});
-            drawFlashGroupTracks(ctx, flashExperiments.data, 2, method, 1);
-            return count;
-        }""",
+                "method => flashExperiments.data.frames[2].objects.object.group_tracks[method].group_id",
                 method,
             )
-            == 0
+            == 7
         )
-        page.check("#flash-experiment-groups")
-        page.select_option("#flash-experiment-group-role", "object:object")
-        assert page.evaluate("flashGroupVisible('object') && !flashGroupVisible('another object')")
-        assert page.evaluate(
-            "method => !('display_camera_xyz' in flashExperiments.data.frames[2].objects.object.group_tracks[method])",
-            method,
+        assert page.evaluate("""() => flashSceneGroups(
+            [{id: 7}, {id: 9}], {object: {group_tracks: {group_growing: {group_id: 7}}}},
+            'objects', 'conditioned_growing').map(group => group.id)""") == [7]
+
+        def rendered_groups():
+            return page.evaluate(
+                """method => {
+                let count = 0;
+                const ctx = new Proxy({}, {get: (_, key) => () => {if (key === 'arc') count++;}, set: () => true});
+                drawFlashGroupTracks(ctx, flashExperiments.data, 2, method, 1);
+                return count;
+            }""",
+                method,
+            )
+
+        page.locator('#flash-experiment-groups button[data-mode="objects"]').click()
+        assert rendered_groups() == 3
+        assert page.locator("#flash-experiment-group-count").inner_text() == "2 groups · 1 shown"
+        page.evaluate("setFlashGroupMode('flash-live-groups', 'all')")
+        assert (
+            page.locator('#flash-live-groups button[data-mode="all"]').get_attribute("aria-pressed") == "true"
         )
+        page.locator('#flash-experiment-groups button[data-mode="all"]').click()
+        assert rendered_groups() == 6
+        assert page.locator("#flash-experiment-group-count").inner_text() == "2 groups · 2 shown"
+        assert (
+            page.locator('#flash-experiment-groups button[data-mode="all"]').get_attribute("aria-pressed")
+            == "true"
+        )
+        page.locator('#flash-experiment-groups button[data-mode="none"]').click()
+        assert rendered_groups() == 0
+        assert page.locator("#flash-experiment-group-count").inner_text() == "2 groups · 0 shown"
+        page.locator('#flash-experiment-groups button[data-mode="objects"]').click()
         page.get_by_role("button", name="3D scene", exact=True).click()
         page.wait_for_selector(f'#flash-experiment-scene[data-frame="2"][data-method="{method}"]')
-        assert page.evaluate("flashSceneState.packet.objects.object.group_tracks.camera_xyz") == [
-            [0, 0, 1],
-            [0.01, 0, 1],
-            [0, 0.01, 1],
-        ]
-        assert page.evaluate("flashSceneState.packet.objects.object.group_tracks.display_camera_xyz[3]") == [
-            0.02,
-            0.02,
-            1,
-        ]
-        page.uncheck("#flash-experiment-groups")
-        assert page.evaluate("""() => {
-            const viewer = flashSceneState.viewer;
-            const update = viewer.update;
+        assert len(page.evaluate("flashSceneState.packet.scene_group_tracks")) == 2
+        assert (
+            page.evaluate("""() => {
+            const viewer = flashSceneState.viewer, update = viewer.update;
             let layers;
-            viewer.update = (...args) => {layers = args[3].map(item => item.layer); return update(...args);};
+            viewer.update = (...args) => {layers = args[3].filter(item => item.layer === 'groups'); return update(...args);};
             try { drawFlashExperimentScene(true); } finally {viewer.update = update;}
-            return !layers.includes('groups') && layers.includes('estimate');
+            return layers.length;
+        }""")
+            == 1
+        )
+        page.locator('#flash-experiment-groups button[data-mode="all"]').click()
+        assert page.evaluate("""() => {
+            const viewer = flashSceneState.viewer, update = viewer.update;
+            let layers;
+            viewer.update = (...args) => {layers = args[3].filter(item => item.layer === 'groups'); return update(...args);};
+            try { drawFlashExperimentScene(true); } finally {viewer.update = update;}
+            return layers.length === 2 && layers[0].color !== layers[1].color;
         }""")
 
 
@@ -1543,13 +1579,12 @@ def test_browser_surface_matcher_edits_rerun_without_relabeling_recorded_result(
     assert "Surface matcher: SciPy (retired)" in results.inner_text()
     page.get_by_role("button", name="Pipeline settings", exact=True).click()
     matcher = page.get_by_label("Surface matcher", exact=True)
-    editor = page.get_by_label("Pipeline configuration JSON", exact=True)
+    assert page.locator(".flash-pipeline-settings textarea").count() == 0
     matcher.select_option("small_gicp")
-    assert json.loads(editor.input_value())["config"]["shape"]["registration"]["backend"] == "small_gicp"
-    settings = json.loads(editor.input_value())
-    settings["config"]["shape"]["registration"]["backend"] = "open3d_color"
-    editor.fill(json.dumps(settings))
-    assert matcher.input_value() == "open3d_color"
+    page.get_by_label("Iterations per resolution", exact=True).fill("11")
+    page.get_by_label("Depth agreement tolerance (mm)", exact=True).fill("4")
+    assert not page.get_by_label("SAM image size", exact=True).is_visible()
+    matcher.select_option("open3d_color")
     # Worker execution is covered by the real rerun test below. Capture only
     # the browser boundary here so this test never launches an unowned process.
     page.route(
@@ -1559,6 +1594,8 @@ def test_browser_surface_matcher_edits_rerun_without_relabeling_recorded_result(
     with page.expect_request(lambda request: request.method == "POST" and "/rebuild?" in request.url) as sent:
         page.get_by_role("button", name="Rerun this scene with these settings").click()
     assert sent.value.post_data_json["config"]["shape"]["registration"]["backend"] == "open3d_color"
+    assert sent.value.post_data_json["config"]["shape"]["registration"]["iterations_per_level"] == 11
+    assert sent.value.post_data_json["config"]["shape"]["depth_tolerance_m"] == 0.004
     assert "Surface matcher: SciPy (retired)" in results.inner_text()
 
 

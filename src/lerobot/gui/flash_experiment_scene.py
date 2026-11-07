@@ -17,6 +17,7 @@ from benchmarks.flash_experiment_inputs import sample_at
 from benchmarks.flash_experiment_labels import load_pose_labels
 from benchmarks.flash_full_pose_score import score_transforms
 from benchmarks.flash_surface_score import LabelledSurface, distance_statistics
+from lerobot.gui.flash_live_scene import frame_evidence, object_evidence
 from lerobot.gui.flash_pose_overlay import reference_axes
 
 
@@ -61,7 +62,7 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
         raise ValueError("Scene and playback belong to different experiment inputs")
     if not 0 <= index < len(rows):
         raise IndexError("Frame is outside this recording")
-    frame, _ = sample_at(case, index)
+    frame, masks = sample_at(case, index)
     row = rows[index]
     if row["frame"] != frame.frame_id or not np.isclose(
         row["time_s"], frame.source_time_s, atol=1e-6, rtol=0
@@ -72,6 +73,7 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
         result = row["objects"][role]
         model = reference
         initial_surface = reference
+        model_used = reference
         version = result.get(method + "_details", {}).get("map_version_after", 0)
         if version and method in {"conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"}:
             model_path = (run / "surface_models" / method / role / f"{int(version):06d}.npz").resolve()
@@ -79,6 +81,12 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
                 raise ValueError("Surface is outside its experiment")
             with np.load(model_path, allow_pickle=False) as saved:
                 model = saved["points"]
+            before = result[method + "_details"].get("map_version_used", version)
+            if before:
+                with np.load(model_path.with_name(f"{int(before):06d}.npz"), allow_pickle=False) as saved:
+                    model_used = saved["points"]
+            else:
+                model_used = np.empty((0, 3))
             # Show the initial stored map at its actual sampling density, not
             # the denser observation retained separately for scoring and axes.
             with np.load(model_path.with_name("000001.npz"), allow_pickle=False) as saved:
@@ -114,7 +122,9 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
                     )
                 )
         objects[role] = {
+            **object_evidence(result, method),
             "surface": _points(model),
+            "surface_used": _points(model_used),
             "initial_surface": _points(initial_surface),
             "pose": result.get(method),
             "reference": _points(reference),
@@ -128,11 +138,13 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
             "group_tracks": result.get(method + "_details", {}).get("group", {}),
         }
     header = {
+        **frame_evidence(row, masks),
         "frame": index,
         "time_s": row["time_s"],
         "method": method,
         "input_sha256": manifest["input_sha256"],
         "objects": objects,
+        "scene_group_tracks": row.get("scene_group_tracks", []),
         "label_error": label_error,
     }
     from lerobot.gui.flash_live_scene import encode_rgbd_scene

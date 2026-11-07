@@ -3,8 +3,8 @@
 from dataclasses import asdict
 
 from .experimental_surface_session import GrowingSurfaceConfig
+from .motion_groups import GroupConfig
 from .shared_image_tracking import SharedMatchingConfig
-from .surface_group_hints import GroupConfig
 from .vision_pipeline import VisionPipelineConfig
 
 

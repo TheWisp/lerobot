@@ -36,13 +36,13 @@ def frame(number):
     )
 
 
-def test_click_is_bound_to_frozen_image_not_newest_camera_frame():
+def test_click_is_bound_to_displayed_image_not_newest_camera_frame():
     old, latest = frame(8), frame(12)
     assert seed_frame({"point": [4, 5], "frame_id": 8}, old, latest) is old
     assert seed_frame({}, None, latest) is latest
-    with pytest.raises(ValueError, match="Freeze"):
+    with pytest.raises(ValueError, match="no longer available"):
         seed_frame({"point": [4, 5], "frame_id": 12}, old, latest)
-    with pytest.raises(ValueError, match="Freeze"):
+    with pytest.raises(ValueError, match="no longer available"):
         seed_frame({"point": [4, 5], "frame_id": 8}, None, latest)
     with pytest.raises(ValueError, match="outside"):
         seed_frame({"point": [11, 5], "frame_id": 8}, old, latest)

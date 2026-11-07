@@ -38,9 +38,9 @@ class LibraryTrial(LibraryMatcher):
 
             def update(session, *args, **kwargs):
                 view = None
-                if session.connected_observation is not None:
+                if session.accepted_observation is not None:
                     view = SurfaceFitView(
-                        session.connected_observation, session.connected_intrinsics, session.connected_pose
+                        session.accepted_observation, session.accepted_intrinsics, session.accepted_pose
                     )
                 self._local.color_view = view
                 try:

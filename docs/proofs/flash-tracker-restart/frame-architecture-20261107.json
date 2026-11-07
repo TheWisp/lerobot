@@ -1,0 +1,160 @@
+{
+  "scope": "Shared live/video architecture refactor; pose and surface preservation, not a new accuracy claim",
+  "settings": "Fresh shared defaults: LK, visible_icp, group_growing, Kalman, saved per-frame masks",
+  "replays": {
+    "flash-demo-dowel-ring": {
+      "frames": 713,
+      "objects": 2,
+      "input_sha256": "e65f60e15fc0e5c06ce1bdd3d576e7c42449b520f00ff45e12ef73c6e1cee50c",
+      "poses_surfaces_covariances_and_references_identical": true,
+      "maximum_solves_per_object_frame": 1,
+      "pose_available_frames": {
+        "dowel": 234,
+        "ring": 621
+      },
+      "corrected_empty_prediction_labels": [
+        {
+          "frame": 242,
+          "role": "ring",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 243,
+          "role": "ring",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 314,
+          "role": "ring",
+          "before": "predicted",
+          "after": "lost"
+        }
+      ],
+      "before_timing": {
+        "median_ms": 69.53,
+        "p95_ms": 90.56
+      },
+      "after_timing": {
+        "median_ms": 69.51,
+        "p95_ms": 89.64
+      }
+    },
+    "flash-demo-gamepad-cube": {
+      "frames": 628,
+      "objects": 2,
+      "input_sha256": "676ff2cb8c9aaec4bde779cebb81c60102faf6d2f4a977a3398eb8f6d03486a8",
+      "poses_surfaces_covariances_and_references_identical": true,
+      "maximum_solves_per_object_frame": 1,
+      "pose_available_frames": {
+        "gamepad": 209,
+        "cube": 445
+      },
+      "corrected_empty_prediction_labels": [
+        {
+          "frame": 370,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 371,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 372,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 373,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 374,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 375,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 376,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 377,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 378,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 379,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 380,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 381,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        },
+        {
+          "frame": 382,
+          "role": "cube",
+          "before": "predicted",
+          "after": "lost"
+        }
+      ],
+      "before_timing": {
+        "median_ms": 48.12,
+        "p95_ms": 82.12
+      },
+      "after_timing": {
+        "median_ms": 48.07,
+        "p95_ms": 82.49
+      }
+    }
+  },
+  "latency_scope": "Single paired replay; tracking through LiveSurfaceSession; excludes SAM inference, file decode, scene encoding, transport and browser. Other tests briefly ran during each replay; these timings are only a coarse regression check.",
+  "tests": {
+    "passed": 226,
+    "skipped": 17,
+    "pre_existing_failures_reproduced_at_HEAD": 24,
+    "failure_categories": {
+      "recovery_surface_displacement_above_5mm": 8,
+      "wrong_image_motion_or_rotation_recovery": 15,
+      "partial_view_rotation_accuracy": 1
+    },
+    "new_guards": "Hidden/unsupported pose status, Kalman rejection output and rollback, grown surface consumed after confirmation and occlusion, one solve per visible frame",
+    "live_recorded_parity": "Same poses, maps, groups and covariance for LK and stubbed neural inference; real matching, geometry and filter consumers",
+    "saved_checkpoint_compatibility": "Seven recorded recovery and covariance-restoration checks passed; legacy artifact keys remain readable."
+  },
+  "raw_results": "/tmp/flash-architecture-validation",
+  "input_hash_scope": "RGB, depth, camera intrinsics and masks; both runs read the same recorded frames/timestamps/extrinsics."
+}

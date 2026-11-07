@@ -1,8 +1,9 @@
-"""Offline growing-surface experiment. Not a replacement for the live backend.
+"""Shared live/video pose estimation and confirmed surface growth.
 
-Reuse the baseline's observation cleaning and surface objective, but retain image
-matches during fitting and keep reversible measured patches. Diagnostics and
-acceptance thresholds are experimental, not calibrated pose confidence.
+Frame flow: gui/static/flash_architecture.html. Predict, fit the confirmed map
+once, check geometry, fuse with Kalman and recheck, then remember measurements.
+Every rejected observation takes the same prediction-publication path. Pose
+uncertainty and acceptance thresholds are not calibrated correctness probabilities.
 """
 
 from __future__ import annotations
@@ -141,6 +142,7 @@ class PointEvidence:
     kind: str
     scale_m: float
     weight: float = 1.0
+    reuses_image_matches: bool = False
 
     def __post_init__(self):
         a, b = np.asarray(self.reference, dtype=float), np.asarray(self.current, dtype=float)
@@ -525,6 +527,7 @@ class ImageConditionedFit(WholeSurfaceFit):
             return None, {
                 **detail,
                 "candidate_check": rejected["check"] if rejected else None,
+                "rejected_camera_from_reference": rejected["pose"].tolist() if rejected else None,
                 "reason": "no_observation_compatible_candidate",
             }
         best = min(valid, key=lambda c: c["cost"])
@@ -584,7 +587,7 @@ class ImageConditionedFit(WholeSurfaceFit):
 
 
 class GrowingSurfaceSession:
-    """One sequential experimental object track, with no robot/controller state."""
+    """One sequential object track shared by live and recorded frame adapters."""
 
     def __init__(self, shape_config, config=None, *, fit_kernels=None, search_pool=None):
         self.config = config or GrowingSurfaceConfig()
@@ -598,10 +601,10 @@ class GrowingSurfaceSession:
         self.pose = None
         self.reference = None
         self.reference_frame = None
-        self.connected_frame = None
-        self.connected_pose = None
-        self.connected_observation = None
-        self.connected_intrinsics = None
+        self.accepted_frame = None
+        self.accepted_pose = None
+        self.accepted_observation = None
+        self.accepted_intrinsics = None
         self.initial_appearance_view = None
         self.last_time = self.last_frame = None
         self.base_from_camera = np.eye(4)
@@ -631,12 +634,11 @@ class GrowingSurfaceSession:
     def update(
         self, prepared, time_s, *, hint=None, candidate_check=None, base_from_camera=None, geometry=None
     ):
-        """Fit, verify against independent evidence, then commit pose/map changes.
+        """Execute the maintained frame diagram without another registration search.
 
-        candidate_check receives the pre-update surface and proposed pose and
-        returns (accepted, diagnostic_dict). Rejection leaves the surface and
-        image correspondences unchanged. A fallback prediction is published
-        only if it passes the geometry check, when a usable observation exists.
+        Only an accepted observation changes the image reference or surface.
+        candidate_check is an optional independent veto used by comparison runs;
+        it follows the same rejection path as geometry and Kalman.
         """
         frame = prepared["frame_id"]
         if (
@@ -652,6 +654,8 @@ class GrowingSurfaceSession:
         # then remove roundoff before composing a persistent world-space state.
         camera[:3, :3] = Rotation.from_matrix(camera[:3, :3]).as_matrix()
         camera_change = np.linalg.inv(camera) @ self.base_from_camera
+        # 1. Predict every frame, including empty observations. This updates
+        # pose uncertainty, never the measured map or accepted image reference.
         if self.kalman is not None:
             self.kalman.predict(time_s, camera_change, camera, hint.motion if hint else None)
             self.pose = self.kalman.pose.copy()
@@ -662,10 +666,19 @@ class GrowingSurfaceSession:
         before = self.store.version
         details = {
             "map_version_used": before,
+            "surface_frames_used": sorted(p.frame for p in self.store.patches.values() if p.active),
+            "accepted_frame_before": self.accepted_frame,
             "image_source_frame": prepared.get("match_source_frame"),
+            "observation": {
+                key: prepared["diagnostics"][key]
+                for key in ("clean_count", "visible_lateral_spread_mm", "principal_surface_spreads_m")
+                if key in prepared.get("diagnostics", {})
+            },
             "reference_frame": self.reference_frame,
             "covariance": None,
         }
+        # 2. Initialization needs a current usable measurement. Missing data
+        # never reseeds the fixed object coordinates or pretends to measure shape.
         valid = prepared["status"] is None
         current = prepared["current"]
         points = current["obs"]["points"]
@@ -693,27 +706,27 @@ class GrowingSurfaceSession:
                 ),
             )
             self.last_observed_time = self.last_supported_time = time_s
-            self._connect(prepared)
+            self._remember_observation(prepared)
             details["reference_frame"] = frame
             return self._result("initialized", time_s, details)
         if self.pose is None or not valid:
-            return self._missing(hint, time_s, details, prepared["status"] or "not_initialized")
+            return self._publish_prediction(hint, time_s, details, prepared["status"] or "not_initialized")
         if len(self.store.points) < 3:
-            return self._missing(hint, time_s, details, "surface_removed")
+            return self._publish_prediction(hint, time_s, details, "surface_removed")
         geometry = geometry if geometry is not None else self.prepare_geometry(prepared)
         source = prepared.get("match_source_frame")
-        step = prepared["step"] if source == self.connected_frame else None
+        step = prepared["step"] if source == self.accepted_frame else None
         seed = (
             hint.camera_from_reference
             if hint is not None
-            else (step @ self.connected_pose if step is not None else self.pose)
+            else (step @ self.accepted_pose if step is not None else self.pose)
         )
         details["hint_source"] = hint.source if hint else None
         a, b = np.empty((0, 3)), np.empty((0, 3))
         if step is not None and "point_pairs" in prepared:
             a, b = prepared["point_pairs"]
             keep = np.linalg.norm(move(a, step) - b, axis=1) <= self.config.agreement_m
-            a = move(a[keep], np.linalg.inv(self.connected_pose))
+            a = move(a[keep], np.linalg.inv(self.accepted_pose))
             b = b[keep]
         fitter = ImageConditionedFit(
             self.store.points,
@@ -729,7 +742,7 @@ class GrowingSurfaceSession:
             image_weight=0.0
             if prepared.get("shared_matches")
             and hint
-            and any(p.kind == "measured" and p.source == "object_point_group" for p in hint.points)
+            and any(p.kind == "measured" and p.reuses_image_matches for p in hint.points)
             else self.config.image_weight,
             point_evidence=hint.points if hint else (),
             fit_kernels=self.fit_kernels,
@@ -750,6 +763,8 @@ class GrowingSurfaceSession:
                 )
             return geometry_checks[key]
 
+        # 3. One bounded solve against all active (confirmed) surface patches.
+        # Image/group motion supplies the seed and secondary fitting evidence.
         candidate, fit = (
             fitter.correct_surface_first(
                 seed,
@@ -773,12 +788,14 @@ class GrowingSurfaceSession:
             if prior_check["geometry_accepted"] and not prior_check["accepted"]:
                 # Too little overlap for a new measurement does not contradict
                 # an existing prediction. It cannot update the filter or map.
-                return self._missing(hint, time_s, details, "insufficient_surface_overlap", geometry=fitter)
+                return self._publish_prediction(
+                    hint, time_s, details, "insufficient_surface_overlap", geometry=fitter
+                )
             # A failed local solve is not evidence that the independent motion
             # prediction failed. Check that prediction against this observation
             # before withholding the pose. It remains a prediction and cannot
             # update the stored surface or connected image.
-            return self._missing(
+            return self._publish_prediction(
                 hint,
                 time_s,
                 details,
@@ -786,16 +803,18 @@ class GrowingSurfaceSession:
                 geometry=fitter,
                 require_overlap=True,
             )
+        # 4. Fuse only a geometry-compatible fit. A fused pose can differ from
+        # both inputs, so it must pass the same geometry check before publication.
         kalman_prior = None
         if self.kalman is not None:
-            prior_valid = check_pose(self.pose)["accepted"]
+            prior_check = check_pose(self.pose)
             kalman_prior = self.kalman.snapshot()
             measured = fit["uncertainty"]
             correction = self.kalman.correct(
                 candidate,
                 np.asarray(measured["information"]),
                 np.asarray(measured["pivot_m"]),
-                contradicted=not prior_valid,
+                contradicted=not prior_check["accepted"],
             )
             details["kalman"] = correction
             candidate = self.kalman.pose.copy()
@@ -803,8 +822,14 @@ class GrowingSurfaceSession:
                 self._rollback_correction(kalman_prior, details, "fused_pose_contradicts_observation")
             self.pose = self.kalman.pose.copy()
             if not details["kalman"]["accepted"]:
-                details.update(fit=fit, reason=details["kalman"]["reason"])
-                return self._result("predicted", time_s, details, available=prior_valid)
+                details["fit"] = fit
+                return self._publish_prediction(
+                    hint,
+                    time_s,
+                    details,
+                    details["kalman"]["reason"],
+                    prediction_check=prior_check,
+                )
         accepted_geometry = check_pose(candidate)
         details.update(
             fit=fit,
@@ -836,10 +861,14 @@ class GrowingSurfaceSession:
                 if not accepted:
                     if kalman_prior is not None:
                         self._rollback_correction(kalman_prior, details, "surface_group_disagreement")
-                    return self._missing(hint, time_s, details, "surface_group_disagreement", geometry=fitter)
+                    return self._publish_prediction(
+                        hint, time_s, details, "surface_group_disagreement", geometry=fitter
+                    )
+        # 5. Commit only the accepted measured result. Predicted/lost paths
+        # return above and cannot advance this reference or confirm map patches.
         self.pose = candidate
         self.last_observed_time = self.last_supported_time = time_s
-        self._connect(prepared)
+        self._remember_observation(prepared)
         info = measured_surface_information(
             self.store.points,
             self.pose,
@@ -868,11 +897,12 @@ class GrowingSurfaceSession:
         # Deliberately named candidate: overlap alone is not calibrated reliability.
         return self._result("observed_candidate", time_s, details)
 
-    def _connect(self, prepared):
-        self.connected_frame = prepared["frame_id"]
-        self.connected_pose = self.pose.copy()
-        self.connected_observation = prepared["current"]
-        self.connected_intrinsics = prepared["intrinsics"].copy()
+    def _remember_observation(self, prepared):
+        """Save actual RGB-D/mask and its accepted pose for later image matching."""
+        self.accepted_frame = prepared["frame_id"]
+        self.accepted_pose = self.pose.copy()
+        self.accepted_observation = prepared["current"]
+        self.accepted_intrinsics = prepared["intrinsics"].copy()
 
     def _fit_views(self):
         if not self.config.partial_surface_matching:
@@ -891,11 +921,11 @@ class GrowingSurfaceSession:
             for patch in self.store.patches.values()
             if patch.active and patch.view is not None
         }
-        if self.connected_observation is not None:
+        if self.accepted_observation is not None:
             # Last accepted measurement may reveal a useful view without
             # qualifying for surface growth. Never retain a rejected candidate.
-            views[self.connected_frame] = SurfaceFitView(
-                self.connected_observation, self.connected_intrinsics, self.connected_pose
+            views[self.accepted_frame] = SurfaceFitView(
+                self.accepted_observation, self.accepted_intrinsics, self.accepted_pose
             )
         if self.config.fit_view_limit is not None:
             return tuple(views[f] for f in sorted(views, reverse=True)[: self.config.fit_view_limit])
@@ -907,9 +937,9 @@ class GrowingSurfaceSession:
         views = []
         if self.initial_appearance_view is not None:
             views.append(self.initial_appearance_view)
-        if self.connected_observation is not None:
+        if self.accepted_observation is not None:
             views.append(
-                SurfaceFitView(self.connected_observation, self.connected_intrinsics, self.connected_pose)
+                SurfaceFitView(self.accepted_observation, self.accepted_intrinsics, self.accepted_pose)
             )
         return tuple(views)
 
@@ -920,7 +950,15 @@ class GrowingSurfaceSession:
         # discarded by a later acceptance check as an accepted correction.
         details["kalman"].update(accepted=False, reason=reason)
 
-    def _missing(self, hint, time_s, details, reason, *, geometry=None, require_overlap=False):
+    def _publish_prediction(
+        self, hint, time_s, details, reason, *, geometry=None, require_overlap=False, prediction_check=None
+    ):
+        """One fallback decision after missing input, failed fitting or rejected fusion.
+
+        prediction_check reuses the current-frame check already performed before
+        a Kalman correction. It validates the restored prediction, not the
+        rejected fused pose. It never triggers another fit.
+        """
         details["reason"] = reason
         if self.kalman is not None:
             # Prediction already propagated the posterior and group-motion
@@ -943,7 +981,13 @@ class GrowingSurfaceSession:
             available = True
         else:
             return self._result("lost", time_s, details, available=False)
-        if available and geometry is not None:
+        if prediction_check is not None:
+            # A current compatible observation can support retaining the prior
+            # even when no external group supports it. An incompatible prior
+            # must not be published merely because a group prediction exists.
+            details["prediction_geometry"] = prediction_check
+            available = prediction_check["accepted"]
+        elif available and geometry is not None:
             # A failed alignment is not an empty observation. The fallback
             # still has to satisfy the current measured geometry. With no
             # usable observation, callers omit geometry and retain prediction.
@@ -963,6 +1007,9 @@ class GrowingSurfaceSession:
         return self._result("predicted", time_s, details, available=available)
 
     def _result(self, status, time_s, details, *, available=True):
+        published_pose = self.pose.tolist() if available and self.pose is not None else None
+        if published_pose is None:
+            status = "lost"
         if self.kalman is not None:
             details["covariance"] = self.kalman.covariance.tolist()
             details.setdefault("kalman", {**self.kalman.last_prediction, "accepted": False, "reason": status})
@@ -972,6 +1019,9 @@ class GrowingSurfaceSession:
                 calibrated=False,
             )
         details.update(
+            unpublished_camera_from_reference=self.pose.tolist()
+            if published_pose is None and self.pose is not None
+            else None,
             map_version_after=self.store.version,
             map_points=len(self.store.points),
             retained_patches=len(self.store.patches),
@@ -984,6 +1034,6 @@ class GrowingSurfaceSession:
         return {
             "status": status,
             "source_time_s": time_s,
-            "camera_from_reference": self.pose.tolist() if available and self.pose is not None else None,
+            "camera_from_reference": published_pose,
             "diagnostics": details,
         }

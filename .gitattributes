@@ -22,6 +22,8 @@
 tests/artifacts/cameras/*.png filter=lfs diff=lfs merge=lfs -text
 # Recorded RGB-D and network outputs for matching-adapter equivalence tests.
 tests/policies/flash/fixtures/image_matching_*.npz filter=lfs diff=lfs merge=lfs -text
+# Recorded scene-group failure with real RGB-D and masks.
+tests/policies/flash/fixtures/ring_group_rejection_*.npz filter=lfs diff=lfs merge=lfs -text
 # Recorded recovery checkpoints keep RGB-D evidence available to integration tests.
 tests/policies/flash/fixtures/recorded_recovery/**/*.npz filter=lfs diff=lfs merge=lfs -text
 # Recorded clear-placement checkpoints for native surface matcher regressions.

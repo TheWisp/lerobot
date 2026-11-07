@@ -246,8 +246,8 @@ def test_runtime_profiling_keeps_real_fits_and_counts_nested_work(tmp_path):
     with FitProfile() as profile:
         run_case(case, tmp_path / "profiled", None, VisionPipelineConfig(), None, None, **options)
     assert compare_runs(tmp_path / "plain", tmp_path / "profiled", "group_growing")["identical"]
-    assert profile.stats["fitter.search"]["calls"] > 0
-    solver = profile.stats["fitter.search"]
+    assert profile.stats["fitter.fit_once"]["calls"] > 0
+    solver = profile.stats["fitter.fit_once"]
     assert 0 <= solver["exclusive_ms"] < solver["inclusive_ms"]
 
 

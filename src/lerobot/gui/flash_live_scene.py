@@ -54,12 +54,39 @@ def encode_rgbd_scene(frame, header):
             "intrinsics": frame.intrinsics.tolist(),
         },
         "depth_bytes": depth.nbytes,
+        "source_frame_id": frame.frame_id,
+        "available_time_s": frame.available_time_s,
+        "base_from_camera": frame.base_from_camera.tolist(),
+        "calibration_version": frame.calibration_version,
     }
     metadata = json.dumps(header, allow_nan=False, separators=(",", ":")).encode()
     return struct.pack("<I", len(metadata)) + metadata + depth.tobytes() + encoded.tobytes()
 
 
-def live_scene_packet(frame, live, row, masks, overlays):
+def object_evidence(result, method):
+    """The same saved decision fields in video inspection and live history."""
+    status = result.get(method + "_status")
+    details = result.get(method + "_details", {})
+    return {
+        "pose": result.get(method),
+        "status": status,
+        "reason": loss_reason(status, details),
+        "reason_code": details.get("reason") if status == "lost" else None,
+        "diagnostics": {key: value for key, value in details.items() if key != "group"},
+    }
+
+
+def frame_evidence(row, masks):
+    # Preserve the exact masks, including holes. Display contours alone cannot
+    # reproduce the observation supplied to the pipeline.
+    runs = {}
+    for role, mask in masks.items():
+        edges = np.flatnonzero(np.diff(np.pad(mask.ravel().astype(np.int8), (1, 1))))
+        runs[role] = np.column_stack((edges[::2], edges[1::2] - edges[::2])).tolist()
+    return {"evidence_schema": 1, "result": row, "masks_rle": runs}
+
+
+def live_scene_packet(frame, live, row, masks, matches=None, *, group_overlay=None):
     objects = {}
     for role, reference in live.engine.references.items():
         track = live.engine.candidates[live.method][role]
@@ -68,37 +95,44 @@ def live_scene_packet(frame, live, row, masks, overlays):
             masks[role].astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
         group = result[live.method + "_details"].get("group", {})
-        status = result[live.method + "_status"]
-        details = result[live.method + "_details"]
         objects[role] = {
             "name": live.mask_source.prompts[role],
             "surface": track.store.points.tolist(),
-            "pose": result[live.method],
+            **object_evidence(result, live.method),
             "axis_points": reference_axes(reference).tolist(),
-            "status": status,
-            "reason": loss_reason(status, details),
-            "reason_code": details.get("reason") if status == "lost" else None,
+            "surface_used": track._prepared_reference.points.tolist()
+            if track._prepared_reference is not None
+            else [],
             "contours": [c[:, 0].tolist() for c in contours],
-            "group_tracks": {**group, "links": overlays[role].update(group)["links"]},
+            "group_tracks": group,
         }
     # A missing mask/initialization still needs a useful image and status.
     for role in live.engine.sessions:
         result = row["objects"][role]
-        status = result[live.method + "_status"]
-        details = result[live.method + "_details"]
         objects.setdefault(
             role,
             {
                 "name": live.mask_source.prompts[role],
                 "surface": [],
-                "pose": None,
-                "status": status,
-                "reason": loss_reason(status, details),
-                "reason_code": details.get("reason") if status == "lost" else None,
+                **object_evidence(result, live.method),
                 "contours": [],
             },
         )
     return encode_rgbd_scene(
         frame,
-        {"frame": frame.frame_id, "time_s": frame.source_time_s, "method": live.method, "objects": objects},
+        {
+            "frame": frame.frame_id,
+            "time_s": frame.source_time_s,
+            "method": live.method,
+            "objects": objects,
+            "scene_group_tracks": (
+                group_overlay.update(
+                    row.get("scene_group_tracks", []), frame_size=(frame.rgb.shape[1], frame.rgb.shape[0])
+                )
+                if group_overlay is not None
+                else row.get("scene_group_tracks", [])
+            ),
+            **frame_evidence(row, masks),
+            "image_matches": matches,
+        },
     )

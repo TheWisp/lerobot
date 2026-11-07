@@ -99,19 +99,20 @@ class FitProfile(ExitStack):
         )
 
     def __enter__(self):
-        from benchmarks.flash_experiment_groups import GroupHints
         from lerobot.policies.flash import (
             experimental_surface_session as session,
             surface_uncertainty as uncertainty,
         )
+        from lerobot.policies.flash.motion_groups import SceneMotionGroups
+        from lerobot.policies.flash.object_group_association import ObjectGroupAssociation
         from lerobot.policies.flash.surface_grounding import WholeSurfaceFit
         from lerobot.policies.flash.surface_kalman import PoseKalmanFilter
 
         super().__enter__()
         for name in (
             "__init__",
+            "fit_once",
             "refine",
-            "search",
             "_solve",
             "residual",
             "batch_residuals",
@@ -138,8 +139,9 @@ class FitProfile(ExitStack):
         self.instrument(LibraryMatcher, "prepare", "library.prepare")
         self.instrument(LibraryMatcher, "refine", "library.refine")
         self.instrument(SharedFrameTracker, "update", "image_matching")
-        for name in ("predict", "compare_candidate", "observe"):
-            self.instrument(GroupHints, name, "group." + name)
+        self.instrument(SceneMotionGroups, "update", "group.update")
+        for name in ("query", "record_observation"):
+            self.instrument(ObjectGroupAssociation, name, "group." + name)
         return self
 
 

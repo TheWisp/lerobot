@@ -192,7 +192,10 @@ def test_retained_view_pose_is_respected_and_duplicate_views_do_not_add_weight()
     repeated_check = check_surface_contradiction(repeated, expected, gate)
     single_counts = single_check.pop("scene_depth_exposed_weights")
     repeated_counts = repeated_check.pop("scene_depth_exposed_weights")
+    single_views = single_check.pop("scene_depth_views")
+    repeated_views = repeated_check.pop("scene_depth_views")
     assert repeated_counts == [*single_counts, single_counts[-1]]
+    assert repeated_views == [*single_views, single_views[-1]]
     assert single_check == repeated_check
 
 
@@ -220,7 +223,7 @@ def test_partial_matching_is_used_by_sequential_session_and_its_kalman_checks(ba
         }
         result = tracker.update(prepared, float(frame))
         assert result["camera_from_reference"] is not None
-        assert tracker.connected_frame == frame
+        assert tracker.accepted_frame == frame
         assert len(tracker._fit_views()) <= tracker.config.max_patches + 1
         previous = truth
     assert result["diagnostics"]["kalman"]["accepted"]
@@ -229,42 +232,20 @@ def test_partial_matching_is_used_by_sequential_session_and_its_kalman_checks(ba
     assert error["rotation_error_deg"] < 2
 
 
-def test_group_validation_does_not_repeat_the_old_unconditional_surface_check(monkeypatch):
-    from benchmarks.flash_experiment_groups import GroupConfig, GroupHints
-    from lerobot.policies.flash.experimental_surface_session import PoseHint
-    from lerobot.policies.flash.perception import RGBDFrame
+def test_partial_surface_geometry_accepts_new_view_without_group_veto():
+    from lerobot.policies.flash.surface_uncertainty import check_surface_contradiction
 
     source, k, _ = box_observation(0)
     current, _, truth = box_observation(40)
-    frame = RGBDFrame(
-        1,
-        np.zeros((*current["mask"].shape, 3), np.uint8),
-        current["depth"],
-        k,
-        1.0,
-        np.eye(4),
-        1.0,
-        1.0,
-        "controlled",
-    )
-    groups = GroupHints(GroupConfig(), uncertainty_config=PoseUncertaintyConfig(enabled=True))
-
-    def old_comparison(*args):
-        raise AssertionError("Geometry validation must not run a different, overwritten verdict first")
-
-    monkeypatch.setattr(groups, "_compare", old_comparison)
-    hint = PoseHint(truth, "test group", 1.0, 0.0, 0)
-    accepted, details = groups.compare_candidate(
-        frame,
-        current["mask"],
-        hint,
+    geometry = WholeSurfaceFit(
         source["obs"]["points"],
-        truth,
-        observation=current,
+        current,
+        k,
+        ShapeConfig(),
         reference_views=(SurfaceFitView(source, k, np.eye(4)),),
     )
-    assert accepted
-    assert details["observation_check"]["accepted"]
+    check = check_surface_contradiction(geometry, truth, PoseUncertaintyConfig(enabled=True))
+    assert check["accepted"]
 
 
 def test_retained_measurement_can_contain_surface_not_yet_added_to_map():

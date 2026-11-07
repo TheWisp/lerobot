@@ -177,7 +177,7 @@ export function createRgbdScene(canvas) {
             const object = new THREE.Group();
             const geometry = new THREE.BufferGeometry();
             geometry.setAttribute('position', new THREE.Float32BufferAttribute(description.points.flat(), 3));
-            const appearance = {color: description.color, transparent: true, opacity: 0.9,
+            const appearance = {color: description.color, transparent: true, opacity: description.opacity ?? 0.9,
                 depthTest: false, depthWrite: false};
             let surface;
             if (description.links) {

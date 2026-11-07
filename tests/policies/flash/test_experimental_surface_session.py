@@ -159,28 +159,30 @@ def test_recent_view_budget_keeps_map_and_uses_latest_accepted_measurement(monke
     # A later accepted measurement need not grow the surface to be a useful
     # source view. Keep its actual pixels/calibration and its mapped pose.
     latest = prepare.prepare(rgb, depth, mask, k, 1)
-    tracker.connected_frame = 1
-    tracker.connected_observation = latest["current"]
-    tracker.connected_intrinsics = latest["intrinsics"]
-    tracker.connected_pose = transform(x=0.01)
+    tracker.accepted_frame = 1
+    tracker.accepted_observation = latest["current"]
+    tracker.accepted_intrinsics = latest["intrinsics"]
+    tracker.accepted_pose = transform(x=0.01)
     views = tracker._fit_views()
     assert len(views) == 1
     assert views[0].observation is latest["current"]
-    np.testing.assert_array_equal(views[0].camera_from_reference, tracker.connected_pose)
+    np.testing.assert_array_equal(views[0].camera_from_reference, tracker.accepted_pose)
     np.testing.assert_array_equal(tracker.store.points, original)
     assert 0 in tracker.store.patches
     tracker.config = replace(tracker.config, fit_view_limit=None)
     assert len(tracker._fit_views()) == 2
 
 
-def test_rejected_filter_update_keeps_its_reason_in_session_diagnostics(monkeypatch):
+@pytest.mark.parametrize("prior_x", [0.0, 0.1])
+def test_rejected_filter_update_keeps_its_reason_in_session_diagnostics(monkeypatch, prior_x):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
     tracker = GrowingSurfaceSession(prepare.shape_config, GrowingSurfaceConfig())
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
     # Isolate the filter/session boundary: a candidate can pass geometric
     # checks but provide no directional information for the Kalman update.
     # This is what the recorded clock's back view exposed.
-    tracker.pose = tracker.kalman.pose = transform(x=0.1)
+    tracker.pose = tracker.kalman.pose = transform(x=prior_x)
+    initial = tracker.store.points.copy()
     correct = tracker.kalman.correct
 
     def no_information(pose, information, pivot, **kwargs):
@@ -188,10 +190,38 @@ def test_rejected_filter_update_keeps_its_reason_in_session_diagnostics(monkeypa
 
     monkeypatch.setattr(tracker.kalman, "correct", no_information)
     result = tracker.update(prepare.prepare(rgb, depth, mask, k, 1), 0.1)
-    assert result["camera_from_reference"] is None
+    if prior_x:
+        assert result["camera_from_reference"] is None
+        assert result["status"] == "lost"
+    else:
+        assert result["status"] == "predicted"
+        np.testing.assert_allclose(result["camera_from_reference"], np.eye(4))
+    assert result["diagnostics"]["prediction_geometry"]["accepted"] == (prior_x == 0)
     assert result["diagnostics"]["kalman"]["observable_rank"] == 0
     assert result["diagnostics"]["reason"] == "no_observation_information"
-    np.testing.assert_array_equal(tracker.pose, transform(x=0.1))
+    np.testing.assert_array_equal(tracker.pose, transform(x=prior_x))
+    np.testing.assert_array_equal(tracker.store.points, initial)
+    np.testing.assert_array_equal(
+        tracker.kalman.covariance, result["diagnostics"]["kalman"]["prior_covariance"]
+    )
+    assert tracker.accepted_frame == 0
+
+
+def test_hidden_without_prediction_support_publishes_lost_not_empty_predicted(monkeypatch):
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    tracker = GrowingSurfaceSession(prepare.shape_config, GrowingSurfaceConfig())
+    tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
+    initial = tracker.store.points.copy()
+    covariance = tracker.kalman.covariance.copy()
+    result = tracker.update(prepare.prepare(rgb, depth, mask & False, k, 1), 0.1)
+    # The filter still predicts internally, but retention is disabled and no
+    # group supports publication. Both consumers must see the same outcome.
+    assert result["status"] == "lost"
+    assert result["camera_from_reference"] is None
+    assert result["diagnostics"]["reason"] == "no_mask"
+    assert np.trace(tracker.kalman.covariance) > np.trace(covariance)
+    np.testing.assert_array_equal(tracker.store.points, initial)
+    assert tracker.accepted_frame == 0
 
 
 def test_prediction_during_empty_mask_never_grows_or_reseeds_surface(monkeypatch):
@@ -211,7 +241,7 @@ def test_prediction_during_empty_mask_never_grows_or_reseeds_surface(monkeypatch
     np.testing.assert_allclose(result["camera_from_reference"], hint.camera_from_reference)
     np.testing.assert_array_equal(tracker.store.points, model)
     np.testing.assert_array_equal(tracker.reference, initial)
-    assert tracker.connected_frame == 1
+    assert tracker.accepted_frame == 1
     assert result["diagnostics"]["prediction_age_s"] == pytest.approx(0.1)
     assert tracker.update(prepare.prepare(rgb, depth, mask & False, k, 3), 0.3)["status"] == "lost"
     # Returning pixels reconnect to frame 1, not to the prediction at frame 2.
@@ -251,7 +281,7 @@ def test_persistent_prediction_follows_group_then_world_camera_and_reacquires(mo
         assert result["diagnostics"]["prediction_age_s"] == pytest.approx(i / 10 - 0.3)
         assert result["diagnostics"]["observation_age_s"] == pytest.approx(i / 10 - 0.1)
         np.testing.assert_array_equal(tracker.store.points, model)
-        assert tracker.connected_frame == 1
+        assert tracker.accepted_frame == 1
     # Real surface fitting corrects the stale prediction; the coordinate origin stays fixed.
     result = tracker.update(prepare.prepare(rgb, depth, mask, k, 7), 0.7)
     assert result["status"] == "observed_candidate"
@@ -312,11 +342,11 @@ def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(mo
         assert result["diagnostics"]["fit"]["reason"] == "measured_empty_space_conflict"
         np.testing.assert_array_equal(tracker.store.points, initial)
         assert tracker.store.version == 1
-        assert tracker.connected_frame == 0
+        assert tracker.accepted_frame == 0
     # A valid observation can recover; rejection is not a permanent latch.
     result = tracker.update(prepare.prepare(rgb, depth, mask, k, 4), 0.4)
     assert result["status"] == "observed_candidate"
-    assert tracker.connected_frame == 4
+    assert tracker.accepted_frame == 4
 
 
 @pytest.mark.parametrize("surface_priority", [False, True])
@@ -345,7 +375,7 @@ def test_no_overlap_does_not_reset_coordinate_origin(monkeypatch, surface_priori
     assert result["diagnostics"]["reason"] == "no_observation_compatible_candidate"
     assert result["diagnostics"]["fit"]["reason"] == "measured_empty_space_conflict"
     np.testing.assert_array_equal(tracker.reference, old)
-    assert tracker.connected_frame == 0
+    assert tracker.accepted_frame == 0
     assert tracker.store.version == 1
 
 
@@ -415,11 +445,6 @@ def test_addition_records_model_used_for_fit_before_other_promotions():
 
 
 def test_visible_surface_corrects_wrong_group_prediction(monkeypatch):
-    from functools import partial
-
-    from benchmarks.flash_experiment_groups import GroupConfig, GroupHints
-    from lerobot.policies.flash.perception import RGBDFrame
-
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
     tracker = GrowingSurfaceSession(prepare.shape_config)
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
@@ -427,23 +452,13 @@ def test_visible_surface_corrects_wrong_group_prediction(monkeypatch):
 
     evidence = PointEvidence(tracker.reference, tracker.reference + [0, 0, 0.02], "group", "predicted", 0.005)
     hint = PoseHint(transform(0, 0, 0.02), "environment_point_group", 0.1, 0.0, 0, (evidence,))
-    frame = RGBDFrame(1, rgb, depth, k, 1.0, np.eye(4), 0.1, 0.1, "test")
     prepared = prepare.prepare(rgb, depth, mask, k, 1)
-    check = partial(
-        GroupHints(GroupConfig()).compare_candidate,
-        frame,
-        mask,
-        hint,
-        observation=prepared["current"],
-        shape_config=prepare.shape_config,
-    )
-    result = tracker.update(prepared, 0.1, hint=hint, candidate_check=check)
+    result = tracker.update(prepared, 0.1, hint=hint)
     assert result["status"] == "observed_candidate"
     # Full RGB-D surface remains at the original depth; do not copy the prior.
     pose = np.asarray(result["camera_from_reference"])
     assert np.median(np.linalg.norm(move(tracker.reference, pose) - tracker.reference, axis=1)) < 0.005
     assert result["diagnostics"]["hint_disagreement_mm"] > 15
-    assert result["diagnostics"]["group_comparison"]["observation_check"]["accepted"]
 
 
 @pytest.mark.parametrize(
@@ -457,7 +472,7 @@ def test_shared_object_matches_contribute_once_to_real_fit_residual(monkeypatch,
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
     current = prepare.prepare(rgb, depth, mask, k, 1)
     current["shared_matches"] = shared
-    evidence = PointEvidence(points(), points(), "object_point_group", kind, 0.005)
+    evidence = PointEvidence(points(), points(), "arbitrary_source", kind, 0.005, reuses_image_matches=True)
     hint = PoseHint(np.eye(4), "object_point_group", 0.1, 0.0, 0, (evidence,))
     original = ImageConditionedFit._solve
     checked = []
@@ -473,63 +488,6 @@ def test_shared_object_matches_contribute_once_to_real_fit_residual(monkeypatch,
     monkeypatch.setattr(ImageConditionedFit, "_solve", check)
     tracker.update(current, 0.1, hint=hint)
     assert checked
-
-
-@pytest.mark.parametrize("surface_priority", [False, True])
-def test_ambiguous_surface_fit_cannot_change_group_anchor_or_grow_model(monkeypatch, surface_priority):
-    from functools import partial
-
-    from benchmarks.flash_experiment_groups import GroupConfig, GroupHints
-    from lerobot.policies.flash.perception import RGBDFrame
-
-    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
-    tracker = GrowingSurfaceSession(
-        prepare.shape_config,
-        GrowingSurfaceConfig(
-            uncertainty=PoseUncertaintyConfig(enabled=False), surface_priority=surface_priority
-        ),
-    )
-    tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
-    before = tracker.store.points.copy()
-    version = tracker.store.version
-    # A front-facing plane has no depth evidence for a twist about its normal.
-    # Simulate the fitter proposing an equally plausible 180-degree solution.
-    flip = np.diag([-1.0, -1.0, 1.0, 1.0])
-    center = tracker.reference.mean(axis=0)
-    flip[:3, 3] = center - flip[:3, :3] @ center
-    monkeypatch.setattr(ImageConditionedFit, "correct", lambda *_, **__: (flip, {}))
-    hint = PoseHint(np.eye(4), "environment_point_group", 0.1, 0.0, 0)
-    frame = RGBDFrame(1, rgb, depth, k, 1.0, np.eye(4), 0.1, 0.1, "test")
-    prepared = prepare.prepare(rgb, depth, mask, k, 1)
-    check = partial(
-        GroupHints(GroupConfig()).compare_candidate,
-        frame,
-        mask,
-        hint,
-        observation=prepared["current"] if surface_priority else None,
-        shape_config=prepare.shape_config,
-    )
-    result = tracker.update(prepared, 0.1, hint=hint, candidate_check=check)
-    assert result["status"] == ("observed_candidate" if surface_priority else "predicted")
-    if not surface_priority:
-        assert result["diagnostics"]["group_comparison"]["verdict"] in {"ambiguous", "prior_favored"}
-    # The real geometry pass can adjust within discrete surface sampling. It
-    # must not accept the injected half-turn. The archived fallback is exact.
-    if surface_priority:
-        from scipy.spatial.transform import Rotation
-
-        pose = np.asarray(result["camera_from_reference"])
-        assert np.rad2deg(Rotation.from_matrix(pose[:3, :3]).magnitude()) < 1
-        assert np.max(np.linalg.norm(move(before, pose) - before, axis=1)) < 0.001
-    else:
-        np.testing.assert_array_equal(result["camera_from_reference"], np.eye(4))
-    np.testing.assert_array_equal(tracker.store.points, before)
-    assert tracker.store.version == version
-    assert tracker.connected_frame == (1 if surface_priority else 0)
-    if not surface_priority:
-        assert result["diagnostics"]["map_events"] == []
-    else:
-        assert all(event["event"] == "pending" for event in result["diagnostics"]["map_events"])
 
 
 def test_point_sources_constrain_pose_and_remain_normalized_and_batch_equivalent(monkeypatch):
@@ -658,7 +616,7 @@ def test_tracking_can_accept_a_pose_without_accepting_surface_growth(monkeypatch
         result = tracker.update(prepare.prepare(rgb, changed, mask, k, i), i / 10)
         assert result["status"] == "observed_candidate"
         np.testing.assert_allclose(result["camera_from_reference"], pose)
-        assert tracker.connected_frame == i
+        assert tracker.accepted_frame == i
         assert result["diagnostics"]["growth"]["reason"] == "insufficient_growth_overlap"
         np.testing.assert_array_equal(tracker.store.points, initial)
         assert tracker.store.version == 1

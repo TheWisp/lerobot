@@ -6,7 +6,7 @@
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
     <link rel="stylesheet" href="/static/style.css?v=173">
-    <link rel="stylesheet" href="/static/flash_experiments.css?v=15">
+    <link rel="stylesheet" href="/static/flash_experiments.css?v=19">
     <script type="importmap">{"imports":{"three":"/static/vendor/three.module.js"}}</script>
 </head>
 <body>
@@ -464,8 +464,7 @@
                         <button type="button" onclick="showFlashPipelineSettings()">Pipeline settings</button>
                         <button type="button" id="flash-experiment-3d-toggle" onclick="toggleFlashExperiment3D()" aria-pressed="false">3D scene</button>
                         <label>Pose calculation <select id="flash-experiment-method" onchange="changeFlashExperimentMethod()" aria-label="Tracking method"></select></label>
-                        <label id="flash-experiment-group-control"><input id="flash-experiment-groups" type="checkbox" checked onchange="changeFlashGroupDisplay()">Group tracking</label>
-                        <select id="flash-experiment-group-role" onchange="changeFlashGroupDisplay()" aria-label="Show group support for"><option value="all">All objects</option></select>
+                        <div id="flash-experiment-group-control" class="flash-group-control">Groups <div id="flash-experiment-groups" class="flash-group-modes" data-mode="objects" role="group" aria-label="Group display"><button type="button" data-mode="none" aria-pressed="false" onclick="setFlashGroupMode('flash-experiment-groups','none')">None</button><button type="button" data-mode="objects" aria-pressed="true" onclick="setFlashGroupMode('flash-experiment-groups','objects')">Objects</button><button type="button" data-mode="all" aria-pressed="false" onclick="setFlashGroupMode('flash-experiment-groups','all')">All</button></div><span id="flash-experiment-group-count" class="flash-group-count" aria-live="polite"></span></div>
                         <label class="flash-experiment-mask-label flash-experiment-2d-tool"><input id="flash-experiment-mask" type="checkbox" onchange="drawFlashExperiment()">Input mask</label>
                         <label class="flash-experiment-pose-label flash-experiment-2d-tool"><input id="flash-experiment-pose" type="checkbox" onchange="drawFlashExperiment()">3D reference surface + axes</label>
                         <label class="flash-experiment-matches-label flash-experiment-2d-tool">Image point trails <select id="flash-experiment-matches" onchange="drawFlashExperiment()"><option value="off">Off</option><option value="raw" selected>Raw predictions</option><option value="used">Agree with rigid fit</option></select></label>
@@ -520,44 +519,64 @@
         </div>
         <div class="layout flash-workspace" id="flash-live-workspace" hidden>
             <div class="sidebar" id="flash-live-sidebar">
-                <div class="sidebar-header"><h1>Live camera</h1></div>
-                <div class="flash-live-settings">
+                <div class="sidebar-header"><h1>Camera tracking</h1></div>
+                <div class="flash-live-settings" id="flash-live-setup">
+                    <h2>Camera setup</h2>
                     <label>RGB-D camera <select id="flash-live-camera" aria-label="Live RGB-D camera"><option value="">Auto camera</option></select></label>
-                    <label>Image matching <select id="flash-live-matching"><option value="lk">LK</option><option value="ufm">UFM</option></select></label>
-                    <label>Surface matcher <select id="flash-live-matcher" aria-label="Live surface matcher"></select></label>
-                    <details><summary>Advanced pipeline settings</summary>
-                        <p>Change these before opening the camera.</p>
-                        <textarea id="flash-live-config" aria-label="Live pipeline settings"></textarea>
-                    </details>
+                    <label>Image matching <select id="flash-live-matching" onchange="updateFlashPipelineControls()"><option value="lk">LK</option><option value="ufm">UFM</option></select></label>
+                    <label>Surface matcher <select id="flash-live-matcher" aria-label="Live surface matcher" onchange="updateFlashPipelineControls()"></select></label>
+                    <button id="flash-live-settings" type="button" onclick="liveElement('settings-dialog').showModal()">Advanced pipeline settings…</button>
+                    <p class="training-field-hint">Settings apply when opening the camera. During a run, they are read-only.</p>
+                    <label>Recent history (seconds)<input id="flash-live-history-seconds" type="number" min="1" max="600" value="60"></label>
+                    <div class="run-actions">
+                        <button class="btn-launch" id="flash-live-start" type="button" onclick="startFlashLive()">Open camera</button>
+                        <button class="btn-stop" id="flash-live-stop" type="button" onclick="stopFlashLive()" disabled>Stop camera</button>
+                    </div>
                 </div>
-                <div class="run-actions">
-                    <button class="btn-launch" id="flash-live-start" type="button" onclick="startFlashLive()">Open camera</button>
-                    <button class="btn-stop" id="flash-live-stop" type="button" onclick="stopFlashLive()" disabled>Stop camera</button>
+                <div class="section-resize-handle flash-live-section-resize" role="separator" aria-label="Resize camera setup and recordings" tabindex="0"></div>
+                <div class="flash-live-recording-panel">
+                    <div class="flash-live-recording-heading"><h2>Recordings</h2><button type="button" id="flash-live-save-history" onclick="saveFlashHistory()">Save recent</button></div>
+                    <div id="flash-live-recordings" class="flash-live-recordings" role="list" aria-label="Tracking recordings"></div>
+                    <input id="flash-live-recording" type="hidden" value="recent">
+                    <p id="flash-live-history-info"></p>
                 </div>
             </div>
             <div class="sidebar-resize-handle"></div>
             <div class="main" id="flash-live-main">
                 <section id="flash-live-panel" aria-label="Live tracking inspector">
+                    <div id="flash-live-mode" class="flash-group-modes flash-live-mode" data-mode="live" role="group" aria-label="Live or replay"><button type="button" data-mode="live" aria-pressed="true" onclick="setFlashLiveMode('live')">Live camera</button><button type="button" data-mode="replay" aria-pressed="false" onclick="setFlashLiveMode('replay')">Replay recording</button></div>
                     <div class="flash-experiment-tools">
                         <input id="flash-live-name" placeholder="Object name" aria-label="Live object name">
                         <button id="flash-live-select" type="button" onclick="controlFlashLive('select')" disabled>Track by name</button>
-                        <button id="flash-live-freeze" type="button" onclick="controlFlashLive('freeze')" disabled>Freeze and click</button>
+                        <button id="flash-live-pick" type="button" onclick="toggleFlashLivePicker()" aria-pressed="false" disabled>Pick object</button>
                         <button id="flash-live-clear" type="button" onclick="controlFlashLive('clear')" disabled>Clear object</button>
-                        <button id="flash-live-3d" type="button" onclick="toggleFlashLive3D()" aria-pressed="false">3D scene</button>
-                        <button type="button" onclick="flashLive.viewer?.reset()">Camera view</button>
+                        <div id="flash-live-view-mode" class="flash-group-modes" data-mode="2d" role="group" aria-label="Viewer dimensions"><button type="button" data-mode="2d" aria-pressed="true" onclick="toggleFlashLive3D(false)">2D</button><button type="button" data-mode="3d" aria-pressed="false" onclick="toggleFlashLive3D(true)">3D</button></div>
+                        <button id="flash-live-camera-view" type="button" onclick="flashLive.viewer?.reset()" hidden>Reset 3D camera</button>
                         <label><input id="flash-live-mask" type="checkbox" checked onchange="drawFlashLive()">Mask (2D)</label>
                         <label><input id="flash-live-surface" type="checkbox" checked onchange="drawFlashLive()">Surface + axes</label>
-                        <label><input id="flash-live-groups" type="checkbox" checked onchange="drawFlashLive()">Groups</label>
+                        <div class="flash-group-control">Groups <div id="flash-live-groups" class="flash-group-modes" data-mode="objects" role="group" aria-label="Live group display"><button type="button" data-mode="none" aria-pressed="false" onclick="setFlashGroupMode('flash-live-groups','none')">None</button><button type="button" data-mode="objects" aria-pressed="true" onclick="setFlashGroupMode('flash-live-groups','objects')">Objects</button><button type="button" data-mode="all" aria-pressed="false" onclick="setFlashGroupMode('flash-live-groups','all')">All</button></div><span id="flash-live-group-count" class="flash-group-count" aria-live="polite"></span></div>
+                    </div>
+                    <div class="flash-live-history" id="flash-live-playback" hidden>
+                        <button type="button" id="flash-live-play" onclick="playFlashHistory()" aria-label="Play recording">Play</button>
+                        <input id="flash-live-history-position" type="range" min="0" max="0" value="0" aria-label="Recorded frame" oninput="loadFlashHistory(Number(this.value))" disabled>
+                        <span id="flash-live-play-time"></span>
                     </div>
                     <p id="flash-live-status" role="status"></p><p id="flash-live-objects"></p>
                     <div class="flash-live-viewer">
-                        <canvas id="flash-live-image" onclick="clickFlashLive(event)" aria-label="Live image; freeze to select an object"></canvas>
+                        <canvas id="flash-live-image" onclick="clickFlashLive(event)" aria-label="Camera image; use Pick object to select an object"></canvas>
                         <canvas id="flash-live-scene" hidden aria-label="Live 3D scene; drag to orbit"></canvas>
                     </div>
                 </section>
             </div>
         </div>
     </div>
+
+    <dialog id="flash-live-settings-dialog" class="flash-pipeline-settings">
+        <h2>Pipeline settings <button type="button" onclick="liveElement('settings-dialog').close()">Close</button></h2>
+        <p>These controls configure the same tracker used by video examples. Change them before opening the camera.</p>
+        <form id="flash-live-settings-form" onsubmit="event.preventDefault()"></form>
+        <button type="button" id="flash-live-settings-reset" onclick="resetFlashPipelineSettings()">Restore defaults</button>
+    </dialog>
 
     <!-- Robot tab -->
     <div class="tab-content" id="tab-robot">
@@ -906,8 +925,9 @@ nebius iam auth-public-key generate \
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=27"></script>
     <script src="/static/run.js?v=195"></script>
-    <script src="/static/flash_experiments.js?v=36"></script>
-    <script src="/static/flash_live.js?v=7"></script>
+    <script src="/static/flash_experiments.js?v=44"></script>
+    <script src="/static/flash_pipeline_settings.js?v=1"></script>
+    <script src="/static/flash_live.js?v=16"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>

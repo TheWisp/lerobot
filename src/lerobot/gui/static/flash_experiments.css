@@ -21,6 +21,12 @@
 .flash-experiment-tools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 .flash-experiment-tools label { display: inline-flex; align-items: center; gap: 5px; }
 .flash-experiment-tools select { background: #16263c; color: #eee; border: 1px solid #31516c; border-radius: 4px; padding: 5px; }
+.flash-group-control { display: inline-flex; align-items: center; gap: 5px; }
+.flash-group-count { color: #9eb5ca; font-size: 12px; white-space: nowrap; }
+.flash-group-modes { display: inline-flex; border: 1px solid #31516c; border-radius: 5px; overflow: hidden; }
+.flash-experiment-tools .flash-group-modes button { border: 0; border-radius: 0; padding: 5px 8px; }
+.flash-experiment-tools .flash-group-modes button + button { border-left: 1px solid #31516c; }
+.flash-experiment-tools .flash-group-modes button[aria-pressed="true"] { background: #315b80; color: #fff; }
 .flash-experiment-mask-label { color: #00d2c8; }
 .flash-experiment-pose-label { color: #ffffff; }
 #flash-experiment-explanation { font-size: 12px; color: #b8c7d8; margin: 0; }
@@ -100,16 +106,30 @@
 .flash-pipeline-settings { width: min(1000px, 90vw); max-height: 85vh; overflow: auto; background: var(--bg-secondary, #17202b); color: var(--text-primary, #eee); border: 1px solid #657488; border-radius: 8px; }
 .flash-pipeline-settings::backdrop { background: #0009; }
 .flash-pipeline-settings h2 { display: flex; justify-content: space-between; }
-.flash-pipeline-settings textarea { display: block; box-sizing: border-box; width: 100%; height: 38vh; margin: 12px 0; font: 13px monospace; background: #101820; color: #eee; padding: 12px; }
-.flash-pipeline-settings table { width: 100%; font-size: 12px; border-collapse: collapse; }
-.flash-pipeline-settings th, .flash-pipeline-settings td { text-align: left; border-bottom: 1px solid #657488; padding: 6px; overflow-wrap: anywhere; }
 
 .flash-source-tabs { display: flex; flex: 0 0 auto; border-bottom: 1px solid #0f3460; background: #16213e; }
 .flash-source-tabs button { padding: 11px 22px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #a8b7c9; cursor: pointer; font-size: 13px; }
 .flash-source-tabs button:hover { background: #23354d; }
 .flash-source-tabs button[aria-pressed="true"] { color: #4fc3f7; border-bottom-color: #4fc3f7; }
 #tab-flash #flash-live-sidebar { width: 280px; min-width: 210px; }
-.flash-live-settings { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 16px; padding: 16px; overflow-y: auto; }
+.flash-live-settings { display: flex; flex: 0 0 48%; min-height: 150px; flex-direction: column; gap: 12px; padding: 12px 16px; overflow-y: auto; box-sizing: border-box; }
+.flash-live-settings h2, .flash-live-recording-heading h2 { font-size: 14px; margin: 0; color: #e5effb; }
+.flash-live-section-resize { border-top: 1px solid #304960; }
+.flash-live-recording-panel { display: flex; flex: 1; flex-direction: column; min-height: 100px; padding: 12px; gap: 9px; overflow: hidden; }
+.flash-live-recording-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.flash-live-recordings { display: flex; flex: 1; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; }
+.flash-live-recording-row { display: flex; align-items: stretch; gap: 3px; }
+.flash-live-recording-row > button:first-child { flex: 1; text-align: left; min-width: 0; }
+.flash-live-recording-row > button[aria-current="true"] { background: #234b71; border-color: #72b7ff; }
+.flash-live-recording-row .flash-live-delete { flex: 0 0 auto; color: #f1adad; }
+.flash-live-recording-panel button, .flash-live-history button { padding: 6px 9px; border: 1px solid #415b74; border-radius: 5px; background: #20344b; color: #edf3fa; cursor: pointer; }
+#flash-live-history-info { font-size: 11px; line-height: 1.4; margin: 0; color: #aebfd0; }
+.flash-live-mode { align-self: flex-start; }
+.flash-live-mode button { padding: 7px 12px; border: 0; background: #16263c; color: #b9cce0; cursor: pointer; }
+.flash-live-mode button + button { border-left: 1px solid #31516c; }
+.flash-live-mode button[aria-pressed="true"] { background: #315b80; color: #fff; }
+#flash-live-pick[aria-pressed="true"] { background: #245579; border-color: #72b7ff; }
+#flash-live-image.flash-live-picking { cursor: crosshair; }
 .flash-live-settings > label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: #b8c7d8; }
 .flash-live-settings select, .flash-live-settings textarea { width: 100%; box-sizing: border-box; padding: 7px; background: #101923; color: #e4ecf5; border: 1px solid #31516c; border-radius: 4px; }
 .flash-live-settings details { font-size: 13px; color: #b8c7d8; }
@@ -120,3 +140,29 @@
 #flash-live-image, #flash-live-scene { width: 100%; height: 100%; }
 #flash-live-image { object-fit: contain; }
 @media (max-width: 700px) { #tab-flash #flash-live-sidebar { width: 180px; min-width: 150px; } }
+
+.flash-live-settings input[type=number] { width: 100%; box-sizing: border-box; padding: 7px; background: #101923; color: #e4ecf5; border: 1px solid #31516c; border-radius: 4px; }
+.flash-pipeline-form section { border-top: 1px solid #415268; padding: 4px 0 14px; }
+.flash-pipeline-form .training-field-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+.flash-pipeline-form .training-field { min-width: 0; }
+.flash-pipeline-form [hidden] { display: none; }
+.flash-live-history { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.flash-live-history[hidden], #flash-live-camera-view[hidden] { display: none; }
+#flash-live-history-position { flex: 1; min-width: 120px; }
+#flash-live-play-time { min-width: 60px; color: #b8c7d8; font-variant-numeric: tabular-nums; }
+@media (max-width: 700px) { .flash-pipeline-form .training-field-row { grid-template-columns: 1fr; } }
+
+/* The global reset removes dialog's browser centering/padding. Restore both. */
+.flash-pipeline-settings { margin: auto; padding: 24px; width: min(920px, 94vw); box-sizing: border-box; }
+.flash-pipeline-settings h2 { position: sticky; top: -24px; z-index: 1; align-items: center; margin: -24px -24px 16px; padding: 18px 24px; background: #17202b; font-size: 21px; border-bottom: 1px solid #415268; }
+.flash-pipeline-settings > p { margin: 0 0 20px; color: #bdcad9; font-size: 14px; line-height: 1.5; }
+.flash-pipeline-settings button, .flash-pipeline-settings select { padding: 7px 12px; border: 1px solid #415b74; border-radius: 5px; background: #20344b; color: #edf3fa; cursor: pointer; }
+.flash-pipeline-form h3 { font-size: 16px; margin: 16px 0; color: #e4edf7; }
+.flash-pipeline-form .training-field { display: flex; flex-direction: column; align-items: stretch; gap: 7px; }
+.flash-pipeline-form .training-field-label { font-size: 13px; color: #d1ddeb; text-transform: none; letter-spacing: normal; }
+.flash-pipeline-form .training-field-hint { font-size: 12px; color: #9cafc5; line-height: 1.4; }
+.flash-pipeline-form input[type=number] { width: 100%; box-sizing: border-box; padding: 8px 10px; background: #10233a; border: 1px solid #354f6d; border-radius: 5px; color: #f0f4f8; }
+.flash-pipeline-form input[type=checkbox] { align-self: flex-start; width: 18px; height: 18px; accent-color: #4fc3f7; }
+.flash-pipeline-form input:disabled { opacity: .5; }
+.flash-pipeline-form .training-field[hidden] { display: none; }
+#flash-live-settings, .flash-live-history button, .flash-live-history select { padding: 7px 10px; border: 1px solid #415b74; border-radius: 5px; background: #20344b; color: #edf3fa; cursor: pointer; }

@@ -1,8 +1,3 @@
-"""Compatibility imports; implementation shared with live perception."""
+"""Historical benchmark import for the shared scene-group configuration."""
 
-from lerobot.policies.flash.surface_group_hints import (
-    GroupConfig as GroupConfig,
-    GroupHints as GroupHints,
-    inside as inside,
-    select as select,
-)
+from lerobot.policies.flash.motion_groups import GroupConfig as GroupConfig

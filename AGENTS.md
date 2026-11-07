@@ -141,7 +141,7 @@ how several defects went unnoticed for months.
 
 ## Architecture (`src/lerobot/`)
 
-- **FLASH perception:** [`src/lerobot/policies/flash/docs/frame_architecture.md`](src/lerobot/policies/flash/docs/frame_architecture.md)
+- **FLASH perception:** [`src/lerobot/gui/static/flash_architecture.html`](src/lerobot/gui/static/flash_architecture.html)
   is the canonical diagram of the running frame path. Update it in the same
   change when altering frame inputs, group evidence, fitting, pose publication,
   or surface growth. Keep it descriptive of code that runs; put proposed

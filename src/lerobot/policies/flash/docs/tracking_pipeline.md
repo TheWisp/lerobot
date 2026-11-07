@@ -1,6 +1,6 @@
 # FLASH tracking pipeline
 
-**Current code path:** [one-frame architecture diagram](frame_architecture.md).
+**Current code path:** [rendered architecture diagram](../../../gui/static/flash_architecture.html).
 Update that diagram when changing the per-frame data flow or publication rules.
 
 Status: experimental implementation; accuracy and runtime remain limited.
@@ -239,6 +239,46 @@ sparse conflicts can escape it. Isolated contradictions remain tolerable.
 No scene name or grasp timing selects these rules.
 The recorded gamepad regression checks approach occlusion and subsequent
 pickup; it does not establish accuracy throughout manipulation.
+
+## Scene groups and object association
+
+Group membership belongs to the scene, independent of which objects are selected.
+
+```text
+Shared image matches + reliable depth → measured 3D point IDs
+                                           ↓
+                              Scene groups (once per frame)
+                              fit / separate / merge / retain hidden IDs
+                                           ↓
+                              Read-only group snapshot G[t]
+                                           ↓ queried by the main tracker
+Object mask + fixed reference → object association → motion evidence
+                                                       ↓
+Current mask + depth + stored surface → surface fit + Kalman → pose
+```
+
+- Each group stores point IDs, fixed group-local positions and its current rigid
+  transform. Visible measured members update that transform; hidden members keep
+  predicted positions. Predictions never become measurements.
+- A measured departure beyond the configured tolerance separates immediately.
+  Groups merge after sustained relative agreement, not proximity or object labels.
+- The object association identifies which groups contain its measured points.
+  It can initialize/reseed object coordinates from an accepted observation. It
+  cannot modify group membership, motion, or point history. Later fitted poses
+  can identify new points but do not move the existing point anchors.
+- The fitter consumes the generic `PoseHint` / `PointEvidence` interface. Its
+  geometry checks can withhold a pose, but cannot delete groups. Group predictions
+  contain no new measurements for surface growth.
+- Point memory, group count, unseen duration and consensus work are bounded.
+  Missing group measurements produce no new motion evidence. When a group splits
+  with members hidden, their assignment can remain uncertain; the current
+  implementation retains them with the surviving parent group. It cannot infer
+  an unseen grasp or independent motion from nothing.
+
+The group core is `motion_groups.py`; the main frame session queries its
+read-only snapshot through `object_group_association.py`. Future motion sources,
+such as a confirmed gripper attachment, use the pose-evidence interface rather
+than changing scene groups.
 
 ## What persists between frames
 

@@ -24,7 +24,7 @@ import numpy as np
 
 from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_flow_paths import FlowPaths
-from lerobot.gui.flash_group_overlay import GroupOverlay
+from lerobot.gui.flash_group_overlay import GroupOverlay, SceneGroupOverlay
 from lerobot.gui.flash_pose_overlay import reference_axes
 from lerobot.policies.flash.surface_grounding import project
 from lerobot.policies.flash.surface_observation import move, spatial_sample
@@ -117,7 +117,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
     if shared:
         methods = {name: label.replace("UFM", shared["backend"].upper()) for name, label in methods.items()}
     output.mkdir(parents=True, exist_ok=True)
-    identity = hashlib.sha256((str(run) + ":schema7").encode()).hexdigest()[:20]
+    identity = hashlib.sha256((str(run) + ":schema8").encode()).hexdigest()[:20]
     destination = output / identity
     if destination.exists():
         raise FileExistsError(destination)
@@ -128,6 +128,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
     digest = hashlib.sha256()
     flow_paths = {}
     group_overlays = defaultdict(GroupOverlay)
+    scene_group_overlay = SceneGroupOverlay()
     model_cache = {}
     try:
         with (
@@ -233,15 +234,29 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
                         "mask": [c[:, 0].tolist() for c in contours if len(c) >= 3],
                         "poses": posed,
                         "group_tracks": {
-                            name: group_overlays[role, name].update(
+                            name: (
                                 row["objects"][role].get(name + "_details", {}).get("group", {})
+                                if "scene_group_tracks" in row
+                                else group_overlays[role, name].update(
+                                    row["objects"][role].get(name + "_details", {}).get("group", {})
+                                )
                             )
                             for name in methods
                             if name.startswith("group_")
                         },
                         "pose_status": {name: row["objects"][role].get(name + "_status") for name in methods},
                     }
-                frames.append({"frame": frame.frame_id, "t": float(t), "objects": objects})
+                frames.append(
+                    {
+                        "frame": frame.frame_id,
+                        "t": float(t),
+                        "objects": objects,
+                        "scene_group_tracks": scene_group_overlay.update(
+                            row.get("scene_group_tracks", []),
+                            frame_size=(frame.rgb.shape[1], frame.rgb.shape[0]),
+                        ),
+                    }
+                )
             if evidence is not None and next(evidence, None) is not None:
                 raise ValueError("extra correspondence frames after video ended")
             for packet in stream.encode():
@@ -249,7 +264,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
         if digest.hexdigest() != summary["input_sha256"]:
             raise ValueError("source RGB-D/masks changed since this experiment; refusing misaligned playback")
         data = {
-            "schema_version": 7,
+            "schema_version": 8,
             "surface_experiment": summary.get("surface_experiment"),
             "shared_matching": shared,
             "has_correspondences": evidence_path.exists(),

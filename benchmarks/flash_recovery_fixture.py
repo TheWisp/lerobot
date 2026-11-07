@@ -179,11 +179,11 @@ def restore(mode, path=FIXTURE, *, filter_factory=None):
     session.reference = data["reference"].copy()
     session.reference_frame = 0
     session.pose = data["prior_pose"].copy()
-    session.connected_frame = metadata["connected_frame"]
-    session.connected_pose = data["connected_pose"].copy()
-    connected = prepare(session.connected_frame)
-    session.connected_observation = connected["current"]
-    session.connected_intrinsics = connected["intrinsics"]
+    session.accepted_frame = metadata["connected_frame"]
+    session.accepted_pose = data["connected_pose"].copy()
+    connected = prepare(session.accepted_frame)
+    session.accepted_observation = connected["current"]
+    session.accepted_intrinsics = connected["intrinsics"]
     session.last_frame = metadata["frame"] - 1
     session.last_time = metadata["previous_time_s"]
     session.last_observed_time = session.last_supported_time = metadata["observed_time_s"]

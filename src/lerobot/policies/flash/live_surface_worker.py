@@ -12,10 +12,10 @@ import signal
 import sys
 import time
 import traceback
-from collections import defaultdict
+from collections import deque
 from pathlib import Path
 from queue import Empty, Full, Queue
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 
 import cv2
 import numpy as np
@@ -25,6 +25,7 @@ from .live_surface_session import LIVE_METHOD, LiveSurfaceSession
 from .perception import LatestRGBDFrameStore, RGBDFrame
 from .surface_acceleration import SearchPool, compiled_kernels
 from .surface_tracking import load_ufm
+from .tracking_history import RollingHistory
 from .vision_pipeline import VisionPipelineConfig
 
 
@@ -32,20 +33,22 @@ def run(directory: Path, config: dict):
     import pyrealsense2 as rs
 
     from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
-    from lerobot.gui.flash_group_overlay import GroupOverlay
+    from lerobot.gui.flash_group_overlay import SceneGroupOverlay
     from lerobot.gui.flash_live_scene import live_scene_packet
     from lerobot.overlays.adapters import Sam3TrackByDetectionAdapter
 
     stop, latest, commands = Event(), LatestRGBDFrameStore(), Queue(maxsize=8)
-    camera = capture = live = adapter = pool = None
+    camera = capture = live = adapter = pool = history = group_overlay = None
     model = None
     model_loaded = False
     frozen = None
+    displayed_frame = None
+    preview_frames = deque(maxlen=8)
+    preview_lock = Lock()
     command_id = None
     last_id = -1
     sequence = 0
     paused = True
-    overlays = defaultdict(GroupOverlay)
     errors = []
     settings = config["pipeline_settings"]
     vision = VisionPipelineConfig.from_dict(settings["config"])
@@ -72,6 +75,11 @@ def run(directory: Path, config: dict):
         stop.set()
 
     try:
+        if config.get("history_directory"):
+            history = RollingHistory(
+                config["history_directory"],
+                seconds=config.get("history_seconds", 60),
+            )
         state("opening_camera")
         serial = config["serial"]
         if not serial:
@@ -112,6 +120,8 @@ def run(directory: Path, config: dict):
                     latest.publish(frame)
                     index += 1
                     if time.perf_counter() - published >= 1 / config["preview_fps"]:
+                        with preview_lock:
+                            preview_frames.append(frame)
                         write_snapshot(directory / "preview.json", image_snapshot(frame))
                         published = time.perf_counter()
             except Exception as exc:
@@ -141,10 +151,27 @@ def run(directory: Path, config: dict):
                         if live:
                             sequence = max(sequence, live.mask_source.next_click_sequence)
                             live.close()
-                        live, frozen, paused = None, None, True
+                        live, frozen, paused, group_overlay = None, None, True, None
                         state("preview")
+                    elif command["action"] == "clear_history":
+                        if history:
+                            history.clear()
                     elif command["action"] == "select":
-                        selected = seed_frame(command, frozen, latest.snapshot())
+                        displayed = frozen
+                        if command.get("point") is not None:
+                            frame_id = command.get("frame_id")
+                            if displayed is None or displayed.frame_id != frame_id:
+                                displayed = (
+                                    displayed_frame
+                                    if displayed_frame and displayed_frame.frame_id == frame_id
+                                    else None
+                                )
+                            if displayed is None:
+                                with preview_lock:
+                                    displayed = next(
+                                        (f for f in reversed(preview_frames) if f.frame_id == frame_id), None
+                                    )
+                        selected = seed_frame(command, displayed, latest.snapshot())
                         paused = True
                         state("loading_models", frame=image_snapshot(selected))
                         if not model_loaded:
@@ -166,7 +193,7 @@ def run(directory: Path, config: dict):
                         )
                         source.detection_correction = vision.detection_correction.control(offline=False)
                         live = LiveSurfaceSession(settings, source, model, kernels, pool)
-                        overlays.clear()
+                        group_overlay = SceneGroupOverlay()
                         frozen, last_id, paused = None, -1, False
                     else:
                         raise ValueError("Unsupported control for this inspector")
@@ -183,16 +210,19 @@ def run(directory: Path, config: dict):
                 continue
             try:
                 started = time.perf_counter()
-                row, _, masks = live.step(frame)
-                packet = live_scene_packet(frame, live, row, masks, overlays)
+                row, matches, masks = live.step(frame)
+                packet = live_scene_packet(frame, live, row, masks, matches, group_overlay=group_overlay)
                 temporary = directory / "scene.tmp"
                 temporary.write_bytes(packet)
                 temporary.replace(directory / "scene.bin")
+                if history:
+                    history.submit(packet)
                 elapsed = time.perf_counter() - started
                 state(
                     "tracking",
                     frame_id=frame.frame_id,
                     method=LIVE_METHOD,
+                    history={"dropped_frames": history.dropped, "error": history.error} if history else None,
                     timings={
                         "processed_fps": 1 / elapsed,
                         "processing_ms": row["processing_ms"],
@@ -204,6 +234,7 @@ def run(directory: Path, config: dict):
                     },
                 )
                 last_id = frame.frame_id
+                displayed_frame = frame
             except Exception as exc:
                 paused = True
                 state("error", message=str(exc))
@@ -223,6 +254,8 @@ def run(directory: Path, config: dict):
             capture.join(timeout=2)
         if camera and camera.is_connected:
             camera.disconnect()
+        if history:
+            history.close()
 
 
 def main():

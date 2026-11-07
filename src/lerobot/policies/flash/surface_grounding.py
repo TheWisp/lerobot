@@ -672,6 +672,18 @@ class WholeSurfaceFit:
             "scene_depth_outlier_fraction": max(fractions),
             "scene_depth_exposed_weights": exposed_counts,
             "scene_depth_coherent_protrusion": any(coherent_protrusions),
+            # The first direction projects the map into the current image;
+            # subsequent directions project current measurements into each
+            # retained image. Keep these distinct for live failure diagnosis.
+            "scene_depth_views": [
+                {
+                    "frame_id": fit.observation.get("frame_id"),
+                    "direction": "map_to_current" if index == 0 else "current_to_retained",
+                    "outlier_fraction": fractions[index],
+                    "coherent_protrusion": coherent_protrusions[index],
+                }
+                for index, (fit, _) in enumerate(directions)
+            ],
         }
 
     def _coherent_protrusion(self, predicted, contradicted):

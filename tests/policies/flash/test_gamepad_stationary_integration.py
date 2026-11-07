@@ -9,7 +9,6 @@ import json
 import os
 from contextlib import nullcontext
 from dataclasses import asdict
-from functools import partial
 from itertools import islice
 from pathlib import Path
 
@@ -17,14 +16,14 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from benchmarks.flash_experiment_groups import GroupConfig, GroupHints
 from benchmarks.flash_experiment_inputs import samples
-from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig, GrowingSurfaceSession
-from lerobot.policies.flash.shared_image_tracking import SharedFrameTracker, SharedMatchingConfig
+from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
+from lerobot.policies.flash.motion_groups import GroupConfig
+from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
-from lerobot.policies.flash.surface_correspondence import robust_fit
+from lerobot.policies.flash.surface_frame_session import SurfaceFrameSession
 from lerobot.policies.flash.surface_observation import move
-from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession, load_ufm
+from lerobot.policies.flash.surface_tracking import load_ufm
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 ANNOTATION = Path(__file__).with_name("fixtures") / "gamepad_stationary.json"
@@ -41,96 +40,49 @@ def track_sequence(sequence, role, model, *, matching_config=None, surface_confi
 
 
 def _track_sequence(sequence, role, model, matching_config, surface_config, config, kernels, pool):
-    shared = SharedFrameTracker(matching_config or SharedMatchingConfig(), model)
-    preparation = SurfaceTrackingSession(
-        model,
-        shared_matching=shared,
-        record_correspondences=True,
-        motion_config=config.motion,
-        observation_config=config.observation,
-        shape_config=config.shape,
-        fit_kernels=kernels,
-        search_pool=pool,
-    )
-    estimator = GrowingSurfaceSession(
-        config.shape,
-        surface_config or GrowingSurfaceConfig(retain_unobserved_pose=True),
-        fit_kernels=kernels,
-        search_pool=pool,
-    )
-    groups = GroupHints(
-        GroupConfig(), shared_image_points=True, uncertainty_config=estimator.config.uncertainty
-    )
     rows, digest = [], hashlib.sha256()
-    for frame, masks in sequence:
-        for value in (frame.rgb, frame.depth, frame.intrinsics, frame.base_from_camera, *masks.values()):
-            digest.update(value.tobytes())
-        digest.update(np.float64(frame.source_time_s).tobytes())
-        scene = shared.update(frame, masks)
-        prepared = preparation.prepare(
-            frame.rgb, frame.metric_depth().astype(np.float32), masks[role], frame.intrinsics, frame.frame_id
-        )
-        if (
-            estimator.connected_observation is not None
-            and prepared.get("match_source_frame") != estimator.connected_frame
-            and prepared["status"] is None
-        ):
-            a, b = shared.pairs(estimator.connected_observation, prepared["current"], frame.intrinsics)
-            step, _, _ = robust_fit(a, b, config.motion)
-            prepared.update(step=step, point_pairs=(a, b), match_source_frame=estimator.connected_frame)
-        hint, group_details = groups.predict(
-            frame,
-            scene,
-            masks,
-            role,
-            estimator.reference_frame,
-            object_usable=prepared["current"]["usable"],
-            observation=prepared["current"] if prepared["status"] is None else None,
-            shape_config=config.shape,
-        )
-        result = estimator.update(
-            prepared,
-            frame.source_time_s,
-            hint=hint,
-            base_from_camera=frame.base_from_camera,
-            candidate_check=partial(
-                groups.compare_candidate,
-                frame,
-                masks[role],
-                hint,
-                observation=prepared["current"] if estimator.config.surface_priority else None,
-                shape_config=config.shape,
+    with SurfaceFrameSession(
+        [role],
+        model,
+        config,
+        kernels,
+        pool,
+        surface_experiment=surface_config or GrowingSurfaceConfig(retain_unobserved_pose=True),
+        group_experiment=GroupConfig(),
+        shared_matching_config=matching_config or SharedMatchingConfig(),
+        single_method="group_growing",
+        record_correspondences=True,
+    ) as engine:
+        for frame, masks in sequence:
+            for value in (frame.rgb, frame.depth, frame.intrinsics, frame.base_from_camera, *masks.values()):
+                digest.update(value.tobytes())
+            digest.update(np.float64(frame.source_time_s).tobytes())
+            row, _ = engine.step(frame, masks)
+            result = row["objects"][role]
+            rows.append(
+                {
+                    "status": result["group_growing_status"],
+                    "camera_from_reference": result["group_growing"],
+                    "diagnostics": result["group_growing_details"],
+                    "time_s": frame.source_time_s,
+                    "frame_id": frame.frame_id,
+                }
             )
-            if hint
-            else None,
-        )
-        groups.observe(
-            frame,
-            scene,
-            masks,
-            role,
-            result,
-            estimator.reference,
-            object_usable=prepared["current"]["usable"],
-        )
-        result["diagnostics"]["group"] = group_details
-        result["time_s"] = frame.source_time_s
-        result["frame_id"] = frame.frame_id
-        rows.append(result)
-        if frame.frame_id % 40 == 0:
-            print(f"recorded integration: frame {frame.frame_id}", flush=True)
-    return {
-        "rows": rows,
-        "reference": estimator.reference.tolist(),
-        "input_sha256": digest.hexdigest(),
-        "config": {
-            "matching": asdict(shared.config),
-            "surface": asdict(estimator.config),
-            "groups": asdict(groups.config),
-            "vision": asdict(config),
-        },
-        "matching_calls": shared.calls,
-    }
+            if frame.frame_id % 40 == 0:
+                print(f"recorded integration: frame {frame.frame_id}", flush=True)
+        estimator = engine.candidates["group_growing"][role]
+        return {
+            "rows": rows,
+            "reference": estimator.reference.tolist(),
+            "input_sha256": digest.hexdigest(),
+            "config": {
+                "matching": asdict(engine.shared.config),
+                "surface": asdict(estimator.config),
+                "groups": asdict(engine.scene_groups.config),
+                "vision": asdict(config),
+            },
+            "matching_calls": engine.shared.calls,
+        }
 
 
 def stationary_errors(report, last_frame):

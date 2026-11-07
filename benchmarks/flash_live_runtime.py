@@ -23,7 +23,6 @@ from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_runtime_benchmark import FitProfile
 from benchmarks.flash_surface_score import save_surface_version
 from benchmarks.flash_tracker_experiment import code_snapshot, load_ufm, score_case
-from lerobot.gui.flash_group_overlay import GroupOverlay
 from lerobot.gui.flash_live_scene import live_scene_packet
 from lerobot.policies.flash.appearance import Sam3MaskSource
 from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
@@ -69,7 +68,7 @@ def main():
             return current_masks
 
     source = SavedMasks()
-    overlays, statuses = defaultdict(GroupOverlay), defaultdict(Counter)
+    statuses = defaultdict(Counter)
     rows, predictions, digest = [], [], hashlib.sha256()
     kernels = compiled_kernels() if config.compiled_surface_fit else None
     pool = SearchPool(config.shape.batch_query_workers) if config.reuse_surface_search else None
@@ -99,7 +98,7 @@ def main():
                 started = time.perf_counter()
                 row, _, masks = live.step(frame)
                 matched = time.perf_counter()
-                packet = live_scene_packet(frame, live, row, masks, overlays)
+                packet = live_scene_packet(frame, live, row, masks)
                 ended = time.perf_counter()
                 # Evaluation/archival is outside the live latency measurement.
                 # Never feed labels or the labelled model into the session.

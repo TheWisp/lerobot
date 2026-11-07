@@ -1,20 +1,20 @@
 """Same measured frames must take the same path through live and offline adapters."""
 
 import json
-from collections import defaultdict
 from dataclasses import replace
 
 import numpy as np
 import pytest
 
 from benchmarks.flash_tracker_experiment import run_case
-from lerobot.gui.flash_group_overlay import GroupOverlay
+from lerobot.gui.flash_group_overlay import SceneGroupOverlay
 from lerobot.gui.flash_live_scene import live_scene_packet, loss_reason
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
+from lerobot.policies.flash.motion_groups import GroupConfig
 from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
-from lerobot.policies.flash.surface_group_hints import GroupConfig
 from lerobot.policies.flash.surface_session_config import defaults
+from lerobot.policies.flash.tracking_history import RollingHistory, decode_record, read_packet
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 from tests.policies.flash.test_shared_image_tracking import TranslationModel, frame, masks
 
@@ -136,19 +136,36 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
     live_model, recorded_model = TranslationModel(), TranslationModel()
     live = LiveSurfaceSession(settings, source, live_model)
     live_rows, maps = [], []
+    history = RollingHistory(tmp_path / "history", reserve_bytes=0)
+    group_overlay = SceneGroupOverlay()
     for i, (f, _) in enumerate(frames):
-        row, _, mask = live.step(f)
+        row, matches, mask = live.step(f)
         live_rows.append(row)
         maps.append(
             {role: live.engine.candidates[method][role].store.points.copy() for role in source.prompts}
         )
-        packet = live_scene_packet(f, live, row, mask, defaultdict(GroupOverlay))
+        packet = live_scene_packet(f, live, row, mask, matches, group_overlay=group_overlay)
+        history.submit(packet)
+        history.queue.join()
         import struct
 
         n = struct.unpack("<I", packet[:4])[0]
         header = json.loads(packet[4 : 4 + n])
         assert header["frame"] == f.frame_id
         assert header["time_s"] == f.source_time_s
+        assert [g["id"] for g in header["scene_group_tracks"]] == [
+            g["id"] for g in row.get("scene_group_tracks", [])
+        ]
+        assert all("links" in g for g in header["scene_group_tracks"])
+        assert all("links" not in g for g in row.get("scene_group_tracks", []))
+        for role, obj in header["objects"].items():
+            assert (
+                obj["diagnostics"]["map_version_after"]
+                == row["objects"][role][method + "_details"]["map_version_after"]
+            )
+            assert "group" not in obj["diagnostics"]  # Already in group_tracks.
+            if obj["pose"] is not None:
+                assert obj["diagnostics"]["unpublished_camera_from_reference"] is None
         if i == 2 and header["objects"]["left"]["status"] == "lost":
             assert header["objects"]["left"]["reason"] == "Object mask missing"
             assert header["objects"]["left"]["reason_code"] == "no_mask"
@@ -159,6 +176,7 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
     with pytest.raises(ValueError, match="increase"):
         live.engine.step(frames[-1][0], frames[-1][1])
     live.close()
+    history.close()
     case = {
         "id": "source-parity",
         "kind": "recorded_rgbd",
@@ -180,10 +198,17 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
     )
     recorded = [json.loads(line) for line in (tmp_path / "recorded/frames.jsonl").read_text().splitlines()]
     for i, (actual, expected) in enumerate(zip(live_rows, recorded, strict=True)):
+        _, retained_masks, evidence, _ = decode_record(
+            read_packet(tmp_path / "history", frames[i][0].frame_id)
+        )
+        assert evidence == actual  # Includes exact timings from that run; a rerun has different timings.
+        for role, mask in frames[i][1].items():
+            np.testing.assert_array_equal(retained_masks[role], mask)
         for role in source.prompts:
             a, b = actual["objects"][role], expected["objects"][role]
             for key in (method, method + "_status", method + "_details"):
                 assert a[key] == b[key]
+                assert evidence["objects"][role][key] == b[key]
             version = b[method + "_details"]["map_version_after"]
             with np.load(
                 tmp_path / "recorded/surface_models" / method / role / f"{version:06d}.npz"
@@ -207,75 +232,58 @@ def test_new_selection_has_no_old_surface_or_point_memory():
     new.close()
 
 
-def test_group_checks_and_matching_share_the_current_frame_geometry(monkeypatch):
-    from lerobot.policies.flash.experimental_surface_session import ImageConditionedFit
-    from lerobot.policies.flash.surface_group_hints import GroupHints
+def test_scene_groups_update_once_before_all_objects_and_survive_rejected_pose(monkeypatch):
+    from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceSession
+    from lerobot.policies.flash.motion_groups import SceneMotionGroups
+    from lerobot.policies.flash.object_group_association import ObjectGroupAssociation
 
-    prepared = {}
-    consumed = []
-    original_predict = GroupHints.predict
-    original_correct = ImageConditionedFit.correct_surface_first
-
-    def predict(self, *args, **kwargs):
-        geometry = kwargs.get("prepared_geometry")
-        if geometry is not None:
-            prepared[id(geometry.observation)] = geometry
-        return original_predict(self, *args, **kwargs)
-
-    def correct(self, *args, **kwargs):
-        assert self.geometry is prepared[id(self.observation)]
-        consumed.append(self.geometry)
-        return original_correct(self, *args, **kwargs)
-
-    monkeypatch.setattr(GroupHints, "predict", predict)
-    monkeypatch.setattr(ImageConditionedFit, "correct_surface_first", correct)
     frames = list(sequence())
-    live = LiveSurfaceSession(defaults(), SuppliedMasks(frames))
-    try:
-        for frame, _ in frames:
-            live.step(frame)
-    finally:
-        live.close()
-    assert len(consumed) >= 2
-    assert len({id(g.observation) for g in consumed}) == len(consumed)
+    events = []
+    update = SceneMotionGroups.update
+    predict = ObjectGroupAssociation.query
+    fit = GrowingSurfaceSession.update
 
+    def group_update(self, scene):
+        events.append((scene.frame_id, "group"))
+        return update(self, scene)
 
-def test_worker_module_has_a_real_cli_entrypoint():
-    import os
-    import subprocess
-    import sys
+    def query(self, snapshot, frame, *args, **kwargs):
+        assert snapshot.frame_id == frame.frame_id
+        events.append((frame.frame_id, "query"))
+        return predict(self, snapshot, frame, *args, **kwargs)
 
-    result = subprocess.run(
-        [sys.executable, "-m", "lerobot.policies.flash.live_surface_worker", "--help"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=os.environ.copy(),
-    )
-    assert result.returncode == 0
-    assert "directory" in result.stdout and "usage:" in result.stdout
+    monkeypatch.setattr(SceneMotionGroups, "update", group_update)
+    monkeypatch.setattr(ObjectGroupAssociation, "query", query)
 
+    def run(reject):
+        live = LiveSurfaceSession(defaults(), SuppliedMasks(frames))
+        snapshots = []
 
-def test_shared_defaults_enable_the_validated_geometry_guards():
-    settings = defaults()
-    config = VisionPipelineConfig.from_dict(settings["config"])
-    surface = GrowingSurfaceConfig(**settings["surface_experiment"])
-    assert settings["shared_matching"]["backend"] == "lk"
-    assert config.shape.scene_depth_constraints
-    assert config.shape.prefer_observed_overlap
-    assert surface.partial_surface_matching
-    assert not surface.uncertainty.reset_on_geometry_conflict
+        def result(self, prepared, *args, **kwargs):
+            value = fit(self, prepared, *args, **kwargs)
+            if reject and prepared["frame_id"] > 0:
+                value = {**value, "status": "lost", "camera_from_reference": None}
+            return value
 
+        monkeypatch.setattr(GrowingSurfaceSession, "update", result)
+        try:
+            for frame, _ in frames:
+                live.step(frame)
+                snapshot = live.engine.scene_groups.frame
+                snapshots.append(
+                    {gid: (g.ids.copy(), g.base_xyz.copy()) for gid, g in snapshot.groups.items()}
+                )
+        finally:
+            live.close()
+        return snapshots
 
-def test_settings_reference_matches_the_actual_shared_defaults():
-    from benchmarks.flash_pipeline_settings import catalog
-
-    def flatten(value, prefix=""):
-        for key, item in value.items():
-            name = f"{prefix}.{key}" if prefix else key
-            if isinstance(item, dict):
-                yield from flatten(item, name)
-            else:
-                yield name, item
-
-    assert {row["path"]: row["default"] for row in catalog()} == dict(flatten(defaults()))
+    baseline, rejected = run(False), run(True)
+    assert any(baseline), "The invariant must exercise real groups"
+    for a, b in zip(baseline, rejected, strict=True):
+        assert a.keys() == b.keys()
+        for gid in a:
+            np.testing.assert_array_equal(a[gid][0], b[gid][0])
+            np.testing.assert_allclose(a[gid][1], b[gid][1])
+    for sample, _ in frames:
+        order = [event for index, event in events if index == sample.frame_id]
+        assert order == ["group", "query", "query"] * 2
