@@ -140,3 +140,18 @@ Use the experiment's virtual environment if the project environment lacks UFM.
 The test writes diagnostics to pytest's temporary directory, never to the demo.
 It skips explicitly if the data/model/CUDA prerequisite is missing. It uses the
 saved masks; segmentation generation is outside this test.
+
+`green_controller_retained_view_20261107.npz` stores two cropped RGB-D frames
+(430 and 436) with their SAM masks from the saved live clip
+`saved-d6d3d3b38e7944e49c5b80be224f8cb4` (green game controller, a hand
+approaching its right edge), the 758-point saved surface the live fit used at
+frame 436, the pose accepted at frame 430, the group prediction checked at
+frame 436, and the pipeline settings. Neither object nor camera moved between
+the frames (0.02 mm at the surface centre). Fitting the surface against the
+current mask and depth alone passes (99.3% overlap, 1.31 mm median), while the
+retained frame-430 depth view rejected the prediction live: 22 of 2754 current
+points, all inside both masks and 3-7 px from the silhouette, met frame-430 rim
+depth 4-10 mm farther than frame 436 and the saved surface read there. The crop
+(x 400-664, y 368-576, offsets multiples of the validation tile) reproduces the
+recorded exposed weights exactly. The provenance array names the clip, frames,
+recorded verdicts and code commit. No robot state or full episode is stored.
