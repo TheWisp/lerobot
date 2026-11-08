@@ -159,6 +159,104 @@
         letter-spacing: 0.08em;
         text-transform: uppercase;
       }
+      .depth-diagram {
+        margin: 0 0 20px;
+        padding: 20px;
+        border: 1px solid #c7d6e4;
+        border-radius: 18px;
+        background: white;
+      }
+      .depth-capture,
+      .depth-join {
+        padding: 13px 18px;
+        border-radius: 12px;
+        background: #e8eff6;
+        text-align: center;
+      }
+      .depth-capture strong,
+      .depth-join strong {
+        display: block;
+        margin-top: 3px;
+      }
+      .depth-parallel {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 2.4fr);
+        gap: 14px;
+        margin: 24px 0;
+      }
+      .depth-lane {
+        position: relative;
+        padding: 15px;
+        border: 1px solid #b7cfdf;
+        border-radius: 13px;
+        background: #f5f9fd;
+      }
+      .depth-lane::before {
+        content: "↓";
+        position: absolute;
+        top: -25px;
+        left: 50%;
+        color: #67849d;
+        font-size: 20px;
+      }
+      .depth-lane::after {
+        content: "↓";
+        position: absolute;
+        bottom: -27px;
+        left: 50%;
+        color: #67849d;
+        font-size: 20px;
+      }
+      .depth-lane small {
+        display: block;
+        margin-bottom: 9px;
+        color: #416b98;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .depth-lane p,
+      .depth-option span {
+        color: #526a7f;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .depth-lane p {
+        margin: 8px 0 0;
+      }
+      .depth-options {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .depth-option {
+        padding: 12px;
+        border: 1px solid #c7d6e4;
+        border-radius: 10px;
+        background: white;
+      }
+      .depth-option strong,
+      .depth-option span {
+        display: block;
+      }
+      .depth-option strong {
+        margin-bottom: 6px;
+        font-size: 14px;
+      }
+      .depth-select {
+        margin-top: 10px;
+        color: #315f87;
+        font-size: 14px;
+        font-weight: 750;
+        text-align: center;
+      }
+      .depth-join {
+        background: #eaf3fc;
+      }
+      .depth-join .metric-link {
+        display: inline-block;
+        margin-top: 9px;
+      }
       .measure {
         border-top: 5px solid #3c78b6;
       }
@@ -503,6 +601,14 @@
         .metrics {
           grid-template-columns: 1fr;
         }
+        .depth-parallel,
+        .depth-options {
+          grid-template-columns: 1fr;
+        }
+        .depth-lane::before,
+        .depth-lane::after {
+          display: none;
+        }
         .source {
           min-height: 0;
         }
@@ -553,8 +659,9 @@
         <strong>Time key:</strong> <code>t</code> is the frame being processed;
         <code>t−1</code> is the previous processed frame;
         <code>&lt;t</code> means any earlier frame. <code>O[t]</code> is
-        measured surface now; <code>S[&lt;t]</code> is the confirmed surface
-        stored before now; <code>H[t]</code> is an inferred motion hint;
+        the current mask plus selected depth (sensor or model);
+        <code>S[&lt;t]</code> is the confirmed surface stored before now;
+        <code>H[t]</code> is an inferred motion hint;
         <code>P[t]</code> is the estimated pose published for now.
       </p>
 
@@ -566,9 +673,44 @@
           These are different kinds of evidence. A tracked image point suggests
           motion; it is not a new measurement of the object's shape.
         </p>
+        <div class="depth-diagram" aria-label="Live mask and depth paths for frame t">
+          <div class="depth-capture">
+            Camera frame <code>t</code>
+            <strong>RGB + aligned RealSense depth; infrared pair when stereo is selected</strong>
+          </div>
+          <div class="depth-parallel">
+            <div class="depth-lane">
+              <small>Mask path</small>
+              <strong>RGB[t] → SAM3 → visible mask[t]</strong>
+              <p>Video reruns normally load a saved or dataset mask for each frame.</p>
+            </div>
+            <div class="depth-lane">
+              <small>Choose one live depth source · learned models overlap SAM3</small>
+              <div class="depth-options">
+                <div class="depth-option">
+                  <strong>RealSense sensor · default</strong>
+                  <span>Aligned sensor depth[t]; optional spatial, temporal and hole-filling filters.</span>
+                </div>
+                <div class="depth-option">
+                  <strong>LingBot-Depth-v0.5</strong>
+                  <span>RGB[t] + aligned sensor depth[t] → refined depth.</span>
+                </div>
+                <div class="depth-option">
+                  <strong>Fast-FoundationStereo<br />Lite Any Stereo V2-S/M/L/H</strong>
+                  <span>IR left/right[t] → stereo depth → project onto RGB[t].</span>
+                </div>
+              </div>
+              <div class="depth-select">One selected color-aligned depth map[t]</div>
+            </div>
+          </div>
+          <div class="depth-join">
+            <strong>mask[t] + selected depth[t] → O[t]</strong>
+            <a class="metric-link" href="#metric-depth">Depth source · valid pixels · model time</a>
+          </div>
+        </div>
         <div class="sources">
           <div class="source measure">
-            <small>Current frame t · measured image and selected depth</small>
+            <small>Current frame t · image and selected depth</small>
             <h3>O[t] · mask + depth</h3>
             <p>
               The segmentation mask marks visible object pixels. Cleaned depth
@@ -576,18 +718,10 @@
               object cannot be.
             </p>
             <p style="margin-top: 10px; font-size: 14px">
-              The live camera first aligns sensor depth to the image. Optional
-              camera filters run before cleanup. An opt-in LingBot-Depth-v0.5 model can
-              refine that RGB-D frame; opt-in Fast-FoundationStereo or Lite Any
-              Stereo V2-S/M/L/H instead use a synchronized infrared pair. These are model
-              estimates, not new sensor measurements. The selected map feeds
-              this frame's fit. Live history retains sensor and model maps
-              separately, and the Depth and 3D views can compare them.
-            </p>
-            <p style="margin-top: 10px; font-size: 14px">
-              <b>Live:</b> SAM3. <b>Video reruns:</b> by default, load masks
-              saved during earlier segmentation (our FLASH demos) or supplied by
-              the dataset (such as YCB), one mask per frame.
+              Learned depth is an estimate, distinct from sensor measurement.
+              Live history retains the sensor and selected model maps separately
+              for comparison in Depth and 3D views. Video examples read the
+              depth stored with each frame.
             </p>
             <a class="metric-link" href="#metric-input"
               >Clean point count · 3D spread</a
@@ -1048,6 +1182,12 @@
           tracking. The same frame result is retained in saved video output or live rolling history.
         </p>
         <div class="metrics">
+          <article id="metric-depth">
+            <h3>Depth[t] · what reached the observation?</h3>
+            <p><b>Read:</b> selected depth source, valid versus missing depth pixels, applied camera filters, and <code>depth_ms</code> for a learned model.</p>
+            <p><b>Choice:</b> RealSense sensor by default; LingBot-Depth-v0.5 or one stereo model is opt-in. Model estimates do not turn sensor holes into measured depth.</p>
+            <p><b>Tune:</b> depth source before camera start; spatial, temporal and hole-filling filters while running.</p>
+          </article>
           <article id="metric-input">
             <h3>O[t] · can we attempt a fit?</h3>
             <p>

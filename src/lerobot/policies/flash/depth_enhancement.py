@@ -62,6 +62,30 @@ def _valid_output(depth: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     return np.where(np.isfinite(depth) & (depth > 0), depth, 0).astype(np.float32)
 
 
+def _stereo_disparity_gpu(session, inputs):
+    """Keep supported TensorRT/ONNX outputs on CUDA; test doubles use run()."""
+    if hasattr(session, "run_gpu"):
+        return session.run_gpu(None, inputs)[0]
+    if not hasattr(session, "io_binding"):
+        return None
+    import torch
+
+    output = session.get_outputs()[0]
+    if output.name != "disparity" or output.type != "tensor(float)":
+        raise ValueError("Stereo ONNX output must be FP32 disparity")
+    # Explicit trial ONNX exports may have symbolic output dimensions. Let
+    # ONNX Runtime allocate those and use the existing CPU projection path.
+    if any(not isinstance(dimension, int) for dimension in output.shape):
+        return None
+    result = torch.empty(tuple(output.shape), device="cuda:0", dtype=torch.float32)
+    binding = session.io_binding()
+    for name, value in inputs.items():
+        binding.bind_cpu_input(name, value)
+    binding.bind_output("disparity", "cuda", 0, np.float32, tuple(result.shape), result.data_ptr())
+    session.run_with_iobinding(binding)
+    return result
+
+
 def color_aligned_stereo_depth(
     left_depth_m: np.ndarray,
     left_k: np.ndarray,
@@ -90,12 +114,18 @@ def color_aligned_stereo_depth(
     u = color_k[0, 0] * moved[0, good] / cz[good] + color_k[0, 2]
     v = color_k[1, 1] * moved[1, good] / cz[good] + color_k[1, 2]
     cz = cz[good].astype(np.float32)
-    out = np.full(color_shape, np.inf, np.float32)
+    pixel_x = np.floor(u).astype(np.int32)
+    pixel_y = np.floor(v).astype(np.int32)
+    color_height, color_width = color_shape
+    # Flatten the z-buffer so each splat reuses the same projected pixels.
+    out = np.full(color_height * color_width, np.inf, np.float32)
+    base_index = pixel_y * color_width + pixel_x
     for dx in (0, 1):
+        x_inside = (pixel_x + dx >= 0) & (pixel_x + dx < color_width)
         for dy in (0, 1):
-            pixel_x, pixel_y = np.floor(u).astype(np.int32) + dx, np.floor(v).astype(np.int32) + dy
-            inside = (pixel_x >= 0) & (pixel_y >= 0) & (pixel_x < color_shape[1]) & (pixel_y < color_shape[0])
-            np.minimum.at(out, (pixel_y[inside], pixel_x[inside]), cz[inside])
+            inside = x_inside & (pixel_y + dy >= 0) & (pixel_y + dy < color_height)
+            np.minimum.at(out, base_index[inside] + dy * color_width + dx, cz[inside])
+    out = out.reshape(color_shape)
     out[~np.isfinite(out)] = 0
     return fill_projection_gaps(out)
 
@@ -120,6 +150,59 @@ def fill_projection_gaps(depth: np.ndarray, *, max_neighbor_spread_m: float = 0.
     result = depth.copy()
     result[fill] = total[fill] / count[fill]
     return result
+
+
+def color_aligned_stereo_depth_gpu(left_depth_m, left_k, color_k, color_from_left, color_shape):
+    """Project GPU stereo depth to RGB, then copy only the final map to CPU."""
+    import torch
+    import torch.nn.functional as functional
+
+    if not left_depth_m.is_cuda:
+        raise ValueError("GPU stereo projection requires depth on CUDA")
+    height, width = left_depth_m.shape
+    color_height, color_width = color_shape
+    y_grid, x_grid = torch.meshgrid(
+        torch.arange(height, device=left_depth_m.device),
+        torch.arange(width, device=left_depth_m.device),
+        indexing="ij",
+    )
+    valid = torch.isfinite(left_depth_m) & (left_depth_m > 0)
+    x = x_grid[valid].double()
+    y = y_grid[valid].double()
+    z = left_depth_m[valid].double()
+    left_k = np.asarray(left_k)
+    color_k = np.asarray(color_k)
+    points = torch.stack(
+        ((x - left_k[0, 2]) * z / left_k[0, 0], (y - left_k[1, 2]) * z / left_k[1, 1], z), dim=0
+    )
+    transform = torch.as_tensor(color_from_left, device=left_depth_m.device, dtype=torch.float64)
+    moved = transform[:3, :3] @ points + transform[:3, 3:4]
+    cz = moved[2]
+    positive = torch.isfinite(cz) & (cz > 0)
+    u = color_k[0, 0] * moved[0, positive] / cz[positive] + color_k[0, 2]
+    v = color_k[1, 1] * moved[1, positive] / cz[positive] + color_k[1, 2]
+    depth = cz[positive].float()
+    pixel_x = torch.floor(u).long()
+    pixel_y = torch.floor(v).long()
+    base_index = pixel_y * color_width + pixel_x
+    out = torch.full(
+        (color_height * color_width,), float("inf"), device=left_depth_m.device, dtype=torch.float32
+    )
+    for dx in (0, 1):
+        x_inside = (pixel_x + dx >= 0) & (pixel_x + dx < color_width)
+        for dy in (0, 1):
+            inside = x_inside & (pixel_y + dy >= 0) & (pixel_y + dy < color_height)
+            out.scatter_reduce_(0, base_index[inside] + dy * color_width + dx, depth[inside], reduce="amin")
+    out = torch.where(torch.isfinite(out), out, 0).reshape(1, 1, color_height, color_width)
+
+    # Match fill_projection_gaps: only one-pixel sampling gaps on a locally flat surface.
+    measured = out > 0
+    count = functional.avg_pool2d(measured.float(), 3, stride=1, padding=1) * 9
+    total = functional.avg_pool2d(out, 3, stride=1, padding=1) * 9
+    near = -functional.max_pool2d(-torch.where(measured, out, 1e6), 3, stride=1, padding=1)
+    far = functional.max_pool2d(torch.where(measured, out, -1e6), 3, stride=1, padding=1)
+    fill = (~measured) & (count >= 3) & ((far - near) <= 0.005)
+    return torch.where(fill, total / count.clamp_min(1), out)[0, 0].cpu().numpy()
 
 
 class LingBotDepth:
@@ -220,6 +303,27 @@ class FoundationStereoDepth:
         )
 
     @staticmethod
+    def _aligned_output_gpu(frame: DepthInput, disparity, source: str) -> DepthOutput:
+        import torch
+
+        stereo = frame.stereo
+        left_depth = torch.where(
+            disparity > 0.01,
+            (float(stereo.left_intrinsics[0, 0] * stereo.baseline_m) / disparity.double()).float(),
+            0,
+        )
+        aligned = color_aligned_stereo_depth_gpu(
+            left_depth,
+            stereo.left_intrinsics,
+            frame.color_intrinsics,
+            stereo.color_from_left,
+            frame.sensor_depth_m.shape,
+        )
+        return DepthOutput(
+            _valid_output(aligned, frame.sensor_depth_m.shape), source, frame.sensor_depth_m > 0
+        )
+
+    @staticmethod
     def _require_stereo(frame: DepthInput) -> StereoInput:
         stereo = frame.stereo
         if stereo is None:
@@ -239,13 +343,13 @@ class FoundationStereoDepth:
 
     def predict(self, frame: DepthInput) -> DepthOutput:
         stereo = self._require_stereo(frame)
-        result = self.session.run(
-            None,
-            {
-                "left_image": self._image(stereo.left),
-                "right_image": self._image(stereo.right),
-            },
-        )[0]
+        inputs = {"left_image": self._image(stereo.left), "right_image": self._image(stereo.right)}
+        gpu_result = _stereo_disparity_gpu(self.session, inputs)
+        if gpu_result is not None:
+            return self._aligned_output_gpu(
+                frame, gpu_result[0, 0, : stereo.left.shape[0], : stereo.left.shape[1]], self.source
+            )
+        result = self.session.run(None, inputs)[0]
         disparity = result[0, 0, : stereo.left.shape[0], : stereo.left.shape[1]]
         return self._aligned_output(frame, disparity, self.source)
 
@@ -300,6 +404,9 @@ class _TensorRtSession:
         self.output_torch_dtype = torch.float32 if output_dtype == trt.DataType.FLOAT else torch.float16
 
     def run(self, output_names, inputs):
+        return [self.run_gpu(output_names, inputs)[0].cpu().numpy()]
+
+    def run_gpu(self, output_names, inputs):
         if output_names not in (None, ["disparity"]):
             raise ValueError("Unsupported TensorRT output request")
         if set(inputs) != set(self.inputs):
@@ -322,7 +429,7 @@ class _TensorRtSession:
             self.context.set_tensor_address("disparity", int(result.data_ptr()))
             if not self.context.execute_async_v3(self.stream.cuda_stream):
                 raise RuntimeError("TensorRT Fast-FoundationStereo inference failed")
-            output = result.float().cpu().numpy()
+            output = result.float()
         self.stream.synchronize()
         return [output]
 
@@ -357,13 +464,11 @@ class LiteAnyStereoV2Depth(FoundationStereoDepth):
 
     def predict(self, frame: DepthInput) -> DepthOutput:
         stereo = self._require_stereo(frame)
-        result = self.session.run(
-            None,
-            {
-                "left": self._image(stereo.left),
-                "right": self._image(stereo.right),
-            },
-        )[0]
+        inputs = {"left": self._image(stereo.left), "right": self._image(stereo.right)}
+        gpu_result = _stereo_disparity_gpu(self.session, inputs)
+        if gpu_result is not None:
+            return self._aligned_output_gpu(frame, gpu_result[0, 0, :, 8:-8], self.source)
+        result = self.session.run(None, inputs)[0]
         return self._aligned_output(frame, result[0, 0, :, 8:-8], self.source)
 
 
