@@ -1,6 +1,9 @@
 """Same measured frames must take the same path through live and offline adapters."""
 
+import gc
 import json
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from threading import Event
@@ -11,7 +14,7 @@ import pytest
 from benchmarks.flash_tracker_experiment import run_case
 from lerobot.gui.flash_group_overlay import SceneGroupOverlay
 from lerobot.gui.flash_live_scene import live_scene_packet, loss_reason
-from lerobot.policies.flash.depth_enhancement import DepthOutput
+from lerobot.policies.flash.depth_enhancement import DepthOutput, tracking_frame_with_depth_source
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
 from lerobot.policies.flash.live_surface_worker import _prepare_measurements
@@ -45,6 +48,25 @@ def test_live_loss_reports_rejected_point_group_prediction():
         "prediction_geometry": {"has_visible_overlap": False, "accepted": False},
     }
     assert loss_reason("lost", details) == "Prediction misses the visible surface"
+
+
+def test_live_startup_heap_excludes_imports_without_disabling_new_cycle_collection():
+    # The policy is process-wide, so verify it in an isolated worker process.
+    code = """
+import gc
+import weakref
+from lerobot.policies.flash.live_surface_worker import _freeze_startup_heap
+_freeze_startup_heap()
+assert gc.isenabled() and gc.get_freeze_count() > 0
+class Node: pass
+node = Node()
+node.cycle = node
+ref = weakref.ref(node)
+del node
+gc.collect()
+assert ref() is None
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=30)
 
 
 def sequence():
@@ -90,6 +112,15 @@ def test_live_timing_command_loads_the_selected_image_matcher(tmp_path, monkeypa
         return model
 
     monkeypatch.setattr(runtime, "load_ufm", load)
+    enabled_before = gc.isenabled()
+    gc_during_frames = []
+    original_step = LiveSurfaceSession.step
+
+    def step_with_gc_check(self, *args, **kwargs):
+        gc_during_frames.append(gc.isenabled())
+        return original_step(self, *args, **kwargs)
+
+    monkeypatch.setattr(LiveSurfaceSession, "step", step_with_gc_check)
     settings = defaults()
     settings["shared_matching"]["backend"] = backend
     settings["config"]["compiled_surface_fit"] = False
@@ -116,8 +147,13 @@ def test_live_timing_command_loads_the_selected_image_matcher(tmp_path, monkeypa
     runtime.main()
     report = json.loads((output / "summary.json").read_text())
     assert report["frames"] == 5
+    archived = [json.loads(line) for line in (output / "frames.jsonl").read_text().splitlines()]
+    assert [row["frame"] for row in archived] == list(range(5))
+    assert all(set(row["objects"]) == {"left", "right"} for row in archived)
     assert loads == (["ufm"] if backend == "ufm" else [])
     assert model.calls == (4 if backend == "ufm" else 0)
+    assert gc_during_frames == [enabled_before] * 5
+    assert gc.isenabled() == enabled_before
 
 
 @pytest.mark.parametrize("backend", ["lk", "ufm"])
@@ -131,7 +167,14 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
     # Stub just GPU neural inference; all tracking/fitting/validation is real.
     monkeypatch.setattr(torch.Tensor, "cuda", lambda self: self)
     frames = list(sequence())
-    monkeypatch.setattr("benchmarks.flash_tracker_experiment.samples", lambda _: iter(frames))
+    enabled_before = gc.isenabled()
+
+    def recorded_frames(_):
+        for item in frames:
+            assert gc.isenabled() == enabled_before
+            yield item
+
+    monkeypatch.setattr("benchmarks.flash_tracker_experiment.samples", recorded_frames)
     settings = defaults()
     settings["config"]["shape"]["registration"]["backend"] = matcher
     settings["shared_matching"]["backend"] = backend
@@ -211,6 +254,7 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
         group_experiment=GroupConfig.from_dict(settings["group_experiment"]),
         shared_matching_config=SharedMatchingConfig.from_dict(settings["shared_matching"]),
     )
+    assert gc.isenabled() == enabled_before
     recorded = [json.loads(line) for line in (tmp_path / "recorded/frames.jsonl").read_text().splitlines()]
     for i, (actual, expected) in enumerate(zip(live_rows, recorded, strict=True)):
         _, retained_masks, evidence, _ = decode_record(
@@ -260,6 +304,78 @@ def test_live_mask_measurement_uses_raw_frame_and_rejects_another_depth_frame(mo
         live.close()
 
 
+def test_saved_camera_history_replays_through_the_live_frame_session(tmp_path, monkeypatch):
+    import sys
+
+    from benchmarks import flash_live_runtime as runtime
+
+    settings = defaults()
+    settings["config"]["compiled_surface_fit"] = False
+    settings["config"]["reuse_surface_search"] = False
+    frames = [
+        (replace(current, frame_id=10 + 2 * i), measured)
+        for i, (current, measured) in enumerate(list(sequence())[:3])
+    ]
+    source = SuppliedMasks(frames)
+    recording = tmp_path / "recording"
+    recording.mkdir()
+    (recording / "config.json").write_text(json.dumps({"pipeline_settings": settings}))
+    history = RollingHistory(recording, reserve_bytes=0)
+    original = LiveSurfaceSession(settings, source)
+    expected = []
+    for current, _ in frames:
+        row, matches, masks = original.step(current)
+        expected.append(row)
+        history.submit_frame(current)
+        history.queue.join()
+        history.attach_result(live_scene_packet(current, original, row, masks, matches, rgb_format="jpeg"))
+        history.queue.join()
+    history.submit_frame(replace(frame(3), frame_id=16))  # Capture without a tracking tick.
+    history.queue.join()
+    original.close()
+    history.close()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "flash-live-runtime",
+            "--recording",
+            str(recording),
+            "--output",
+            str(tmp_path / "replayed"),
+            "--frames",
+            "3",
+        ],
+    )
+    runtime.main()
+    report = json.loads((tmp_path / "replayed/summary.json").read_text())
+    assert report["source_recording"] == str(recording)
+    assert report["depth_source"] == "sensor"
+    assert report["recorded_camera_frames"] == 4
+    assert report["recorded_tracking_frames"] == 3
+    replayed = [json.loads(line) for line in (tmp_path / "replayed/frames.jsonl").read_text().splitlines()]
+    saved_packet = read_packet(recording, 10)
+    metadata_length = int.from_bytes(saved_packet[:4], "little")
+    assert json.loads(saved_packet[4 : 4 + metadata_length])["rgb_format"] == "raw_rgb8"
+    np.testing.assert_array_equal(decode_record(saved_packet)[0].rgb, frames[0][0].rgb)
+    assert [row["frame"] for row in replayed] == [10, 12, 14]
+    for role in source.prompts:
+        measured_availability = sum(row["objects"][role]["group_growing"] is not None for row in replayed[1:])
+        assert report["quality"]["roles"][role]["reference_frame"] == 10
+        assert (
+            report["quality"]["roles"][role]["methods"]["group_growing"]["available_after_initialization"]
+            == measured_availability
+        )
+    for before, after in zip(expected, replayed, strict=True):
+        for role in source.prompts:
+            assert (
+                before["objects"][role]["group_growing_status"]
+                == after["objects"][role]["group_growing_status"]
+            )
+            assert before["objects"][role]["group_growing"] == after["objects"][role]["group_growing"]
+
+
 def test_learned_depth_and_sam_measure_the_same_frame_concurrently():
     captured = frame(7)
     mask_started, depth_started = Event(), Event()
@@ -285,6 +401,24 @@ def test_learned_depth_and_sam_measure_the_same_frame_concurrently():
     np.testing.assert_array_equal(tracking_frame.depth, captured.depth + 2)
     np.testing.assert_array_equal(tracking_frame.depth_before_filters, captured.depth)
     assert depth_ms >= 0
+
+
+def test_live_and_recorded_depth_selection_preserve_camera_measurement():
+    measured = frame(6)
+
+    class Depth:
+        def predict(self, incoming):
+            np.testing.assert_array_equal(incoming.sensor_depth_m, measured.metric_depth())
+            return DepthOutput(incoming.sensor_depth_m + 0.002, "fixture", measured.depth > 0)
+
+    selected = tracking_frame_with_depth_source(measured, Depth())
+    np.testing.assert_array_equal(selected.depth, measured.depth + 2)
+    np.testing.assert_array_equal(selected.depth_before_filters, measured.depth)
+    assert selected.frame_id == measured.frame_id
+
+    metric = replace(measured, depth=measured.metric_depth(), depth_m_per_unit=1.0)
+    selected_metric = tracking_frame_with_depth_source(metric, Depth())
+    np.testing.assert_allclose(selected_metric.depth, metric.depth + 0.002, rtol=0, atol=1e-7)
 
 
 def test_sensor_depth_does_not_start_a_second_mask_path():

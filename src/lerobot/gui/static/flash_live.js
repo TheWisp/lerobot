@@ -467,7 +467,7 @@ async function displayFlashLivePacket(buffer, generation, request, replay=false)
             rgba[j]=raw[i];rgba[j+1]=raw[i+1];rgba[j+2]=raw[i+2];rgba[j+3]=255;
         }
         bitmap=await createImageBitmap(new ImageData(rgba,packet.camera.width,packet.camera.height));
-    }else bitmap=await createImageBitmap(new Blob([rgb],{type:'image/png'}));
+    }else bitmap=await createImageBitmap(new Blob([rgb],{type:packet.rgb_format==='jpeg'?'image/jpeg':'image/png'}));
     if(!flashLive.visible || generation!==flashLive.generation || request!==(flashLive.historyRequest||0)){bitmap.close();return;}
     flashLive.bitmap?.close();flashLive.bitmap=bitmap;flashLive.packet=packet;flashLive.previewDepth=null;
     flashLive.frame={frame_id:packet.frame, frozen:false};

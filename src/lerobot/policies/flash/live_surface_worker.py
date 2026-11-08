@@ -7,6 +7,7 @@ RGB-D frame, never a newer preview image. Name/click selection starts a fresh se
 from __future__ import annotations
 
 import contextlib
+import gc
 import json
 import signal
 import sys
@@ -14,7 +15,6 @@ import time
 import traceback
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
@@ -22,7 +22,7 @@ from threading import Event, Lock, Thread
 import cv2
 import numpy as np
 
-from .depth_enhancement import DepthInput, StereoInput, make_depth_source, needs_stereo_pair
+from .depth_enhancement import make_depth_source, needs_stereo_pair, tracking_frame_with_depth_source
 from .live_surface_io import (
     image_snapshot,
     new_selection,
@@ -39,6 +39,16 @@ from .tracking_history import RollingHistory
 from .vision_pipeline import VisionPipelineConfig
 
 
+def _freeze_startup_heap():
+    """Keep process-lifetime imports out of live GC scans.
+
+    This worker serves one camera session and exits on Stop. Collect startup
+    cycles first; later SAM sessions and per-frame objects still use normal GC.
+    """
+    gc.collect()
+    gc.freeze()
+
+
 def _prepare_measurements(frame, live, depth_source, stereo_geometry, mask_executor):
     """Join the same frame's SAM mask and optional learned depth before fitting."""
     if depth_source is None:
@@ -46,17 +56,7 @@ def _prepare_measurements(frame, live, depth_source, stereo_geometry, mask_execu
     depth_started = time.perf_counter()
     mask_future = mask_executor.submit(live.measure_masks, frame)
     try:
-        stereo = None
-        if stereo_geometry is not None:
-            stereo = StereoInput(frame.infrared_left, frame.infrared_right, *stereo_geometry)
-        selected_depth = depth_source.predict(
-            DepthInput(frame.rgb, frame.metric_depth(), frame.intrinsics, stereo)
-        )
-        tracking_frame = replace(
-            frame,
-            depth=np.rint(selected_depth.depth_m / frame.depth_m_per_unit).clip(0, 65535).astype(np.uint16),
-            depth_before_filters=frame.depth,
-        )
+        tracking_frame = tracking_frame_with_depth_source(frame, depth_source, stereo_geometry)
         depth_ms = (time.perf_counter() - depth_started) * 1000
     finally:
         # Finish SAM before this session can be cleared or replaced.
@@ -191,6 +191,7 @@ def run(directory: Path, config: dict):
             depth_source = make_depth_source(depth_source_name)
             # Only one in-flight mask for the camera frame being processed.
             mask_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-live-mask")
+        _freeze_startup_heap()
         camera.connect()
         intr = camera.rs_profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
         k = np.array([[intr.fx, 0, intr.ppx], [0, intr.fy, intr.ppy], [0, 0, 1]], float)
@@ -387,6 +388,7 @@ def run(directory: Path, config: dict):
                     group_overlay=group_overlay,
                     depth_processing=frame.depth_processing,
                     depth_source=depth_source_name,
+                    rgb_format="jpeg",
                 )
                 temporary = directory / "scene.tmp"
                 temporary.write_bytes(packet)

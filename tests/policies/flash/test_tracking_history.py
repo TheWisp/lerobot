@@ -14,6 +14,7 @@ from benchmarks.flash_experiment_inputs import decode_mask
 from lerobot.gui.flash_live_scene import encode_rgbd_scene, frame_evidence
 from lerobot.policies.flash.tracking_history import (
     RollingHistory,
+    capture_packet,
     decode_record,
     export_episode,
     read_index,
@@ -57,6 +58,18 @@ def submit(history, *indices):
     for i in indices:
         history.submit(packet(i))
         history.queue.join()
+
+
+def test_viewer_jpeg_does_not_change_lossless_camera_capture():
+    measured = frame(4)
+    viewer = encode_rgbd_scene(measured, {"frame": 4}, rgb_format="jpeg")
+    n = struct.unpack("<I", viewer[:4])[0]
+    header = json.loads(viewer[4 : 4 + n])
+    assert header["rgb_format"] == "jpeg"
+    assert viewer[4 + n + header["depth_bytes"] : 4 + n + header["depth_bytes"] + 2] == b"\xff\xd8"
+    restored, _, _, _ = decode_record(capture_packet(measured))
+    np.testing.assert_array_equal(restored.rgb, measured.rgb)
+    np.testing.assert_array_equal(restored.depth, measured.depth)
 
 
 def test_rolling_frames_and_saved_window_preserve_exact_evidence(tmp_path):

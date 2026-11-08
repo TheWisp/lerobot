@@ -8,7 +8,7 @@ remain distinct from camera measurements.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -53,6 +53,27 @@ class DepthOutput:
     # Pixels with positive sensor readings retain their provenance even if a
     # selected model proposes a different value at the same pixel.
     sensor_measured: np.ndarray
+
+
+def tracking_frame_with_depth_source(frame, source, stereo_geometry=None):
+    """Apply the selected depth model to a captured frame for live or replay.
+
+    The source camera frame is retained separately by recording; this returns
+    only the frame to pass to the shared tracker. Missing predictions stay zero.
+    """
+    if source is None:
+        return frame
+    stereo = (
+        StereoInput(frame.infrared_left, frame.infrared_right, *stereo_geometry)
+        if stereo_geometry is not None
+        else None
+    )
+    selected = source.predict(DepthInput(frame.rgb, frame.metric_depth(), frame.intrinsics, stereo))
+    if np.issubdtype(frame.depth.dtype, np.integer):
+        depth = np.rint(selected.depth_m / frame.depth_m_per_unit).clip(0, 65535).astype(np.uint16)
+    else:
+        depth = selected.depth_m.astype(np.float32)
+    return replace(frame, depth=depth, depth_before_filters=frame.depth)
 
 
 def _valid_output(depth: np.ndarray, shape: tuple[int, int]) -> np.ndarray:

@@ -62,11 +62,17 @@ def score_case(case, rows, references, reference_frames, *, run=None):
     for role in case["roles"]:
         truth = labels.get(role)
         details = [row["objects"][role] for row in rows]
-        first = reference_frames.get(role)
-        result = {"reference_frame": first, "accuracy_labels": truth is not None, "methods": {}}
-        if first is None:
+        first_frame = reference_frames.get(role)
+        result = {"reference_frame": first_frame, "accuracy_labels": truth is not None, "methods": {}}
+        if first_frame is None:
             report["roles"][role] = result
             continue
+        first = next(
+            (index for index, row in enumerate(rows) if row.get("frame", index) == first_frame),
+            None,
+        )
+        if first is None:
+            raise ValueError(f"Reference frame {first_frame} for {role} is absent from scored frames")
         available_by_method = {}
         errors = {}
         methods = [name for name in ("ufm_chain", "surface_corrected") if name in details[0]]

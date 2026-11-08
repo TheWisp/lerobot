@@ -4442,3 +4442,125 @@ projected into the color camera. The live worker now starts both measurements
 from one capture and joins them before pose fitting, without queuing frames.
 This measures stage latency and memory headroom on this tray, not depth quality
 or complete tracking FPS. Model selection remains opt-in.
+
+## 2026-11-08 — Static depth checks and the remaining runtime cost
+
+The only retained stereo history is a stationary tray recording (30 Hz, raw
+RGB/sensor depth/left and right IR). Across 30 consecutive frames, the empty
+tray crop's median temporal absolute depth deviation was 1.0 mm for RealSense
+and 0.025 mm for Fast-FoundationStereo. Its median residual from a fitted plane
+was 0.776 and 0.128 mm respectively; the model was 0.08 mm nearer than the
+sensor median in that crop. Lite Any Stereo V2-S/M/L/H had tray plane residuals
+of 0.826/0.515/0.280/0.228 mm. LingBot-Depth-v0.5 gave 0.699 mm and was 1.69
+mm nearer than the sensor. Ring, block and dowel crops also had lower
+95th-percentile temporal deviation with the stereo models. These are stability
+and planarity proxies on one static scene, **not** ground-truth accuracy;
+smoothing can improve both
+while erasing real shape or making a consistent depth error. The exploratory
+scripts and full ROI results remain local in `/tmp/flash_depth_temporal.py` and
+`/tmp/flash_depth_temporal_results.jsonl`.
+
+The live-session benchmark can now replay a saved FLASH history's exact tracked
+frames and masks with a different depth source. On 80 easy stationary frames,
+RealSense and Fast-FoundationStereo each returned 80/80 poses; that does not
+test recovery. On a separate saved 80-frame pose-loss clip without IR, replaying
+LingBot changed availability from 49/80 to 48/80 and did not resolve the loss.
+The scorer now maps the source camera frame ID to its position in the replay;
+the corrected Fast-FoundationStereo run reports 79/79 post-initialization
+poses instead of the previous false zero count. Nonconsecutive frame IDs are
+covered by the saved-history integration test.
+The CLI keeps depth inference separate in its timing and runs it sequentially;
+the live camera overlaps depth inference with SAM. Saved histories without IR
+cannot compare stereo models, and there is not yet a moving stereo recording.
+
+For two objects, the full 713-frame dowel/ring replay using only the production
+`group_growing` method took 62.6 ms median in the tracker, excluding SAM, depth
+model and display. The ring returned 711/712 post-initialization poses but the
+dowel only 220/712; this is a performance baseline, **not** a quality success.
+The original maximum was 388 ms. Generation-2 Python garbage collections
+accounted for 195–303 ms pauses at several spikes. Collecting before/after the
+tracking session and deferring automatic cyclic collection during it cut the
+maximum to 83 ms with the same source hash, statuses and pose matrices across
+all 713 frames. A no-collection trial left 506 unreachable cyclic objects after
+713 frames and peaked at 1.47 GB resident; reference counting remained active.
+The 150-frame live-consumer replay including scene encoding had 96–98 ms median,
+about 110 ms p95, and its worst frame fell from 292 to 127 ms. Those tests used
+saved masks and no learned depth. Full two-object live FPS with SAM and a depth
+model remains unmeasured, and the 10 FPS end-to-end target is not yet proven.
+
+That GC deferral was an ablation, **not the retained live policy**. Open-ended
+tracking cannot defer cycle cleanup until stop without a memory endurance bound;
+the 506 unreachable objects show that cycles are created. Live tracking and
+recorded benchmarks retain Python's normal automatic collection. The measured
+pauses remain a latency problem to solve at the allocation source or with a
+bounded, measured collection policy.
+
+The live viewer packet was a separate CPU cost: a profiler attributed 1.42 s
+of an 80-frame replay to PNG encoding. The camera record remains lossless;
+only the live display copy now uses JPEG quality 95. On identical 80-frame
+sensor-depth input, display median fell from 22.4 ms with PNG to 7.8 ms with
+JPEG. With Fast-FoundationStereo, it fell from 24.9 to 8.0 ms. Under the
+retained automatic-GC policy, serial totals with JPEG were 77.3 ms for sensor
+depth and 113.3 ms for Fast-FoundationStereo. Input hashes, pose statuses and
+the 79/79 post-initialization count were unchanged. Legacy standalone scene
+packets keep PNG, and the viewer decodes both formats. A 150-frame two-object
+dowel/ring replay with saved masks and sensor depth improved 96.3 → 89.9 ms
+median total (15.7 → 8.4 ms display), while the worst frame remained high
+(291.6 → 284.5 ms). Its input hash and both objects' 149/149 observed statuses
+were unchanged. That replay excludes SAM and learned depth.
+
+With shared SAM3 enabled on the same 150 dowel/ring frames and normal GC,
+median stage times were 27.1 ms segmentation, 81.4 ms tracking and 8.3 ms
+display; total median was 118.8 ms (about 8.4 FPS), p95 139.5 ms and maximum
+309.7 ms. Both objects had a pose on all 149
+post-initialization frames, but pose availability is not correctness. This
+sequential recording replay excludes capture, transport and browser rendering;
+the live system may drop intervening camera frames. The ~10 FPS two-object
+target remains unmet even with sensor depth.
+
+Focused replay, depth and history checks passed (85 tests), as did two browser
+viewer tests. The broader surface-publication suite has eight failures in its
+existing 5 mm clear-recovery assertion; the same eight fail in a clean worktree
+at committed `06d9efa4e`, before these changes. They are a separate fitter
+correctness gap, not a regression from the replay or encoding changes.
+
+## 2026-11-08 — Live heap lifetime and the GC tail
+
+The 600-frame two-object replay exposed two different sources of long GC pauses.
+First, the timing benchmark retained every full result row in memory, although
+the live worker retains only its latest result. It now streams rows to its
+`frames.jsonl` and reloads them only after timing for scoring. On the same
+input, all 600 poses, statuses and surface events were unchanged. Without
+accumulating rows, in-loop generation-2 pauses stayed around 170–190 ms rather
+than growing from 166 to 321 ms. The benchmark still has a roughly 493,000-object
+startup heap from its imports; these scans usually collected zero objects.
+
+A separate ablation collected startup cycles, then used Python `gc.freeze()`
+before constructing the frame session. Automatic GC stayed enabled for the
+session and new cycles remained collectible. On identical saved masks and
+depth, all 600 poses, statuses and surface events were unchanged; generation-2
+pauses _during the frame loop_ fell below 1 ms after initialization. The
+maximum measured frame fell from 283 to 172 ms; medians were 87.2 and 87.9 ms.
+With SAM3 on a 150-frame two-object replay, in-loop generation-2 pauses were
+under 15 ms after initialization. That SAM run used newly inferred masks, so
+its pose trace is not an exact-output comparison with the earlier SAM run.
+Peak RSS for the SAM ablation was 4.02 GiB. Local diagnostic scripts and logs
+are in `/tmp/flash_gc_*`.
+
+The live camera worker now freezes only its **startup** heap after loading its
+selected depth model and before capture starts. The worker owns one camera
+session and exits on Stop. It still runs normal automatic collection for SAM
+tracking sessions and frame-time objects created afterward. This policy must
+be revisited if that worker becomes a reusable long-lived host or starts
+replacing loaded models in-process: unreachable frozen objects would then
+remain until process exit. It reduces the GC tail, not the ~119 ms median
+two-object SAM+sensor frame time; the ~10 FPS goal remains open.
+
+A longer 600-frame dowel/ring replay with SAM3, sensor depth and this worker
+policy had 133.2 ms median, 163.1 ms p95 and 204.0 ms maximum frame time
+(7.5 FPS by median serial latency). Segmentation/tracking/display medians were
+24.5/99.9/7.7 ms. Only one frame exceeded 200 ms. The benchmark process used
+5.61 GiB peak RSS, including post-run loading of every saved result for scoring;
+while the frame loop was running, RSS was about 4.0–4.2 GiB at sampled points.
+The dowel was unavailable or predicted on 396/599 frames after initialization,
+so this is a latency and endurance result, **not** a tracking-quality success.

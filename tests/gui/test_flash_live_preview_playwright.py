@@ -167,7 +167,9 @@ def test_depth_and_3d_preview_keep_a_matched_frame_and_fixed_color_scale(gui_pag
             float(frame_id),
             "test",
         )
-        packet = encode_rgbd_scene(frame, {"frame": frame_id, "objects": objects, "scene_group_tracks": []})
+        packet = encode_rgbd_scene(
+            frame, {"frame": frame_id, "objects": objects, "scene_group_tracks": []}, rgb_format="jpeg"
+        )
         route.fulfill(body=packet, content_type="application/octet-stream")
 
     gui_page.route("**/api/run/flash/tracking/state", state)

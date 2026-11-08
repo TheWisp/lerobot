@@ -40,12 +40,19 @@ def loss_reason(status, details):
     return cause
 
 
-def encode_rgbd_scene(frame, header):
+def encode_rgbd_scene(frame, header, *, rgb_format="png"):
     depth = frame.metric_depth()
     depth = np.where(np.isfinite(depth) & (depth > 0), depth, 0).astype("<f4")
     before = frame.depth_before_filters
     before_bytes = before.astype("<u2", copy=False).tobytes() if before is not None else b""
-    ok, encoded = cv2.imencode(".png", cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR))
+    color = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
+    if rgb_format == "jpeg":
+        # Live camera history retains lossless RGB; this copy is only for display.
+        ok, encoded = cv2.imencode(".jpg", color, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    elif rgb_format == "png":
+        ok, encoded = cv2.imencode(".png", color)
+    else:
+        raise ValueError(f"Unsupported scene image format: {rgb_format}")
     if not ok:
         raise ValueError("Cannot encode RGB frame")
     header = {
@@ -58,6 +65,7 @@ def encode_rgbd_scene(frame, header):
         "depth_bytes": depth.nbytes,
         "depth_before_filter_bytes": len(before_bytes),
         "depth_m_per_unit": 1.0,  # The primary depth payload is already metric float32.
+        "rgb_format": rgb_format,
         "depth_before_filter_m_per_unit": frame.depth_m_per_unit,
         "source_frame_id": frame.frame_id,
         "available_time_s": frame.available_time_s,
@@ -92,7 +100,16 @@ def frame_evidence(row, masks):
 
 
 def live_scene_packet(
-    frame, live, row, masks, matches=None, *, group_overlay=None, depth_processing=None, depth_source="sensor"
+    frame,
+    live,
+    row,
+    masks,
+    matches=None,
+    *,
+    group_overlay=None,
+    depth_processing=None,
+    depth_source="sensor",
+    rgb_format="png",
 ):
     objects = {}
     for role, reference in live.engine.references.items():
@@ -145,4 +162,5 @@ def live_scene_packet(
             "depth_source": depth_source,
             "depth_filter_revision": frame.depth_filter_revision,
         },
+        rgb_format=rgb_format,
     )
