@@ -43,6 +43,8 @@ def loss_reason(status, details):
 def encode_rgbd_scene(frame, header):
     depth = frame.metric_depth()
     depth = np.where(np.isfinite(depth) & (depth > 0), depth, 0).astype("<f4")
+    before = frame.depth_before_filters
+    before_bytes = before.astype("<u2", copy=False).tobytes() if before is not None else b""
     ok, encoded = cv2.imencode(".png", cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR))
     if not ok:
         raise ValueError("Cannot encode RGB frame")
@@ -54,13 +56,16 @@ def encode_rgbd_scene(frame, header):
             "intrinsics": frame.intrinsics.tolist(),
         },
         "depth_bytes": depth.nbytes,
+        "depth_before_filter_bytes": len(before_bytes),
+        "depth_m_per_unit": 1.0,  # The primary depth payload is already metric float32.
+        "depth_before_filter_m_per_unit": frame.depth_m_per_unit,
         "source_frame_id": frame.frame_id,
         "available_time_s": frame.available_time_s,
         "base_from_camera": frame.base_from_camera.tolist(),
         "calibration_version": frame.calibration_version,
     }
     metadata = json.dumps(header, allow_nan=False, separators=(",", ":")).encode()
-    return struct.pack("<I", len(metadata)) + metadata + depth.tobytes() + encoded.tobytes()
+    return struct.pack("<I", len(metadata)) + metadata + depth.tobytes() + before_bytes + encoded.tobytes()
 
 
 def object_evidence(result, method):
@@ -86,7 +91,9 @@ def frame_evidence(row, masks):
     return {"evidence_schema": 1, "result": row, "masks_rle": runs}
 
 
-def live_scene_packet(frame, live, row, masks, matches=None, *, group_overlay=None, depth_processing=None):
+def live_scene_packet(
+    frame, live, row, masks, matches=None, *, group_overlay=None, depth_processing=None, depth_source="sensor"
+):
     objects = {}
     for role, reference in live.engine.references.items():
         track = live.engine.candidates[live.method][role]
@@ -135,5 +142,7 @@ def live_scene_packet(frame, live, row, masks, matches=None, *, group_overlay=No
             **frame_evidence(row, masks),
             "image_matches": matches,
             "depth_processing": depth_processing,
+            "depth_source": depth_source,
+            "depth_filter_revision": frame.depth_filter_revision,
         },
     )

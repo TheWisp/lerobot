@@ -4,6 +4,8 @@ Capture never waits for the tracker. The writer compresses measured frames on
 its own thread; a later result adds metadata without replacing those pixels.
 """
 
+# hardcode-lint: ignore-file - FLASH history exports one camera under its fixed episode feature schema.
+
 from __future__ import annotations
 
 import fcntl
@@ -61,6 +63,8 @@ def read_packet(directory, frame):
             n = struct.unpack("<I", packet[:4])[0]
             header = json.loads(packet[4 : 4 + n])
             update = json.loads(overlay.read_text())
+            if update.get("depth_source"):
+                header["tracking_depth_source"] = update["depth_source"]
             header.update(
                 {
                     key: value
@@ -69,6 +73,9 @@ def read_packet(directory, frame):
                     not in (
                         "camera",
                         "depth_bytes",
+                        "depth_before_filter_bytes",
+                        "infrared_shape",
+                        "infrared_bytes",
                         "source_frame_id",
                         "base_from_camera",
                         "available_time_s",
@@ -76,17 +83,43 @@ def read_packet(directory, frame):
                         "rgb_format",
                         "depth_format",
                         "depth_m_per_unit",
+                        "depth_before_filter_m_per_unit",
+                        "depth_processing",
+                        "depth_filter_revision",
+                        "depth_source",
                     )
                 }
             )
+            model_file = base.with_suffix(".model_depth.zst")
+            model_depth = (
+                zstd.ZstdDecompressor().decompress(model_file.read_bytes()) if model_file.is_file() else b""
+            )
+            header["model_depth_bytes"] = len(model_depth)
+            old_payload = packet[4 + n :]
+            insert = (
+                header["depth_bytes"]
+                + header.get("depth_before_filter_bytes", 0)
+                + 2 * header.get("infrared_bytes", 0)
+            )
             metadata = json.dumps(header, allow_nan=False, separators=(",", ":")).encode()
-            packet = struct.pack("<I", len(metadata)) + metadata + packet[4 + n :]
+            packet = (
+                struct.pack("<I", len(metadata))
+                + metadata
+                + old_payload[:insert]
+                + model_depth
+                + old_payload[insert:]
+            )
         return packet
 
 
 def capture_packet(frame):
     """Lossless camera input in the same scene envelope as processed packets."""
     depth = np.ascontiguousarray(frame.depth)
+    before = (
+        np.ascontiguousarray(frame.depth_before_filters) if frame.depth_before_filters is not None else None
+    )
+    left = np.ascontiguousarray(frame.infrared_left) if frame.infrared_left is not None else None
+    right = np.ascontiguousarray(frame.infrared_right) if frame.infrared_right is not None else None
     rgb = np.ascontiguousarray(frame.rgb)
     header = {
         "frame": frame.frame_id,
@@ -97,8 +130,14 @@ def capture_packet(frame):
         "calibration_version": frame.calibration_version,
         "camera": {"width": rgb.shape[1], "height": rgb.shape[0], "intrinsics": frame.intrinsics.tolist()},
         "depth_bytes": depth.nbytes,
+        "depth_before_filter_bytes": before.nbytes if before is not None else 0,
+        "infrared_shape": list(left.shape) if left is not None else None,
+        "infrared_bytes": left.nbytes if left is not None else 0,
         "depth_format": "sensor_u16" if depth.dtype == np.uint16 else "metric_f32",
         "depth_m_per_unit": frame.depth_m_per_unit,
+        "depth_processing": frame.depth_processing,
+        "depth_source": "sensor",
+        "depth_filter_revision": frame.depth_filter_revision,
         "rgb_format": "raw_rgb8",
         "objects": {},
         "scene_group_tracks": [],
@@ -106,7 +145,14 @@ def capture_packet(frame):
         "result": None,
     }
     metadata = json.dumps(header, allow_nan=False, separators=(",", ":")).encode()
-    return struct.pack("<I", len(metadata)) + metadata + depth.tobytes() + rgb.tobytes()
+    return (
+        struct.pack("<I", len(metadata))
+        + metadata
+        + depth.tobytes()
+        + (before.tobytes() if before is not None else b"")
+        + (left.tobytes() + right.tobytes() if left is not None else b"")
+        + rgb.tobytes()
+    )
 
 
 def decode_record(packet):
@@ -126,7 +172,33 @@ def decode_record(packet):
         .reshape(camera["height"], camera["width"])
         .copy()
     )
-    rgb_bytes = packet[start + header["depth_bytes"] :]
+    before_start = start + header["depth_bytes"]
+    before_bytes = header.get("depth_before_filter_bytes", 0)
+    before = (
+        np.frombuffer(packet[before_start : before_start + before_bytes], "<u2")
+        .reshape(camera["height"], camera["width"])
+        .copy()
+        if before_bytes
+        else None
+    )
+    ir_start = before_start + before_bytes
+    ir_bytes = header.get("infrared_bytes", 0)
+    infrared_shape = header.get("infrared_shape")
+    left = (
+        (np.frombuffer(packet[ir_start : ir_start + ir_bytes], np.uint8).reshape(infrared_shape).copy())
+        if ir_bytes
+        else None
+    )
+    right = (
+        (
+            np.frombuffer(packet[ir_start + ir_bytes : ir_start + 2 * ir_bytes], np.uint8)
+            .reshape(infrared_shape)
+            .copy()
+        )
+        if ir_bytes
+        else None
+    )
+    rgb_bytes = packet[ir_start + 2 * ir_bytes + header.get("model_depth_bytes", 0) :]
     if header.get("rgb_format") == "raw_rgb8":
         rgb = np.frombuffer(rgb_bytes, np.uint8).reshape(camera["height"], camera["width"], 3).copy()
     else:
@@ -143,6 +215,11 @@ def decode_record(packet):
         header["time_s"],
         header["available_time_s"],
         header["calibration_version"],
+        header.get("depth_processing"),
+        header.get("depth_filter_revision", 0),
+        before,
+        left,
+        right,
     )
     masks = {}
     for role, runs in header["masks_rle"].items():
@@ -167,11 +244,13 @@ def save_window(directory, destination_root):
                 raise ValueError("No recorded camera frames yet")
             for row in index["frames"]:
                 base = f"{row['frame']:010d}"
-                for suffix in (".bin.zst", ".bin.z", ".overlay.json"):
+                for suffix in (".bin.zst", ".bin.z", ".overlay.json", ".model_depth.zst"):
                     name = base + suffix
                     if (directory / name).exists():
                         os.link(directory / name, temporary / name)
             shutil.copy2(directory / "config.json", temporary / "config.json")
+            if (directory / "camera_streams.json").is_file():
+                shutil.copy2(directory / "camera_streams.json", temporary / "camera_streams.json")
             write_snapshot(temporary / "index.json", {**index, "saved_at": time.time()})
         temporary.rename(final)
     except Exception:
@@ -180,6 +259,194 @@ def save_window(directory, destination_root):
         shutil.rmtree(temporary)
         raise
     return identity
+
+
+def export_episode(directory):
+    """Make a saved RGB-D window an ordinary one-episode LeRobot dataset.
+
+    The temporary rolling packet files remain as exact reprocessing evidence;
+    the episode supplies video playback and lossless sensor-depth images.
+    """
+    from lerobot.configs.video import RGBEncoderConfig
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    directory = Path(directory)
+    final = directory / "episode"
+    with (directory / "episode-export.lock").open("a") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        if final.is_dir():
+            return final
+        rows = read_index(directory)["frames"]
+        if not rows:
+            raise ValueError("No saved camera frames to export")
+        first, _, _, _ = decode_record(read_packet(directory, rows[0]["frame"]))
+        h, w = first.depth.shape
+        times = np.array([row["time_s"] for row in rows], np.float64)
+        elapsed = np.diff(times)
+        positive = elapsed[elapsed > 0]
+        fps = max(1, min(120, round(1 / float(np.median(positive))))) if positive.size else 30
+        features = {
+            "observation.images.camera": {
+                "dtype": "video",
+                "shape": (h, w, 3),
+                "names": ["height", "width", "channels"],
+            },
+            "observation.images.camera_depth": {
+                "dtype": "image",
+                "shape": (h, w, 1),
+                "names": ["height", "width", "channels"],
+                "info": {"is_depth_map": True},
+            },
+            "observation.camera.source_frame_id": {"dtype": "int64", "shape": (1,), "names": None},
+            "observation.camera.source_time_s": {"dtype": "float64", "shape": (1,), "names": None},
+            "observation.camera.available_time_s": {"dtype": "float64", "shape": (1,), "names": None},
+            "observation.camera.depth_m_per_unit": {"dtype": "float64", "shape": (1,), "names": None},
+            "observation.camera.intrinsics": {"dtype": "float64", "shape": (9,), "names": None},
+            "observation.camera.base_from_camera": {"dtype": "float64", "shape": (16,), "names": None},
+        }
+        has_before = any(row.get("has_before_filters", False) for row in rows)
+        has_infrared = any(row.get("has_infrared", False) for row in rows)
+        has_model_depth = any(row.get("tracking_depth_source", "sensor") != "sensor" for row in rows)
+        if has_before:
+            features["observation.images.camera_depth_before_filters"] = {
+                "dtype": "image",
+                "shape": (h, w, 1),
+                "names": ["height", "width", "channels"],
+                "info": {"is_depth_map": True},
+            }
+        if has_infrared:
+            ir_h, ir_w = first.infrared_left.shape
+            for side in ("left", "right"):
+                features[f"observation.images.camera_infrared_{side}"] = {
+                    "dtype": "video",
+                    "shape": (ir_h, ir_w, 3),
+                    "names": ["height", "width", "channels"],
+                }
+        if has_model_depth:
+            features["observation.images.camera_depth_model"] = {
+                "dtype": "image",
+                "shape": (h, w, 1),
+                "names": ["height", "width", "channels"],
+                "info": {"is_depth_map": True},
+            }
+        temporary = directory / (".episode-" + uuid.uuid4().hex)
+        try:
+            dataset = LeRobotDataset.create(
+                f"local/flash-{directory.name}",
+                fps,
+                features,
+                root=temporary,
+                robot_type="flash_rgbd",
+                use_videos=True,
+                image_writer_threads=4,
+                rgb_encoder=RGBEncoderConfig(vcodec="h264", preset="veryfast", crf=18),
+            )
+            overlay_root = temporary / "flash" / "v1" / "overlays"
+            overlay_root.mkdir(parents=True)
+            for i, row in enumerate(rows):
+                frame, _, _, _ = decode_record(read_packet(directory, row["frame"]))
+                if frame.depth.shape != (h, w):
+                    raise ValueError(f"Camera format changed at frame {row['frame']}")
+                episode_frame = {
+                    "task": "FLASH live camera tracking",
+                    "observation.images.camera": frame.rgb,
+                    "observation.images.camera_depth": np.rint(
+                        np.nan_to_num(
+                            frame.depth.astype(np.float32) * (frame.depth_m_per_unit * 1000),
+                            nan=0.0,
+                            posinf=0.0,
+                            neginf=0.0,
+                        )
+                    )
+                    .clip(0, 65535)
+                    .astype(np.uint16)[:, :, None],
+                    "observation.camera.source_frame_id": np.array([frame.frame_id], np.int64),
+                    "observation.camera.source_time_s": np.array([frame.source_time_s], np.float64),
+                    "observation.camera.available_time_s": np.array([frame.available_time_s], np.float64),
+                    "observation.camera.depth_m_per_unit": np.array([frame.depth_m_per_unit], np.float64),
+                    "observation.camera.intrinsics": frame.intrinsics.reshape(9),
+                    "observation.camera.base_from_camera": frame.base_from_camera.reshape(16),
+                }
+                if has_before:
+                    if frame.depth_before_filters is None and any((frame.depth_processing or {}).values()):
+                        raise ValueError(f"Pre-filter depth missing at filtered frame {row['frame']}")
+                    before = (
+                        frame.depth_before_filters if frame.depth_before_filters is not None else frame.depth
+                    )
+                    episode_frame["observation.images.camera_depth_before_filters"] = (
+                        np.rint(
+                            np.nan_to_num(
+                                before.astype(np.float32) * (frame.depth_m_per_unit * 1000),
+                                nan=0.0,
+                                posinf=0.0,
+                                neginf=0.0,
+                            )
+                        )
+                        .clip(0, 65535)
+                        .astype(np.uint16)[:, :, None]
+                    )
+                if has_infrared:
+                    if frame.infrared_left is None:
+                        raise ValueError(f"Infrared pair missing at frame {row['frame']}")
+                    for side in ("left", "right"):
+                        infrared = getattr(frame, f"infrared_{side}")
+                        episode_frame[f"observation.images.camera_infrared_{side}"] = np.repeat(
+                            infrared[..., None], 3, axis=2
+                        )
+                if has_model_depth:
+                    model_file = directory / f"{row['frame']:010d}.model_depth.zst"
+                    model = (
+                        np.frombuffer(
+                            zstd.ZstdDecompressor().decompress(model_file.read_bytes()), "<f4"
+                        ).reshape(h, w)
+                        if model_file.is_file()
+                        else np.zeros((h, w), np.float32)
+                    )
+                    episode_frame["observation.images.camera_depth_model"] = (
+                        np.rint(np.nan_to_num(model * 1000, nan=0.0, posinf=0.0, neginf=0.0))
+                        .clip(0, 65535)
+                        .astype(np.uint16)[:, :, None]
+                    )
+                dataset.add_frame(episode_frame)
+                overlay = directory / f"{row['frame']:010d}.overlay.json"
+                if overlay.is_file():
+                    os.link(overlay, overlay_root / f"{i:06d}.json")
+            dataset.save_episode()
+            dataset.finalize()
+            shutil.copy2(directory / "config.json", temporary / "flash" / "v1" / "config.json")
+            if (directory / "camera_streams.json").is_file():
+                shutil.copy2(
+                    directory / "camera_streams.json", temporary / "flash" / "v1" / "camera_streams.json"
+                )
+            write_snapshot(
+                temporary / "flash" / "v1" / "camera.json",
+                {
+                    "width": w,
+                    "height": h,
+                    "intrinsics": first.intrinsics.tolist(),
+                    "depth_m_per_unit": first.depth_m_per_unit,
+                },
+            )
+            write_snapshot(
+                temporary / "flash" / "v1" / "source_frames.json",
+                {
+                    "frames": [
+                        {
+                            "source_frame_id": row["frame"],
+                            "source_time_s": row["time_s"],
+                            "depth_processing": row.get("depth_processing"),
+                            "depth_filter_revision": row.get("depth_filter_revision", 0),
+                        }
+                        for row in rows
+                    ]
+                },
+            )
+            temporary.rename(final)
+        except Exception:
+            # safe-destruct: remove only this failed, generated episode export.
+            shutil.rmtree(temporary, ignore_errors=True)
+            raise
+        return final
 
 
 class RollingHistory:
@@ -212,7 +479,16 @@ class RollingHistory:
         if self.closed:
             raise RuntimeError("History already closed")
         try:
-            snapshot = replace(frame, rgb=frame.rgb.copy(), depth=frame.depth.copy())
+            snapshot = replace(
+                frame,
+                rgb=frame.rgb.copy(),
+                depth=frame.depth.copy(),
+                depth_before_filters=(
+                    frame.depth_before_filters.copy() if frame.depth_before_filters is not None else None
+                ),
+                infrared_left=frame.infrared_left.copy() if frame.infrared_left is not None else None,
+                infrared_right=frame.infrared_right.copy() if frame.infrared_right is not None else None,
+            )
             self.queue.put_nowait(("capture", snapshot))
         except Full:
             self.dropped += 1
@@ -273,6 +549,8 @@ class RollingHistory:
                     (self.directory / f"{old['frame']:010d}.bin.zst").unlink(missing_ok=True)
                     # safe-destruct: expire only this rolling buffer's generated overlay file.
                     (self.directory / f"{old['frame']:010d}.overlay.json").unlink(missing_ok=True)
+                    # safe-destruct: expire only this rolling buffer's generated model-depth file.
+                    (self.directory / f"{old['frame']:010d}.model_depth.zst").unlink(missing_ok=True)
             self.rows = [r for r in retained if r is not row]
             if shutil.disk_usage(self.directory).free - len(encoded) < self.reserve_bytes:
                 raise OSError(
@@ -296,6 +574,10 @@ class RollingHistory:
         row = {
             "frame": frame.frame_id,
             "time_s": frame.source_time_s,
+            "depth_processing": frame.depth_processing,
+            "depth_filter_revision": frame.depth_filter_revision,
+            "has_before_filters": frame.depth_before_filters is not None,
+            "has_infrared": frame.infrared_left is not None,
             "bytes": len(encoded),
             "dependencies": [],
             "objects": {},
@@ -320,7 +602,7 @@ class RollingHistory:
             write_snapshot(self.directory / "index.json", self._index())
 
     def _remove_frame(self, frame):
-        for suffix in (".bin.z", ".bin.zst", ".overlay.json"):
+        for suffix in (".bin.z", ".bin.zst", ".overlay.json", ".model_depth.zst"):
             # safe-destruct: remove only generated files for this rolling buffer frame.
             (self.directory / f"{frame:010d}{suffix}").unlink(missing_ok=True)
 
@@ -333,6 +615,13 @@ class RollingHistory:
                 return  # The camera frame expired or was not retained.
             path = self.directory / f"{row['frame']:010d}.overlay.json"
             write_snapshot(path, header)
+            if header.get("depth_source", "sensor") != "sensor":
+                depth_start = 4 + n
+                depth_bytes = packet[depth_start : depth_start + header["depth_bytes"]]
+                model_path = self.directory / f"{row['frame']:010d}.model_depth.zst"
+                model_path.write_bytes(zstd.ZstdCompressor(level=3).compress(depth_bytes))
+                row["bytes"] += model_path.stat().st_size
+                row["tracking_depth_source"] = header["depth_source"]
             row["objects"] = {
                 role: {key: obj.get(key) for key in ("name", "status", "reason")}
                 for role, obj in header.get("objects", {}).items()

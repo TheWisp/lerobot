@@ -38,6 +38,8 @@ def image_snapshot(frame: RGBDFrame) -> dict:
         "height": frame.rgb.shape[0],
         "intrinsics": frame.intrinsics.tolist(),
         "depth_m_per_unit": frame.depth_m_per_unit,
+        "depth_processing": frame.depth_processing,
+        "depth_filter_revision": frame.depth_filter_revision,
         "image": "data:image/jpeg;base64," + base64.b64encode(encoded).decode(),
     }
 
@@ -48,12 +50,31 @@ def preview_depth_packet(frame: RGBDFrame) -> bytes:
     The preview replaces one file at camera-preview cadence; it is not a
     second tracking input or a retained recording.
     """
-    return struct.pack("<I", frame.frame_id) + frame.depth.astype("<u2", copy=False).tobytes()
+    before = getattr(frame, "depth_before_filters", None)
+    return (
+        struct.pack("<I", frame.frame_id)
+        + frame.depth.astype("<u2", copy=False).tobytes()
+        + (before.astype("<u2", copy=False).tobytes() if before is not None else b"")
+    )
 
 
-def seed_frame(command: dict, displayed: RGBDFrame | None, latest: RGBDFrame | None) -> RGBDFrame:
+def seed_frame(
+    command: dict,
+    displayed: RGBDFrame | None,
+    latest: RGBDFrame | None,
+    history_directory: Path | None = None,
+) -> RGBDFrame:
     """Bind a click to the RGB-D frame that produced the displayed image."""
     if command.get("point") is not None:
+        if (displayed is None or command.get("frame_id") != displayed.frame_id) and history_directory:
+            # The preview cache is deliberately short. The raw camera history
+            # can still resolve a displayed frame after network/UI latency.
+            from .tracking_history import decode_record, read_packet
+
+            try:
+                displayed = decode_record(read_packet(history_directory, command.get("frame_id")))[0]
+            except FileNotFoundError:
+                displayed = None
         if displayed is None or command.get("frame_id") != displayed.frame_id:
             raise ValueError("That image is no longer available; click the current image again")
         x, y = command["point"]

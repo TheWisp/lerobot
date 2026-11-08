@@ -68,14 +68,18 @@ class FakeCameraSource:
 def test_latest_frame_survives_camera_buffer_reuse():
     rgb = np.zeros((2, 2, 3), dtype=np.uint8)
     depth = np.ones((2, 2), dtype=np.uint16)
-    frame = RGBDFrame(1, rgb, depth, np.eye(3), 0.001, np.eye(4), 1.0, 1.0, "camera-v1")
+    filters = {"spatial": True, "temporal": False, "hole_filling": False}
+    frame = RGBDFrame(1, rgb, depth, np.eye(3), 0.001, np.eye(4), 1.0, 1.0, "camera-v1", filters, 3)
     store = LatestRGBDFrameStore()
     store.publish(frame)
     rgb[:] = 255
     depth[:] = 5
+    filters["spatial"] = False
     saved = store.snapshot()
     assert saved.rgb.max() == 0
     assert saved.depth.max() == 1
+    assert saved.depth_processing == {"spatial": True, "temporal": False, "hole_filling": False}
+    assert saved.depth_filter_revision == 3
 
 
 def test_perception_service_waits_for_real_pose_from_spawned_worker():

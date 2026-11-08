@@ -20,6 +20,7 @@ from threading import Event, Lock, Thread
 import cv2
 import numpy as np
 
+from .depth_enhancement import DepthInput, StereoInput, make_depth_source, needs_stereo_pair
 from .live_surface_io import (
     image_snapshot,
     new_selection,
@@ -57,6 +58,10 @@ def run(directory: Path, config: dict):
     sequence = 0
     paused = True
     errors = []
+    camera_streams = None
+    stereo_geometry = None
+    depth_source_name = config.get("depth_source", "sensor")
+    depth_source = None
     settings = config["pipeline_settings"]
     vision = VisionPipelineConfig.from_dict(settings["config"])
     cv2.setNumThreads(1)
@@ -71,6 +76,7 @@ def run(directory: Path, config: dict):
                 "command_id": command_id,
                 "engine": "experiment",
                 "updated_s": time.perf_counter(),
+                "camera_streams": camera_streams,
                 **data,
             },
         )
@@ -107,6 +113,7 @@ def run(directory: Path, config: dict):
                 enable_spatial=config.get("depth_processing", {}).get("spatial", False),
                 enable_temporal=config.get("depth_processing", {}).get("temporal", False),
                 enable_hole_filling=config.get("depth_processing", {}).get("hole_filling", False),
+                enable_infrared=needs_stereo_pair(depth_source_name),
             )
         )
         if history:
@@ -114,7 +121,7 @@ def run(directory: Path, config: dict):
             # may skip frames in its latest-only slot, but recording does not.
             recording_geometry = []
 
-            def record_capture(rgb, depth, stamp, sequence):
+            def record_capture(rgb, depth, before_filters, stamp, sequence, left=None, right=None):
                 if not recording_geometry:
                     profile = camera.rs_profile
                     intr = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
@@ -122,6 +129,7 @@ def run(directory: Path, config: dict):
                     unit = profile.get_device().first_depth_sensor().get_depth_scale()
                     recording_geometry.append((intrinsics, unit))
                 intrinsics, unit = recording_geometry[0]
+                depth_processing, revision = camera.last_applied_depth_processing
                 history.submit_frame(
                     RGBDFrame(
                         sequence,
@@ -133,29 +141,101 @@ def run(directory: Path, config: dict):
                         stamp,
                         time.perf_counter(),
                         "camera_native",
+                        depth_processing,
+                        revision,
+                        tracker_depth_layout(rgb, before_filters) if any(depth_processing.values()) else None,
+                        left,
+                        right,
                     )
                 )
 
-            camera.aligned_frame_listener = record_capture
+            if needs_stereo_pair(depth_source_name):
+                camera.aligned_frame_with_stereo_listener = (
+                    lambda rgb, depth, before, left, right, stamp, sequence: record_capture(
+                        rgb, depth, before, stamp, sequence, left, right
+                    )
+                )
+            else:
+                camera.aligned_frame_with_raw_listener = record_capture
+        if depth_source_name != "sensor":
+            # ONNX/PyTorch initialization can hold the GIL for seconds. Load
+            # before the camera read thread starts, or acquisition can time out.
+            state("loading_depth_model", depth_source=depth_source_name)
+            depth_source = make_depth_source(depth_source_name)
         camera.connect()
         intr = camera.rs_profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
         k = np.array([[intr.fx, 0, intr.ppx], [0, intr.fy, intr.ppy], [0, 0, 1]], float)
         scale = camera.rs_profile.get_device().first_depth_sensor().get_depth_scale()
+        streams = {}
+        for name, stream in (("color", rs.stream.color), ("depth", rs.stream.depth)):
+            profile = camera.rs_profile.get_stream(stream).as_video_stream_profile()
+            streams[name] = {
+                "width": profile.width(),
+                "height": profile.height(),
+                "fps": profile.fps(),
+                "format": str(profile.format()),
+            }
+        streams["depth_m_per_unit"] = scale
+        if needs_stereo_pair(depth_source_name):
+            left_profile = camera.rs_profile.get_stream(rs.stream.infrared, 1).as_video_stream_profile()
+            right_profile = camera.rs_profile.get_stream(rs.stream.infrared, 2).as_video_stream_profile()
+            left_intr = left_profile.get_intrinsics()
+            left_k = np.array(
+                [[left_intr.fx, 0, left_intr.ppx], [0, left_intr.fy, left_intr.ppy], [0, 0, 1]], float
+            )
+            to_color = left_profile.get_extrinsics_to(camera.rs_profile.get_stream(rs.stream.color))
+            color_from_left = np.eye(4)
+            color_from_left[:3, :3] = np.asarray(to_color.rotation).reshape(3, 3, order="F")
+            color_from_left[:3, 3] = to_color.translation
+            baseline = abs(left_profile.get_extrinsics_to(right_profile).translation[0])
+            stereo_geometry = (left_k, color_from_left, baseline)
+            streams["infrared"] = {
+                "width": left_profile.width(),
+                "height": left_profile.height(),
+                "fps": left_profile.fps(),
+                "left_intrinsics": left_k.tolist(),
+                "color_from_left": color_from_left.tolist(),
+                "baseline_m": baseline,
+            }
+        camera_streams = streams
+        if history:
+            write_snapshot(history.directory / "camera_streams.json", streams)
 
         def acquire():
             last_stamp, published = None, 0
             try:
                 while not stop.is_set():
-                    rgb, depth, stamp, sequence = camera.read_color_and_aligned_depth_with_timestamp(
-                        timeout_ms=1000, include_sequence=True
+                    grabbed = camera.read_color_and_aligned_depth_with_timestamp(
+                        timeout_ms=1000,
+                        include_sequence=True,
+                        include_processing=True,
+                        include_before_filters=True,
+                        include_infrared=stereo_geometry is not None,
                     )
+                    rgb, depth, stamp, sequence, processing, revision, before_filters = grabbed[:7]
+                    left, right = grabbed[7:] if stereo_geometry is not None else (None, None)
                     depth = tracker_depth_layout(rgb, depth)
                     if stamp == last_stamp:
                         stop.wait(0.005)
                         continue
                     last_stamp = stamp
                     frame = RGBDFrame(
-                        sequence, rgb, depth, k, scale, np.eye(4), stamp, time.perf_counter(), "camera_native"
+                        sequence,
+                        rgb,
+                        depth,
+                        k,
+                        scale,
+                        np.eye(4),
+                        stamp,
+                        time.perf_counter(),
+                        "camera_native",
+                        processing,
+                        revision,
+                        tracker_depth_layout(rgb, before_filters)
+                        if before_filters is not None and processing and any(processing.values())
+                        else None,
+                        left,
+                        right,
                     )
                     latest.publish(frame)
                     if time.perf_counter() - published >= 1 / config["preview_fps"]:
@@ -175,7 +255,7 @@ def run(directory: Path, config: dict):
         Thread(target=controls, daemon=True, name="flash-live-controls").start()
         kernels = compiled_kernels() if vision.compiled_surface_fit else None
         pool = SearchPool(vision.shape.batch_query_workers) if vision.reuse_surface_search else None
-        state("preview")
+        state("preview", depth_processing=camera.depth_processing, camera_streams=streams)
         while not stop.is_set():
             selected = None
             try:
@@ -198,6 +278,13 @@ def run(directory: Path, config: dict):
                     elif command["action"] == "clear_history":
                         if history:
                             history.clear()
+                    elif command["action"] == "depth_filters":
+                        applied = camera.set_depth_processing(**command["depth_processing"])
+                        state(
+                            "filters_updated",
+                            depth_processing=applied,
+                            depth_filter_revision=camera.depth_filter_revision,
+                        )
                     elif command["action"] == "select":
                         displayed = frozen
                         if command.get("point") is not None:
@@ -213,7 +300,12 @@ def run(directory: Path, config: dict):
                                     displayed = next(
                                         (f for f in reversed(preview_frames) if f.frame_id == frame_id), None
                                     )
-                        selected = seed_frame(command, displayed, latest.snapshot())
+                        selected = seed_frame(
+                            command,
+                            displayed,
+                            latest.snapshot(),
+                            history.directory if history else None,
+                        )
                         paused = True
                         state("loading_models", frame=image_snapshot(selected))
                         if not model_loaded:
@@ -241,7 +333,7 @@ def run(directory: Path, config: dict):
                         raise ValueError("Unsupported control for this inspector")
                 except Exception as exc:
                     paused = True
-                    state("error", message=str(exc))
+                    state("error", message=str(exc), depth_processing=camera.depth_processing)
                     traceback.print_exc()
             if paused:
                 stop.wait(0.02)
@@ -252,15 +344,43 @@ def run(directory: Path, config: dict):
                 continue
             try:
                 started = time.perf_counter()
-                row, matches, masks = live.step(frame)
+                tracking_frame = frame
+                depth_started = time.perf_counter()
+                if depth_source is not None:
+                    stereo = None
+                    if stereo_geometry is not None:
+                        stereo = StereoInput(frame.infrared_left, frame.infrared_right, *stereo_geometry)
+                    selected_depth = depth_source.predict(
+                        DepthInput(
+                            frame.rgb,
+                            frame.metric_depth(),
+                            frame.intrinsics,
+                            stereo,
+                        )
+                    )
+                    # The raw capture remains in history; only this processing
+                    # frame receives the model result. Keep sensor depth as a
+                    # separate comparison map for the 3D/Depth display.
+                    from dataclasses import replace
+
+                    tracking_frame = replace(
+                        frame,
+                        depth=np.rint(selected_depth.depth_m / frame.depth_m_per_unit)
+                        .clip(0, 65535)
+                        .astype(np.uint16),
+                        depth_before_filters=frame.depth,
+                    )
+                depth_ms = (time.perf_counter() - depth_started) * 1000
+                row, matches, masks = live.step(tracking_frame)
                 packet = live_scene_packet(
-                    frame,
+                    tracking_frame,
                     live,
                     row,
                     masks,
                     matches,
                     group_overlay=group_overlay,
-                    depth_processing=camera.depth_processing,
+                    depth_processing=frame.depth_processing,
+                    depth_source=depth_source_name,
                 )
                 temporary = directory / "scene.tmp"
                 temporary.write_bytes(packet)
@@ -271,12 +391,16 @@ def run(directory: Path, config: dict):
                 state(
                     "tracking",
                     frame_id=frame.frame_id,
+                    depth_processing=frame.depth_processing,
+                    depth_source=depth_source_name,
+                    depth_filter_revision=frame.depth_filter_revision,
                     method=LIVE_METHOD,
                     history={"dropped_frames": history.dropped, "error": history.error} if history else None,
                     timings={
                         "processed_fps": 1 / elapsed,
                         "processing_ms": row["processing_ms"],
                         "mask_ms": row["mask_ms"],
+                        "depth_ms": depth_ms,
                         "image_matching_ms": row.get("scene_point_tracking_ms", 0.0),
                         "display_ms": elapsed * 1000 - row["processing_ms"],
                         "skipped_camera_frames": max(0, frame.frame_id - last_id - 1) if last_id >= 0 else 0,

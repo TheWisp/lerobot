@@ -169,6 +169,10 @@ class RealSenseCamera(Camera):
         # Installed by FLASH's rolling recorder before connect(); independent
         # of consumers that poll the latest-frame slot.
         self.aligned_frame_listener = None
+        # Optional FLASH observer receives the aligned depth before and after
+        # software filters for the exact same camera frame.
+        self.aligned_frame_with_raw_listener = None
+        self.aligned_frame_with_stereo_listener = None
 
         self.rs_pipeline: rs.pipeline | None = None
         self.rs_profile: rs.pipeline_profile | None = None
@@ -181,6 +185,10 @@ class RealSenseCamera(Camera):
         self.hole_filling_filter: Any | None = None
         self.depth_to_disparity: Any | None = None  # For spatial/temporal filters
         self.disparity_to_depth: Any | None = None  # For spatial/temporal filters
+        self._depth_filter_lock = Lock()
+        self._depth_filter_revision = 0
+        self._last_applied_depth_processing: dict[str, bool] | None = None
+        self._last_applied_depth_filter_revision = 0
 
         self.thread: Thread | None = None
         self.stop_event: Event | None = None
@@ -189,6 +197,9 @@ class RealSenseCamera(Camera):
         self.latest_depth_frame: NDArray[Any] | None = None
         self.latest_timestamp: float | None = None
         self.latest_frame_sequence: int | None = None
+        self.latest_depth_processing: dict[str, bool] | None = None
+        self.latest_depth_filter_revision = 0
+        self.latest_infrared_pair: tuple[NDArray[Any], NDArray[Any]] | None = None
         self.new_frame_event: Event = Event()
         self._read_timing = RealSenseReadTiming()
 
@@ -214,6 +225,10 @@ class RealSenseCamera(Camera):
         consumer knows whether a 0 is the sensor's own hole or one a filter
         left. The filters run only on the aligned colour+depth path; a
         depth-only stream is published as the sensor gives it."""
+        with self._depth_filter_lock:
+            return self._depth_processing_unlocked()
+
+    def _depth_processing_unlocked(self) -> dict[str, bool]:
         filtered = bool(self.use_rgb and self.use_depth)
         return {
             "decimation": filtered and self.enable_decimation,
@@ -221,6 +236,71 @@ class RealSenseCamera(Camera):
             "temporal": filtered and self.enable_temporal,
             "hole_filling": filtered and self.enable_hole_filling,
         }
+
+    @property
+    def last_applied_depth_processing(self) -> tuple[dict[str, bool], int]:
+        """Filter state for the most recently published aligned depth frame."""
+        with self._depth_filter_lock:
+            return (
+                dict(self._last_applied_depth_processing or self._depth_processing_unlocked()),
+                self._last_applied_depth_filter_revision,
+            )
+
+    @property
+    def depth_filter_revision(self) -> int:
+        """Revision requested for the next aligned depth frame."""
+        with self._depth_filter_lock:
+            return self._depth_filter_revision
+
+    def set_depth_processing(self, *, spatial: bool, temporal: bool, hole_filling: bool) -> dict[str, bool]:
+        """Change the three same-resolution depth filters without restarting the streams.
+
+        A newly enabled temporal filter starts with empty history; one frame
+        uses one complete filter configuration under the same lock.
+        """
+        if not self.use_depth:
+            raise RuntimeError("Depth stream is disabled")
+        with self._depth_filter_lock:
+            if (
+                (spatial, temporal, hole_filling)
+                == (self.enable_spatial, self.enable_temporal, self.enable_hole_filling)
+                and (not spatial or self.spatial_filter is not None)
+                and (not temporal or self.temporal_filter is not None)
+                and (not hole_filling or self.hole_filling_filter is not None)
+            ):
+                return self._depth_processing_unlocked()
+            new_spatial = self.spatial_filter if spatial and self.enable_spatial else None
+            if spatial and new_spatial is None:
+                new_spatial = rs.spatial_filter()
+                new_spatial.set_option(rs.option.filter_magnitude, 2)
+                new_spatial.set_option(rs.option.filter_smooth_alpha, 0.5)
+                new_spatial.set_option(rs.option.filter_smooth_delta, 20)
+            new_temporal = self.temporal_filter if temporal and self.enable_temporal else None
+            if temporal and new_temporal is None:
+                new_temporal = rs.temporal_filter()
+                new_temporal.set_option(rs.option.filter_smooth_alpha, 0.4)
+                new_temporal.set_option(rs.option.filter_smooth_delta, 20)
+            new_holes = self.hole_filling_filter if hole_filling and self.enable_hole_filling else None
+            if hole_filling and new_holes is None:
+                new_holes = rs.hole_filling_filter()
+            if spatial or temporal:
+                to_disparity = self.depth_to_disparity or rs.disparity_transform(True)
+                from_disparity = self.disparity_to_depth or rs.disparity_transform(False)
+            else:
+                to_disparity = from_disparity = None
+            self.enable_spatial, self.enable_temporal, self.enable_hole_filling = (
+                spatial,
+                temporal,
+                hole_filling,
+            )
+            self.spatial_filter, self.temporal_filter, self.hole_filling_filter = (
+                new_spatial,
+                new_temporal,
+                new_holes,
+            )
+            self.depth_to_disparity, self.disparity_to_depth = to_disparity, from_disparity
+            self._depth_filter_revision += 1
+            return self._depth_processing_unlocked()
 
     @check_if_already_connected
     def connect(self, warmup: bool = True) -> None:
@@ -268,24 +348,11 @@ class RealSenseCamera(Camera):
                 self.decimation_filter = rs.decimation_filter()
                 self.decimation_filter.set_option(rs.option.filter_magnitude, 2)
 
-            if self.enable_spatial:
-                self.spatial_filter = rs.spatial_filter()
-                self.spatial_filter.set_option(rs.option.filter_magnitude, 2)
-                self.spatial_filter.set_option(rs.option.filter_smooth_alpha, 0.5)
-                self.spatial_filter.set_option(rs.option.filter_smooth_delta, 20)
-
-            if self.enable_temporal:
-                self.temporal_filter = rs.temporal_filter()
-                self.temporal_filter.set_option(rs.option.filter_smooth_alpha, 0.4)
-                self.temporal_filter.set_option(rs.option.filter_smooth_delta, 20)
-
-            if self.enable_hole_filling:
-                self.hole_filling_filter = rs.hole_filling_filter()
-
-            # Disparity transforms (needed for spatial/temporal filters)
-            if self.enable_spatial or self.enable_temporal:
-                self.depth_to_disparity = rs.disparity_transform(True)
-                self.disparity_to_depth = rs.disparity_transform(False)
+            self.set_depth_processing(
+                spatial=self.enable_spatial,
+                temporal=self.enable_temporal,
+                hole_filling=self.enable_hole_filling,
+            )
 
         self._start_read_thread()
 
@@ -392,11 +459,17 @@ class RealSenseCamera(Camera):
                 )
             if self.use_depth:
                 rs_config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, self.fps)
+            if self.config.enable_infrared:
+                for index in (1, 2):
+                    rs_config.enable_stream(rs.stream.infrared, index, 848, 480, rs.format.y8, self.fps)
         else:
             if self.use_rgb:
                 rs_config.enable_stream(rs.stream.color)
             if self.use_depth:
                 rs_config.enable_stream(rs.stream.depth)
+            if self.config.enable_infrared:
+                for index in (1, 2):
+                    rs_config.enable_stream(rs.stream.infrared, index)
 
     @check_if_not_connected
     def _configure_capture_settings(self) -> None:
@@ -502,8 +575,8 @@ class RealSenseCamera(Camera):
         5. Disparity-to-Depth (convert back)
         6. Hole filling (fill missing depth values)
 
-        Note: Filters should be applied BEFORE alignment for best results,
-        as they are designed to work on native depth sensor data.
+        The aligned RGB-D path currently applies these filters after
+        depth-to-color alignment. The depth-only path is unfiltered.
 
         Args:
             frame: RealSense depth frame or frameset object
@@ -511,29 +584,22 @@ class RealSenseCamera(Camera):
         Returns:
             Filtered frame (same type as input)
         """
-        # Apply decimation first (reduces resolution)
-        if self.enable_decimation and self.decimation_filter is not None:
-            frame = self.decimation_filter.process(frame)
-
-        # Spatial and temporal filters work better in disparity space
-        if self.enable_spatial or self.enable_temporal:
-            if self.depth_to_disparity is not None:
+        with self._depth_filter_lock:
+            if self.enable_decimation and self.decimation_filter is not None:
+                frame = self.decimation_filter.process(frame)
+            if (self.enable_spatial or self.enable_temporal) and self.depth_to_disparity is not None:
                 frame = self.depth_to_disparity.process(frame)
-
                 if self.enable_spatial and self.spatial_filter is not None:
                     frame = self.spatial_filter.process(frame)
-
                 if self.enable_temporal and self.temporal_filter is not None:
                     frame = self.temporal_filter.process(frame)
-
                 if self.disparity_to_depth is not None:
                     frame = self.disparity_to_depth.process(frame)
-
-        # Hole filling last
-        if self.enable_hole_filling and self.hole_filling_filter is not None:
-            frame = self.hole_filling_filter.process(frame)
-
-        return frame
+            if self.enable_hole_filling and self.hole_filling_filter is not None:
+                frame = self.hole_filling_filter.process(frame)
+            self._last_applied_depth_processing = self._depth_processing_unlocked()
+            self._last_applied_depth_filter_revision = self._depth_filter_revision
+            return frame
 
     def read_color_and_aligned_depth(
         self, color_mode: ColorMode | None = None, timeout_ms: int = 200
@@ -563,8 +629,15 @@ class RealSenseCamera(Camera):
         return frame[0], frame[1]
 
     def read_color_and_aligned_depth_with_timestamp(
-        self, color_mode: ColorMode | None = None, timeout_ms: int = 200, *, include_sequence: bool = False
-    ) -> tuple[NDArray[Any], NDArray[Any], float] | tuple[NDArray[Any], NDArray[Any], float, int]:
+        self,
+        color_mode: ColorMode | None = None,
+        timeout_ms: int = 200,
+        *,
+        include_sequence: bool = False,
+        include_processing: bool = False,
+        include_before_filters: bool = False,
+        include_infrared: bool = False,
+    ) -> tuple[NDArray[Any], NDArray[Any], float, *tuple[Any, ...]]:
         """Return one aligned frameset and its monotonic capture-time estimate.
 
         All three values are read under the same frame lock. The timestamp is
@@ -595,6 +668,10 @@ class RealSenseCamera(Camera):
             depth_frame = self.latest_depth_frame
             timestamp = self.latest_timestamp
             sequence = getattr(self, "latest_frame_sequence", None)
+            processing = getattr(self, "latest_depth_processing", None)
+            revision = getattr(self, "latest_depth_filter_revision", 0)
+            before_filters = getattr(self, "latest_depth_before_filters", None)
+            infrared = self.latest_infrared_pair
             self.new_frame_event.clear()
 
         if color_frame is None or depth_frame is None or timestamp is None:
@@ -603,6 +680,23 @@ class RealSenseCamera(Camera):
         if include_sequence:
             if sequence is None:
                 raise RuntimeError(f"No frame sequence available for {self}.")
+            if include_processing:
+                if include_before_filters:
+                    result = (
+                        color_frame,
+                        depth_frame,
+                        timestamp,
+                        sequence,
+                        processing,
+                        revision,
+                        before_filters,
+                    )
+                    if include_infrared:
+                        if infrared is None:
+                            raise RuntimeError("Synchronized infrared pair is not enabled")
+                        return (*result, *infrared)
+                    return result
+                return color_frame, depth_frame, timestamp, sequence, processing, revision
             return color_frame, depth_frame, timestamp, sequence
         return color_frame, depth_frame, timestamp
 
@@ -720,6 +814,13 @@ class RealSenseCamera(Camera):
                     self._read_timing.inflight_started_s = hardware_start_s
                 frameset = self._read_from_hardware()
                 capture_time = time.perf_counter()
+                infrared = None
+                if self.config.enable_infrared:
+                    left = frameset.get_infrared_frame(1)
+                    right = frameset.get_infrared_frame(2)
+                    if not left or not right:
+                        raise RuntimeError("Missing synchronized infrared frame")
+                    infrared = (np.asanyarray(left.get_data()).copy(), np.asanyarray(right.get_data()).copy())
                 with self.frame_lock:
                     hardware_wait_s = capture_time - hardware_start_s
                     if self._read_timing.frames == 0:
@@ -737,6 +838,10 @@ class RealSenseCamera(Camera):
                     aligned = self.align_to_color.process(frameset)
                     color_frame_raw = aligned.get_color_frame()
                     depth_frame_raw = aligned.get_depth_frame()
+                    # Keep the color-aligned sensor values separate from SDK
+                    # filter output. Comparing native unaligned depth here
+                    # would mark alignment gaps as filter-created points.
+                    before_filters = np.asanyarray(depth_frame_raw.get_data()).copy()
 
                     # Apply depth post-processing filters
                     depth_frame_raw = self._apply_depth_filters(depth_frame_raw)
@@ -751,10 +856,18 @@ class RealSenseCamera(Camera):
                             (color_frame.shape[1], color_frame.shape[0]),
                             interpolation=cv2.INTER_NEAREST,
                         )
+                    if before_filters.shape != color_frame.shape[:2]:
+                        before_filters = cv2.resize(
+                            before_filters,
+                            (color_frame.shape[1], color_frame.shape[0]),
+                            interpolation=cv2.INTER_NEAREST,
+                        )
 
                     processed_color_frame = self._postprocess_image(color_frame)
                     processed_depth_frame = self._postprocess_image(depth_frame, depth_frame=True)
+                    before_filters = self._postprocess_image(before_filters, depth_frame=True)
                 else:
+                    before_filters = None
                     if self.use_rgb:
                         color_frame_raw = frameset.get_color_frame()
                         color_frame = np.asanyarray(color_frame_raw.get_data())
@@ -805,6 +918,38 @@ class RealSenseCamera(Camera):
                 if processed_depth_frame is not None:
                     processed_depth_frame = processed_depth_frame.copy()
 
+                provenance_listener = getattr(self, "aligned_frame_with_raw_listener", None)
+                if (
+                    provenance_listener is not None
+                    and processed_color_frame is not None
+                    and processed_depth_frame is not None
+                    and before_filters is not None
+                ):
+                    try:
+                        provenance_listener(
+                            processed_color_frame,
+                            processed_depth_frame,
+                            before_filters,
+                            capture_time,
+                            frame_sequence,
+                        )
+                    except Exception as exc:
+                        logger.warning("%s: aligned frame provenance listener failed: %s", self, exc)
+
+                stereo_listener = getattr(self, "aligned_frame_with_stereo_listener", None)
+                if stereo_listener is not None and infrared is not None:
+                    try:
+                        stereo_listener(
+                            processed_color_frame,
+                            processed_depth_frame,
+                            before_filters,
+                            *infrared,
+                            capture_time,
+                            frame_sequence,
+                        )
+                    except Exception as exc:
+                        logger.warning("%s: stereo frame listener failed: %s", self, exc)
+
                 listener = getattr(self, "aligned_frame_listener", None)
                 if (
                     listener is not None
@@ -833,6 +978,12 @@ class RealSenseCamera(Camera):
                         self.latest_color_frame = processed_color_frame
                     if self.use_depth and processed_depth_frame is not None:
                         self.latest_depth_frame = processed_depth_frame
+                        self.latest_depth_before_filters = before_filters
+                        self.latest_depth_processing = getattr(self, "_last_applied_depth_processing", None)
+                        self.latest_depth_filter_revision = getattr(
+                            self, "_last_applied_depth_filter_revision", 0
+                        )
+                    self.latest_infrared_pair = infrared
                     self.latest_timestamp = capture_time
                     self.latest_frame_sequence = frame_sequence
                     # Publishing the notification with the snapshot prevents a
@@ -905,6 +1056,7 @@ class RealSenseCamera(Camera):
             self.latest_depth_frame = None
             self.latest_timestamp = None
             self.latest_frame_sequence = None
+            self.latest_infrared_pair = None
             self.new_frame_event.clear()
 
     def _async_read(self, timeout_ms: float, read_depth: bool = False) -> NDArray[Any]:

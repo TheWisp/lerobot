@@ -48,6 +48,21 @@ def test_click_is_bound_to_displayed_image_not_newest_camera_frame():
         seed_frame({"point": [11, 5], "frame_id": 8}, old, latest)
 
 
+def test_click_recovers_exact_displayed_frame_from_history_after_preview_expires(tmp_path):
+    from lerobot.policies.flash.tracking_history import RollingHistory
+
+    old, latest = frame(8), frame(12)
+    history = RollingHistory(tmp_path, reserve_bytes=0)
+    history.submit_frame(old)
+    history.queue.join()
+    history.close()
+    selected = seed_frame({"point": [4, 5], "frame_id": 8}, None, latest, tmp_path)
+    assert selected.frame_id == old.frame_id
+    np.testing.assert_array_equal(selected.rgb, old.rgb)
+    with pytest.raises(ValueError, match="no longer available"):
+        seed_frame({"point": [4, 5], "frame_id": 9}, None, latest, tmp_path)
+
+
 def test_debugger_group_bridge_consumes_camera_frames_between_vision_results():
     import time
 

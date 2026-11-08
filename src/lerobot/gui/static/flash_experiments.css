@@ -112,7 +112,7 @@
 .flash-source-tabs button:hover { background: #23354d; }
 .flash-source-tabs button[aria-pressed="true"] { color: #4fc3f7; border-bottom-color: #4fc3f7; }
 #tab-flash #flash-live-sidebar { width: 280px; min-width: 210px; }
-.flash-live-settings { display: flex; flex: 0 0 48%; min-height: 150px; flex-direction: column; gap: 12px; padding: 12px 16px; overflow-y: auto; box-sizing: border-box; }
+.flash-live-settings { display: flex; flex: 0 0 62%; min-height: 150px; flex-direction: column; gap: 12px; padding: 12px 16px; overflow-y: auto; box-sizing: border-box; }
 .flash-live-settings h2, .flash-live-recording-heading h2 { font-size: 14px; margin: 0; color: #e5effb; }
 .flash-live-section-resize { border-top: 1px solid #304960; }
 .flash-live-recording-panel { display: flex; flex: 1; flex-direction: column; min-height: 100px; padding: 12px; gap: 9px; overflow: hidden; }
@@ -135,14 +135,30 @@
 .flash-live-depth-processing summary { cursor: pointer; }
 .flash-live-depth-processing label { display: block; margin: 7px 0; }
 .flash-live-depth-processing .training-field-hint { margin: 8px 0; }
+.flash-live-settings #flash-live-depth-source { flex: none; width: 100%; box-sizing: border-box; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.flash-live-settings #flash-live-depth-source button { flex: 1; min-width: 0; border: 0; border-radius: 0; padding: 7px 4px; background: #20344b; color: #edf3fa; cursor: pointer; }
+.flash-live-settings #flash-live-depth-source button[data-mode="sensor"],
+.flash-live-settings #flash-live-depth-source button[data-mode="lingbot"],
+.flash-live-settings #flash-live-depth-source button[data-mode="foundation_stereo"],
+.flash-live-settings #flash-live-depth-source .flash-depth-model-heading { grid-column: 1 / -1; }
+.flash-live-settings #flash-live-depth-source .flash-depth-model-heading { padding: 7px 4px; text-align: center; color: #b8c7d8; border-top: 1px solid #31516c; }
+.flash-live-settings #flash-live-depth-source button[data-mode^="lite_any_stereo_v2"] { border-top: 1px solid #31516c; }
+.flash-live-settings #flash-live-depth-source button[data-mode^="lite_any_stereo_v2"] + button { border-left: 1px solid #31516c; }
+.flash-live-settings #flash-live-depth-source button + button { border-top: 1px solid #31516c; }
+.flash-live-settings #flash-live-depth-source button[aria-pressed="true"] { background: #315b80; color: #fff; }
 .flash-live-depth-info { display: inline-flex; align-items: center; gap: 7px; color: #b8c7d8; font-size: 11px; font-variant-numeric: tabular-nums; }
 .flash-live-depth-info::before { content: ''; display: inline-block; width: 72px; height: 8px; background: linear-gradient(90deg,#7a0403,#f05b12,#e1dd37,#43f787,#4099ff,#30123b); border-radius: 3px; }
+.flash-live-depth-info--scene::before { display: none; }
 .flash-live-depth-info[hidden] { display: none; }
 .flash-experiment-tools [hidden] { display: none !important; }
 .flash-live-settings textarea { height: 180px; font: 12px monospace; }
 #flash-live-panel { display: flex; flex: 1; flex-direction: column; gap: 10px; padding: 16px; min-height: 0; overflow-y: auto; }
 #flash-live-status, #flash-live-objects { margin: 0; font-size: 13px; color: #b8c7d8; }
 .flash-live-viewer { flex: 1; min-height: 240px; position: relative; background: #101923; }
+.rgbd-metric-ruler { position: absolute; left: 12px; bottom: 12px; z-index: 2; display: flex; flex-direction: column; gap: 4px; padding: 7px 9px; color: #e8f1fa; background: #101923dc; border-radius: 4px; font: 11px/1.2 sans-serif; pointer-events: none; }
+.rgbd-metric-bar { box-sizing: border-box; display: block; height: 8px; border-left: 2px solid #e8f1fa; border-right: 2px solid #e8f1fa; border-bottom: 2px solid #e8f1fa; }
+.rgbd-metric-label { white-space: nowrap; }
+#flash-live-scene[hidden] ~ .rgbd-metric-ruler, #flash-experiment-scene[hidden] ~ .rgbd-metric-ruler { display: none; }
 #flash-live-image, #flash-live-scene { width: 100%; height: 100%; }
 #flash-live-image { object-fit: contain; }
 @media (max-width: 700px) { #tab-flash #flash-live-sidebar { width: 180px; min-width: 150px; } }

@@ -20,11 +20,18 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lerobot.policies.flash.live_surface_io import write_snapshot
-from lerobot.policies.flash.tracking_history import history_root, read_index, read_packet, save_window
+from lerobot.policies.flash.tracking_history import (
+    export_episode,
+    history_root,
+    read_index,
+    read_packet,
+    save_window,
+)
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 router = APIRouter(prefix="/api/run/flash/tracking", tags=["flash-tracking"])
 _io = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-debug-state")
+_export = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-episode-export")
 _directory: Path | None = None
 
 
@@ -38,6 +45,16 @@ class TrackingStart(BaseModel):
     fps: int = Field(default=30, gt=0)
     preview_fps: int = Field(default=10, gt=0)
     history_seconds: int = Field(default=60, ge=1, le=600)
+    # Model outputs are opt-in and never replace the recorded sensor arrays.
+    depth_source: Literal[
+        "sensor",
+        "lingbot",
+        "foundation_stereo",
+        "lite_any_stereo_v2",
+        "lite_any_stereo_v2_s",
+        "lite_any_stereo_v2_m",
+        "lite_any_stereo_v2_l",
+    ] = "sensor"
     # Applied by the camera before FLASH sees the depth map. Off by default so
     # the live depth view exposes sensor holes and measured noise.
     depth_processing: dict[Literal["spatial", "temporal", "hole_filling"], bool] = Field(
@@ -63,17 +80,31 @@ class TrackingStart(BaseModel):
 
 class TrackingControl(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    action: Literal["freeze", "clear", "select", "clear_history"]
+    action: Literal["freeze", "clear", "select", "clear_history", "depth_filters"]
     id: str
     prompt: str = ""
     point: tuple[float, float] | None = None
     frame_id: int | None = None
+    depth_processing: dict[Literal["spatial", "temporal", "hole_filling"], bool] | None = None
+
+    @model_validator(mode="after")
+    def complete_filter_change(self):
+        if self.action == "depth_filters" and (
+            self.depth_processing is None
+            or set(self.depth_processing) != {"spatial", "temporal", "hole_filling"}
+        ):
+            raise ValueError("Supply all three depth-filter switches")
+        return self
 
 
 class RecordingRename(BaseModel):
     model_config = ConfigDict(extra="forbid")
     recording: str
     name: str = Field(min_length=1, max_length=80)
+
+
+class EpisodeExport(BaseModel):
+    recording: str
 
 
 def _python() -> str:
@@ -290,6 +321,9 @@ async def history(recording: str = "recent"):
                 {
                     "id": directory.name,
                     "name": index.get("name"),
+                    "episode_root": str(directory / "episode")
+                    if (directory / "episode" / "meta" / "info.json").is_file()
+                    else None,
                     "saved_at": index.get("saved_at"),
                     "frames": len(index["frames"]),
                     "objects": names,
@@ -298,11 +332,20 @@ async def history(recording: str = "recent"):
         recordings.sort(key=lambda row: row["saved_at"] or 0, reverse=True)
         recent = read_index(root / "recent")
         index = recent if recording == "recent" else read_index(_history_directory(recording))
+        camera_file = root / recording / "episode" / "flash" / "v1" / "camera.json"
+        streams_file = root / recording / "camera_streams.json"
         return {
             **index,
             "recording": recording,
             "recordings": recordings,
             "recent_frames": len(recent["frames"]),
+            "episode_camera": json.loads(camera_file.read_text()) if camera_file.is_file() else None,
+            "camera_streams": json.loads(streams_file.read_text()) if streams_file.is_file() else None,
+            "overlay_indices": [
+                i
+                for i, row in enumerate(index["frames"])
+                if (root / recording / f"{row['frame']:010d}.overlay.json").is_file()
+            ],
         }
 
     return await asyncio.get_running_loop().run_in_executor(_io, read)
@@ -329,6 +372,32 @@ async def save_history():
             raise HTTPException(409, str(exc)) from exc
 
     return await asyncio.get_running_loop().run_in_executor(_io, save)
+
+
+@router.post("/history/episode")
+async def create_history_episode(request: EpisodeExport):
+    if request.recording == "recent":
+        raise HTTPException(400, "Save recent history before exporting an episode")
+    directory = _history_directory(request.recording)
+    root = await asyncio.get_running_loop().run_in_executor(_export, export_episode, directory)
+    return {"recording": request.recording, "episode_root": str(root)}
+
+
+@router.get("/history/overlay")
+async def history_overlay(recording: str, index: int):
+    directory = _history_directory(recording)
+
+    def read():
+        rows = read_index(directory)["frames"]
+        if index < 0 or index >= len(rows):
+            raise HTTPException(404, "Frame is outside this recording")
+        for i in range(index, -1, -1):
+            path = directory / "episode" / "flash" / "v1" / "overlays" / f"{i:06d}.json"
+            if path.is_file():
+                return {"source_index": i, **json.loads(path.read_text())}
+        return {"source_index": None, "objects": {}, "scene_group_tracks": []}
+
+    return await asyncio.get_running_loop().run_in_executor(_io, read)
 
 
 @router.patch("/history/name")

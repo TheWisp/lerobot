@@ -3545,8 +3545,8 @@ async def get_frame_depth(dataset_id: str, episode_idx: int, frame_idx: int, cam
     """One frame of a depth camera as raw little-endian uint16 millimetres,
     row-major at the stored size, gzip on the wire. A pixel at or below the
     quantizer's floor, where a stored "no measurement" comes back, is 0, so a
-    consumer only has to test for zero. Decoded through the pyav depth path,
-    one video, not the whole multi-camera item."""
+    consumer only has to test for zero. Video depth is decoded through pyav;
+    image depth is read from the episode row."""
     import gzip
 
     import numpy as np
@@ -3564,13 +3564,21 @@ async def get_frame_depth(dataset_id: str, episode_idx: int, frame_idx: int, cam
     ep = dataset.meta.episodes[episode_idx]
     if frame_idx < 0 or frame_idx >= int(ep["length"]):
         raise HTTPException(status_code=404, detail=f"Frame not found: {frame_idx}")
-    fps = float(dataset.meta.fps)
-    timestamp = float(ep[f"videos/{camera}/from_timestamp"]) + frame_idx / fps
-    video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera)
+    is_video = dataset.meta.features[camera]["dtype"] == "video"
+    if is_video:
+        fps = float(dataset.meta.fps)
+        timestamp = float(ep[f"videos/{camera}/from_timestamp"]) + frame_idx / fps
+        video_path = dataset.root / dataset.meta.get_video_file_path(episode_idx, camera)
+    else:
+        episode_start, _ = dataset.episode_rows(episode_idx)
     floor = invalid_below_mm(dataset.meta.features[camera])
 
     def _decode() -> tuple[bytes, int, int]:
-        mm = _decode_depth_frames(dataset, camera, video_path, [timestamp], 1 / fps * 0.7)
+        mm = (
+            _decode_depth_frames(dataset, camera, video_path, [timestamp], 1 / fps * 0.7)
+            if is_video
+            else dataset[episode_start + frame_idx][camera]
+        )
         arr = np.asarray(mm).reshape(-1, *np.asarray(mm).shape[-2:])[0]
         arr = np.where(arr > floor, arr, 0.0)
         depth = np.ascontiguousarray(np.rint(arr).clip(0, 65535).astype("<u2"))

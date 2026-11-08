@@ -875,7 +875,7 @@ async function requestFlashExperimentScene() {
         const bitmap = await createImageBitmap(new Blob([buffer.slice(depthStart + packet.depth_bytes)], {type: 'image/png'}));
         if (generation !== state.generation || !state.enabled || identity !== flashExperiments.selected ||
             method !== document.getElementById('flash-experiment-method').value) { bitmap.close(); return; }
-        const module = await import('/static/rgbd_scene.js?v=7');
+        const module = await import('/static/rgbd_scene.js?v=8');
         if (generation !== state.generation || !state.enabled || identity !== flashExperiments.selected ||
             method !== document.getElementById('flash-experiment-method').value) { bitmap.close(); return; }
         if (!state.viewer) state.viewer = module.createRgbdScene(document.getElementById('flash-experiment-scene'));

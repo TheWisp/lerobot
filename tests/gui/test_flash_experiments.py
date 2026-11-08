@@ -1276,7 +1276,7 @@ def test_scene_browser_orbits_resets_and_switches_recorded_method(gui_page, tmp_
 @pytest.mark.requires_playwright
 def test_shared_rgbd_shader_preserves_rgb_depth_alignment_and_missing_depth(gui_page):
     result = gui_page.evaluate("""async () => {
-        const {createRgbdScene} = await import('/static/rgbd_scene.js?v=6');
+        const {createRgbdScene} = await import('/static/rgbd_scene.js?v=8');
         const canvas=document.createElement('canvas');
         canvas.style.cssText='position:fixed;left:0;top:0;width:320px;height:240px';
         document.body.append(canvas);
@@ -1291,13 +1291,83 @@ def test_shared_rgbd_shader_preserves_rgb_depth_alignment_and_missing_depth(gui_
         const copy=document.createElement('canvas');copy.width=canvas.width;copy.height=canvas.height;
         const context=copy.getContext('2d');context.drawImage(canvas,0,0);
         const pixel=(u,v)=>Array.from(context.getImageData(u*10,v*10,1,1).data);
-        const result={left:pixel(8,8),right:pixel(24,8),missing:pixel(8,20)};
-        viewer.dispose();canvas.remove();return result;
+        viewer.update(depth,rgb,{width:32,height:24,intrinsics:[[30,0,13],[0,30,10],[0,0,1]]},[
+            {layer:'estimate',points:[[0,0,1],[0.05,0,1]],
+             pose:[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],color:0xffa343}]);
+        const ruler=document.querySelector('.rgbd-metric-ruler');
+        const scaleBefore=parseFloat(ruler.querySelector('.rgbd-metric-bar').style.width);
+        viewer.focus();
+        const scaleAfter=parseFloat(ruler.querySelector('.rgbd-metric-bar').style.width);
+        const result={left:pixel(8,8),right:pixel(24,8),missing:pixel(8,20),
+            scaleBefore,scaleAfter,label:ruler.textContent};
+        viewer.dispose();result.removed=!document.querySelector('.rgbd-metric-ruler');canvas.remove();return result;
     }""")
     assert result["left"][:3] == [255, 0, 0]
     assert result["right"][:3] == [0, 0, 255]
     assert result["missing"][:3] != result["left"][:3]
     assert max(result["missing"][:3]) < 80
+    assert result["scaleBefore"] > 0 and result["scaleAfter"] > 0
+    assert result["scaleBefore"] != result["scaleAfter"]
+    assert "1 mm" in result["label"] and result["removed"]
+
+
+@pytest.mark.requires_playwright
+def test_rgbd_cloud_unprojects_depth_in_metres_from_rotated_view(gui_page):
+    # Test the GPU result, not just the unprojection formula: differently
+    # coloured pixels at two known depths must appear at their calibrated 3D
+    # positions after the camera rotates. A coloured zero-depth pixel is absent.
+    result = gui_page.evaluate("""async () => {
+        const THREE = await import('/static/vendor/three.module.js');
+        const {createRgbdCloud} = await import('/static/rgbd_scene.js?v=9');
+        const width=8, height=6, depth=new Float32Array(width*height), rgb=new Uint8Array(width*height*4);
+        const samples=[{u:1,v:1,z:0.6,color:[255,0,0]},
+                       {u:6,v:4,z:1.2,color:[0,0,255]},
+                       {u:3,v:2,z:0,color:[0,255,0]}];
+        for(const {u,v,z,color} of samples){
+            const i=v*width+u;depth[i]=z;rgb.set([...color,255],i*4);
+        }
+        const frame={width,height,intrinsics:[[8,0,3.5],[0,8,2.5],[0,0,1]]};
+        const cloud=createRgbdCloud();cloud.update(depth,rgb,frame);cloud.uniforms.pointSize.value=9;
+        const canvas=document.createElement('canvas');canvas.width=400;canvas.height=300;
+        document.body.append(canvas);
+        const renderer=new THREE.WebGLRenderer({canvas,preserveDrawingBuffer:true,antialias:false});
+        renderer.setPixelRatio(1);renderer.setSize(400,300,false);renderer.setClearColor(0x000000);
+        const scene=new THREE.Scene();scene.add(cloud.points);
+        const camera=new THREE.PerspectiveCamera(60,400/300,0.01,10);
+        camera.position.set(0.2,0.05,0);camera.lookAt(0,0,-1);camera.updateMatrixWorld();
+        const copy=document.createElement('canvas');copy.width=400;copy.height=300;
+        const context=copy.getContext('2d');
+        const readColors=()=>{
+            renderer.render(scene,camera);context.drawImage(canvas,0,0);
+            const pixels=context.getImageData(0,0,400,300).data;
+            return [0,2,1].map(channel=>{
+            let count=0,sumX=0,sumY=0;
+            for(let y=0;y<300;y++)for(let x=0;x<400;x++){
+                const i=(y*400+x)*4;
+                if(pixels[i+channel]>180 && pixels[i+(channel+1)%3]<50 && pixels[i+(channel+2)%3]<50){
+                    count++;sumX+=x;sumY+=y;
+                }
+            }
+            return {count,x:sumX/count,y:sumY/count};
+            });
+        };
+        const fromArray=readColors();
+        const bitmap=await createImageBitmap(new ImageData(new Uint8ClampedArray(rgb),width,height));
+        cloud.update(depth,bitmap,frame);
+        const fromBitmap=readColors();bitmap.close();
+        const expected=samples.map(({u,v,z})=>{
+            const point=new THREE.Vector3((u-3.5)*z/8,-(v-2.5)*z/8,-z).project(camera);
+            return {x:(point.x+1)*200,y:(1-point.y)*150};
+        });
+        cloud.dispose();renderer.dispose();canvas.remove();
+        return {fromArray,fromBitmap,expected};
+    }""")
+    for kind in ("fromArray", "fromBitmap"):
+        for actual, expected in zip(result[kind][:2], result["expected"][:2], strict=True):
+            assert actual["count"] > 0
+            assert actual["x"] == pytest.approx(expected["x"], abs=2)
+            assert actual["y"] == pytest.approx(expected["y"], abs=2)
+        assert result[kind][2]["count"] == 0
 
 
 def test_supplied_label_model_uses_its_own_object_coordinates(tmp_path):

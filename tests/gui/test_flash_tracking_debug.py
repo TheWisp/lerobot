@@ -61,6 +61,35 @@ def test_live_depth_filters_default_off_and_reject_unaligned_decimation():
     }
     with pytest.raises(ValidationError):
         flash_tracking.TrackingStart(depth_processing={"decimation": True})
+    assert flash_tracking.TrackingControl(
+        action="depth_filters",
+        id="one",
+        depth_processing={
+            "spatial": True,
+            "temporal": False,
+            "hole_filling": True,
+        },
+    ).depth_processing["hole_filling"]
+    with pytest.raises(ValidationError):
+        flash_tracking.TrackingControl(
+            action="depth_filters", id="partial", depth_processing={"spatial": True}
+        )
+
+
+def test_preview_image_records_the_depth_filter_state_of_its_own_frame():
+    from dataclasses import replace
+
+    from lerobot.policies.flash.live_surface_io import image_snapshot
+    from tests.policies.flash.test_shared_image_tracking import frame
+
+    measured = replace(
+        frame(1),
+        depth_processing={"spatial": True, "temporal": False, "hole_filling": False},
+        depth_filter_revision=7,
+    )
+    snapshot = image_snapshot(measured)
+    assert snapshot["depth_processing"] == measured.depth_processing
+    assert snapshot["depth_filter_revision"] == 7
 
 
 def test_snapshot_keeps_camera_and_estimate_frame_identity_separate(tmp_path, monkeypatch):
@@ -494,7 +523,23 @@ def test_typed_pipeline_form_submits_to_real_start_schema(gui_page):
 
     page = gui_page
     page.route("**/api/run/flash/experiments", lambda r: r.fulfill(json=[]))
-    page.route("**/api/run/flash/tracking/state", lambda r: r.fulfill(json={"running": False}))
+    running = [False]
+    applied = [{"spatial": False, "temporal": False, "hole_filling": False}]
+    command_id = [None]
+    page.route(
+        "**/api/run/flash/tracking/state",
+        lambda r: r.fulfill(
+            json={
+                "running": running[0],
+                "config": {"engine": "experiment", "depth_processing": applied[0]},
+                "estimate": {
+                    "status": "filters_updated" if command_id[0] else "preview",
+                    "command_id": command_id[0],
+                    "depth_processing": applied[0],
+                },
+            }
+        ),
+    )
     page.route(
         "**/api/run/flash/tracking/shared-defaults",
         lambda r: r.fulfill(json={"settings": defaults(), "matchers": MATCHERS, "fields": pipeline_fields()}),
@@ -507,9 +552,19 @@ def test_typed_pipeline_form_submits_to_real_start_schema(gui_page):
 
     def start(route):
         submitted.append(flash_tracking.TrackingStart(**route.request.post_data_json))
+        running[0] = True
         route.fulfill(json={"status": "started"})
 
     page.route("**/api/run/flash/tracking/start", start)
+    controls = []
+
+    def control(route):
+        controls.append(flash_tracking.TrackingControl(**route.request.post_data_json))
+        applied[0] = controls[-1].depth_processing
+        command_id[0] = controls[-1].id
+        route.fulfill(json={"id": command_id[0]})
+
+    page.route("**/api/run/flash/tracking/control", control)
     page.locator('.tab[data-tab="flash"]').click()
     page.locator("#flash-source-live").click()
     page.wait_for_function(
@@ -526,15 +581,29 @@ def test_typed_pipeline_form_submits_to_real_start_schema(gui_page):
     dialog.get_by_role("button", name="Close", exact=True).click()
     assert page.locator("#flash-live-history-mb").count() == 0
     page.get_by_label("Recent history (seconds)", exact=True).fill("90")
+    page.get_by_label("Live color resolution").select_option("848x480")
+    page.locator('#flash-live-depth-source button[data-mode="lite_any_stereo_v2_m"]').click()
     page.locator("#flash-live-start").click()
     page.wait_for_function("flashLive.starting === null")
     assert submitted
     assert submitted[-1].history_seconds == 90
+    assert (submitted[-1].width, submitted[-1].height) == (848, 480)
+    assert submitted[-1].depth_source == "lite_any_stereo_v2_m"
     assert "history_max_mb" not in submitted[-1].model_dump()
     settings = submitted[-1].pipeline_settings
     assert settings["config"]["shape"]["max_evaluations"] == 7
     assert settings["config"]["shape"]["depth_tolerance_m"] == 0.004
     assert settings["surface_experiment"]["uncertainty"]["enabled"] is False
+    page.wait_for_function(
+        "flashLive.running && !document.getElementById('flash-live-depth-spatial').disabled"
+    )
+    page.locator(".flash-live-depth-processing summary").click()
+    page.locator("#flash-live-depth-spatial").check()
+    page.wait_for_function(
+        "flashLive.depthFilterPendingId === null && document.getElementById('flash-live-depth-spatial').checked"
+    )
+    assert controls[-1].action == "depth_filters"
+    assert controls[-1].depth_processing == {"spatial": True, "temporal": False, "hole_filling": False}
 
 
 @pytest.mark.requires_playwright
@@ -577,7 +646,11 @@ def test_history_scrub_save_and_reload_use_retained_evidence(gui_page):
     page.locator("#flash-source-live").click()
     page.wait_for_function("flashLive.historyFrames?.length === 3")
     page.locator('.flash-live-recording-row button[aria-current="false"]').last.click()
-    page.wait_for_function("flashLive.packet?.frame === 2")
+    page.wait_for_function(
+        "flashLive.episodePlayer?.metrics.painted.length > 0 && flashLive.frame?.frame_id === 2"
+    )
+    assert (history_root() / saved / "episode" / "meta" / "info.json").is_file()
+    assert page.evaluate("flashLive.episodePlayer.metrics.painted.length") > 0
     page.locator('#flash-live-view-mode button[data-mode="3d"]').click()
     page.wait_for_function("flashLive.viewer !== null")
     assert page.locator("#flash-live-camera-view").is_visible()

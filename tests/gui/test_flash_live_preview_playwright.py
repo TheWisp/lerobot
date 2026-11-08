@@ -38,6 +38,63 @@ def test_unselected_camera_recording_displays_raw_rgb_and_depth(gui_page):
     assert gui_page.evaluate("Object.keys(flashLive.packet.objects).length") == 0
 
 
+def test_filter_created_depth_toggle_marks_only_new_values(gui_page):
+    from lerobot.policies.flash.perception import RGBDFrame
+    from lerobot.policies.flash.tracking_history import capture_packet
+
+    rgb = np.full((8, 8, 3), 80, np.uint8)
+    before = np.full((8, 8), 427, np.uint16)
+    before[2, 3] = 0
+    after = before.copy()
+    after[2, 3] = 430
+    frame = RGBDFrame(
+        7,
+        rgb,
+        after,
+        np.array([[8, 0, 4], [0, 8, 4], [0, 0, 1]]),
+        0.001,
+        np.eye(4),
+        7.0,
+        7.0,
+        "test",
+        {"hole_filling": True},
+        1,
+        before,
+    )
+    encoded = base64.b64encode(capture_packet(frame)).decode()
+    gui_page.evaluate(
+        "flashLive.visible = true; flashLive.view = '2d'; document.getElementById('tab-flash').classList.add('active'); setFlashSource(true)"
+    )
+    gui_page.evaluate(
+        """async data => {
+            const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+            await displayFlashLivePacket(bytes.buffer, flashLive.generation, 0);
+            setFlashLiveView('depth');
+        }""",
+        encoded,
+    )
+    assert gui_page.evaluate("flashLive.packet.depthBeforeFilters[2*8+3]") == 0
+    assert not gui_page.evaluate("document.getElementById('flash-live-filled-control').hidden")
+    gui_page.evaluate("document.getElementById('flash-live-filled').checked = true; drawFlashLive()")
+    assert gui_page.evaluate(
+        "Array.from(document.getElementById('flash-live-image').getContext('2d').getImageData(3,2,1,1).data)"
+    ) == [255, 89, 191, 255]
+    assert gui_page.evaluate(
+        "Array.from(document.getElementById('flash-live-image').getContext('2d').getImageData(4,2,1,1).data)"
+    ) != [255, 89, 191, 255]
+    gui_page.evaluate("document.getElementById('flash-live-filled').checked = false; drawFlashLive()")
+    assert gui_page.evaluate(
+        "Array.from(document.getElementById('flash-live-image').getContext('2d').getImageData(3,2,1,1).data)"
+    ) != [255, 89, 191, 255]
+    gui_page.evaluate("setFlashLiveView('3d')")
+    gui_page.wait_for_function("!!flashLive.viewer")
+    plain_scene = gui_page.evaluate("document.getElementById('flash-live-scene').toDataURL()")
+    gui_page.evaluate("document.getElementById('flash-live-filled').checked = true; drawFlashLive()")
+    gui_page.wait_for_timeout(100)
+    marked_scene = gui_page.evaluate("document.getElementById('flash-live-scene').toDataURL()")
+    assert marked_scene != plain_scene
+
+
 def test_depth_and_3d_preview_keep_a_matched_frame_and_fixed_color_scale(gui_page):
     from lerobot.gui.flash_live_scene import encode_rgbd_scene
     from lerobot.policies.flash.perception import RGBDFrame
@@ -68,6 +125,8 @@ def test_depth_and_3d_preview_keep_a_matched_frame_and_fixed_color_scale(gui_pag
                     "height": 16,
                     "intrinsics": [[16, 0, 8], [0, 16, 8], [0, 0, 1]],
                     "depth_m_per_unit": 0.001,
+                    "depth_processing": {"spatial": True, "temporal": False, "hole_filling": False},
+                    "depth_filter_revision": 5,
                     "image": image,
                 },
             }
@@ -127,6 +186,10 @@ def test_depth_and_3d_preview_keep_a_matched_frame_and_fixed_color_scale(gui_pag
     assert gui_page.evaluate(
         "flashLive.packet === null && !document.getElementById('flash-live-scene').hidden"
     ), "the RGB-D scene must work with no selected object"
+    assert (
+        "aligned to color · Depth: RealSense depth · Camera filters: spatial · revision 5"
+        in gui_page.locator("#flash-live-depth-info").inner_text()
+    )
 
     gui_page.locator('#flash-live-view-mode button[data-mode="depth"]').click()
     gui_page.wait_for_function("flashLive.depthColorRange !== null")

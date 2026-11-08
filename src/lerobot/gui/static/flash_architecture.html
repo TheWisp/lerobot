@@ -568,7 +568,7 @@
         </p>
         <div class="sources">
           <div class="source measure">
-            <small>Current frame t · measured</small>
+            <small>Current frame t · measured image and selected depth</small>
             <h3>O[t] · mask + depth</h3>
             <p>
               The segmentation mask marks visible object pixels. Cleaned depth
@@ -576,9 +576,13 @@
               object cannot be.
             </p>
             <p style="margin-top: 10px; font-size: 14px">
-              The live camera first aligns depth to the image. Optional camera
-              filters run before this cleanup; the Depth view shows that camera
-              input, with missing readings in black.
+              The live camera first aligns sensor depth to the image. Optional
+              camera filters run before cleanup. An opt-in LingBot-Depth-v0.5 model can
+              refine that RGB-D frame; opt-in Fast-FoundationStereo or Lite Any
+              Stereo V2-S/M/L/H instead use a synchronized infrared pair. These are model
+              estimates, not new sensor measurements. The selected map feeds
+              this frame's fit. Live history retains sensor and model maps
+              separately, and the Depth and 3D views can compare them.
             </p>
             <p style="margin-top: 10px; font-size: 14px">
               <b>Live:</b> SAM3. <b>Video reruns:</b> by default, load masks

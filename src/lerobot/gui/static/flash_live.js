@@ -2,7 +2,7 @@
 const flashLive = {visible: false, timer: null, generation: 0, packet: null, overlay: null, bitmap: null,
     viewer: null, view: '2d', frame: null, previewDepth: null, depthColorRange: null,
     settings: null, processed: null, busy: false,
-    historyActive: false, picking: false, playing: false};
+    historyActive: false, picking: false, playing: false, episodePlayer: null};
 const liveElement = id => document.getElementById('flash-live-' + id);
 async function liveRequest(path, body) {
     const response = await fetch('/api/run/flash/tracking/' + path, body === undefined ? {} :
@@ -20,7 +20,7 @@ async function showFlashLive() {
         liveElement('status').textContent = 'Loading shared pipeline settings…';
         flashLive.busy = true;
         liveElement('start').disabled = true;
-        for(const id of ['matching','matcher','camera','history-seconds']) liveElement(id).disabled = true;
+        for(const id of ['matching','matcher','camera','resolution','history-seconds']) liveElement(id).disabled = true;
         const data = await liveRequest('shared-defaults');
         const current = await liveRequest('state');
         if (!flashLive.visible || generation !== flashLive.generation) return;
@@ -29,8 +29,11 @@ async function showFlashLive() {
             data.settings = current.config.pipeline_settings;
         }
         flashLive.settings = data.settings;
+        if(current.config?.width && current.config?.height)
+            liveElement('resolution').value=`${current.config.width}x${current.config.height}`;
         for(const key of ['spatial','temporal','hole-filling'])
             liveElement('depth-'+key).checked=!!current.config?.depth_processing?.[key.replace('-','_')];
+        setFlashDepthSource(current.config?.depth_source||'sensor',true);
         updateFlashDepthFilterSummary();
         liveElement('matching').value = data.settings.shared_matching?.backend || 'lk';
         liveElement('matcher').replaceChildren(...Object.entries(data.matchers).map(([value,text]) => new Option(text,value)));
@@ -56,6 +59,7 @@ async function hideFlashLive(restore = true) {
     flashLive.visible = false; flashLive.generation++; clearTimeout(flashLive.timer);
     flashLive.viewer?.dispose(); flashLive.viewer = null;
     stopFlashHistoryPlayback();
+    closeFlashEpisode();
     flashLive.bitmap?.close(); flashLive.bitmap = null; flashLive.packet = null; flashLive.overlay = null;
     const selected = flashExperiments.items?.find(item => item.id === flashExperiments.selected);
     if(restore && selected) await selectFlashExperiment(selected);
@@ -91,9 +95,11 @@ async function startFlashLive() {
         if(!picker.value) throw new Error('No RGB-D camera found');
         const depthProcessing=Object.fromEntries(['spatial','temporal','hole-filling'].map(key=>
             [key.replace('-','_'),liveElement('depth-'+key).checked]));
+        const [width,height]=liveElement('resolution').value.split('x').map(Number);
         flashLive.starting = liveRequest('start', {engine: 'experiment', pipeline_settings: settings,
-            serial: picker.value, width:1280, height:720, fps:30,
+            serial: picker.value, width, height, fps:30,
             depth_processing:depthProcessing,
+            depth_source:liveElement('depth-source').dataset.mode,
             history_seconds:Number(liveElement('history-seconds').value)});
         await flashLive.starting;
         if (!flashLive.visible || generation !== flashLive.generation) return;
@@ -124,9 +130,35 @@ function updateFlashDepthFilterSummary() {
     const enabled=['spatial','temporal','hole-filling'].filter(key=>liveElement('depth-'+key).checked);
     liveElement('depth-summary').textContent=`Camera depth filters: ${enabled.length?enabled.join(', ').replace('hole-filling','hole filling'):'off'}`;
 }
+function setFlashDepthSource(source,force=false) {
+    if(flashLive.running && !force)return;
+    const control=liveElement('depth-source');
+    if(!['sensor','lingbot','foundation_stereo','lite_any_stereo_v2',
+        'lite_any_stereo_v2_s','lite_any_stereo_v2_m','lite_any_stereo_v2_l'].includes(source))return;
+    control.dataset.mode=source;
+    for(const button of control.querySelectorAll('button'))
+        button.setAttribute('aria-pressed',String(button.dataset.mode===source));
+}
+function showFlashCameraStreams(streams) {
+    const color=streams.color,depth=streams.depth;
+    if(!color||!depth)return;
+    liveElement('stream-info').textContent=`Captured: color ${color.width} × ${color.height} @ ${color.fps} fps; `+
+        `depth ${depth.width} × ${depth.height} @ ${depth.fps} fps, aligned to color.`;
+}
+async function controlFlashDepthFilters() {
+    updateFlashDepthFilterSummary();
+    if(!flashLive.running)return;
+    const id=crypto.randomUUID();
+    flashLive.depthFilterPendingId=id;
+    const depth_processing=Object.fromEntries(['spatial','temporal','hole-filling'].map(key=>
+        [key.replace('-','_'),liveElement('depth-'+key).checked]));
+    try {await liveRequest('control',{id,action:'depth_filters',depth_processing});}
+    catch(error){flashLive.depthFilterPendingId=null;liveElement('status').textContent=error.message;}
+}
 function setFlashLiveView(mode) {
     if(!['2d','3d','depth'].includes(mode))return;
     flashLive.view = mode;
+    if(flashLive.episodePlayer && mode!=='2d')void loadFlashEpisodeDepth(flashLive.episodePlayer.frame());
     if(mode!=='2d' && flashLive.picking) toggleFlashLivePicker();
     const control=liveElement('view-mode');
     control.dataset.mode=mode;
@@ -135,6 +167,7 @@ function setFlashLiveView(mode) {
     liveElement('camera-view').hidden=mode!=='3d';
     liveElement('mask').closest('label').hidden=mode!=='2d';
     liveElement('surface').closest('label').hidden=mode==='depth';
+    liveElement('filled-control').hidden=mode==='2d';
     liveElement('groups').closest('.flash-group-control').hidden=mode==='depth';
     liveElement('pick').disabled=mode!=='2d' || !flashLive.running || flashLive.historyActive;
     if((mode==='depth'||mode==='3d') && !flashLive.packet && flashLive.frame?.frame_id!=null && !flashLive.previewDepth) {
@@ -152,17 +185,33 @@ async function loadFlashPreviewDepth(frame) {
     if(!response.ok)return null;
     const buffer=await response.arrayBuffer(), id=new DataView(buffer).getUint32(0,true);
     if(id!==frame.frame_id || flashLive.historyActive)return null;
-    const raw=new Uint16Array(buffer,4), expected=frame.width*frame.height;
-    if(raw.length!==expected)return null;
+    const expected=frame.width*frame.height;
+    if(buffer.byteLength!==4+expected*2 && buffer.byteLength!==4+expected*4)return null;
+    const raw=new Uint16Array(buffer,4,expected);
     const depth=new Float32Array(expected), scale=frame.depth_m_per_unit;
     for(let i=0;i<expected;i++)depth[i]=raw[i]*scale;
+    const rawBefore=buffer.byteLength===4+expected*4?new Uint16Array(buffer,4+expected*2,expected):null;
+    const depthBeforeFilters=rawBefore?new Float32Array(expected):null;
+    if(rawBefore)for(let i=0;i<expected;i++)depthBeforeFilters[i]=rawBefore[i]*scale;
     return {depth,camera:{width:frame.width,height:frame.height,intrinsics:frame.intrinsics},
-        depth_processing:flashLive.previewDepthProcessing};
+        depthBeforeFilters,
+        depth_processing:frame.depth_processing,
+        depth_filter_revision:frame.depth_filter_revision};
 }
 const flashDepthPalette=DepthChip.PALETTE.map(hex=>
     [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)));
+function flashDepthSource(packet) {
+    const filters=Object.entries(packet.depth_processing||{}).filter(([,on])=>on).map(([name])=>name.replace('_',' '));
+    const active=packet.depth_processing==null?'unknown (older recording)':filters.join(', ')||'off';
+    const source=({lingbot:'LingBot-Depth-v0.5',foundation_stereo:'Fast-FoundationStereo',
+        lite_any_stereo_v2_s:'Lite Any Stereo V2-S',lite_any_stereo_v2_m:'Lite Any Stereo V2-M',
+        lite_any_stereo_v2_l:'Lite Any Stereo V2-L',lite_any_stereo_v2:'Lite Any Stereo V2-H'})[packet.depth_source]||'RealSense depth';
+    return `aligned to color · Depth: ${source} · Camera filters: ${active}`+
+        `${packet.depth_filter_revision!=null?` · revision ${packet.depth_filter_revision}`:''}`;
+}
 function drawFlashDepth(ctx, packet, canvas) {
     const depth=packet.depth, width=packet.camera.width, height=packet.camera.height;
+    const before=packet.depthBeforeFilters, highlight=liveElement('filled').checked && !!before;
     if(depth.length!==width*height)throw new Error('Depth and image sizes differ');
     const sample=[];
     for(let y=0;y<height;y+=8)for(let x=0;x<width;x+=8){
@@ -180,6 +229,7 @@ function drawFlashDepth(ctx, packet, canvas) {
     for(let i=0;i<depth.length;i++){
         const z=depth[i], j=i*4;
         if(!Number.isFinite(z)||z<=0){holes++;pixels[j+3]=255;continue;}
+        if(highlight && before[i]<=0){pixels[j]=255;pixels[j+1]=89;pixels[j+2]=191;pixels[j+3]=255;continue;}
         const position=Math.max(0,Math.min(10,(z-near)/span*10));
         const lo=Math.min(9,Math.floor(position)), t=position-lo;
         for(let channel=0;channel<3;channel++)
@@ -187,9 +237,9 @@ function drawFlashDepth(ctx, packet, canvas) {
         pixels[j+3]=255;
     }
     canvas.width=width;canvas.height=height;ctx.putImageData(image,0,0);
-    const filters=Object.entries(packet.depth_processing||{}).filter(([,on])=>on).map(([name])=>name.replace('_',' '));
     flashLive.depthSummary=`${near.toFixed(3)} m near → ${far.toFixed(3)} m far · `+
-        `${(100*holes/depth.length).toFixed(1)}% holes · Camera filters: ${filters.join(', ')||'off'}`;
+        `${(100*holes/depth.length).toFixed(1)}% holes · ${flashDepthSource(packet)}`+
+        (highlight?' · pink = filter-created depth':'');
     liveElement('depth-info').textContent=flashLive.depthSummary;
 }
 function inspectFlashLiveDepth(event) {
@@ -216,18 +266,32 @@ function projectLive(points, pose, k) {
     });
 }
 async function drawFlashLive() {
-    const state=flashLive, packet=state.packet, overlay=state.overlay, image=state.bitmap;
+    const state=flashLive, packet=state.packet, overlay=state.overlay,
+        image=state.episodePlayer ? state.episodeImage : state.bitmap;
     if(!image || !state.visible) return;
     const shownGroups = overlay ? flashSceneGroups(overlay.scene_group_tracks, overlay.objects,
         flashGroupMode('flash-live-groups')) : [];
     liveElement('group-count').textContent = overlay
         ? `${overlay.scene_group_tracks?.length || 0} groups · ${shownGroups.length} shown` : '';
     liveElement('groups').title = 'Connected measured points; group predictions remain in the recording.';
-    const depthPacket=packet||state.previewDepth;
+    // Saved episodes decode RGB and depth separately. An older live packet
+    // must never override the depth for the episode frame on screen.
+    const rawDepthPacket=state.episodePlayer ? state.previewDepth : packet||state.previewDepth;
+    liveElement('model-depth-control').hidden=!rawDepthPacket?.modelDepth || state.view==='2d';
+    const depthPacket=rawDepthPacket?.modelDepth && liveElement('model-depth').checked
+        ? {...rawDepthPacket, depth:rawDepthPacket.modelDepth, depthBeforeFilters:rawDepthPacket.depth,
+           depth_source:rawDepthPacket.tracking_depth_source} : rawDepthPacket;
+    liveElement('filled').disabled=!depthPacket?.depthBeforeFilters;
+    liveElement('filled-control').title=depthPacket?.depthBeforeFilters
+        ? 'Pink points had no aligned sensor depth before filtering or model prediction.'
+        : 'Pre-filter depth is unavailable for this frame (or camera filters are off).';
     const three=state.view==='3d' && !!depthPacket;
     liveElement('image').hidden=state.view==='3d'; liveElement('scene').hidden=!three;
     if(state.view==='3d' && !three)return;
-    liveElement('depth-info').hidden=state.view!=='depth'||!depthPacket;
+    liveElement('depth-info').hidden=state.view==='2d'||!depthPacket;
+    liveElement('depth-info').classList.toggle('flash-live-depth-info--scene',state.view==='3d');
+    if(three)liveElement('depth-info').textContent=`Camera points: ${flashDepthSource(depthPacket)} · zero depth omitted`+
+        (liveElement('filled').checked && depthPacket.depthBeforeFilters?' · pink = inferred depth where the sensor had a hole':'');
     if(state.view==='depth'){
         const canvas=liveElement('image'),ctx=canvas.getContext('2d');
         if(depthPacket)drawFlashDepth(ctx,depthPacket,canvas);
@@ -235,8 +299,8 @@ async function drawFlashLive() {
         return;
     }
     if(three) {
-        const module=await import('/static/rgbd_scene.js?v=7');
-        if(!state.visible || (state.packet||state.previewDepth)!==depthPacket) return;
+        const module=await import('/static/rgbd_scene.js?v=9');
+        if(!state.visible || (state.packet||state.previewDepth)!==rawDepthPacket) return;
         state.viewer ||= module.createRgbdScene(liveElement('scene'));
         const descriptions=[];
         for(const obj of Object.values(overlay?.objects||{})) {
@@ -248,9 +312,11 @@ async function drawFlashLive() {
                 (group.camera_xyz || group.display_camera_xyz || [])[index]),
                 axes:false, pointSize:3, color:flashGroupHex(group.id || 0),
                 pose:[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]});
-        state.viewer.update(depthPacket.depth,image,depthPacket.camera,descriptions);
+        state.viewer.update(depthPacket.depth,image,depthPacket.camera,descriptions,
+            depthPacket.depthBeforeFilters);
         state.viewer.setOptions({estimate:liveElement('surface').checked,
-            groups:flashGroupMode('flash-live-groups') !== 'none',axes:true});
+            groups:flashGroupMode('flash-live-groups') !== 'none',axes:true,
+            highlightFilled:liveElement('filled').checked});
         return;
     }
     const canvas=liveElement('image'), ctx=canvas.getContext('2d');
@@ -291,19 +357,29 @@ async function pollFlashLive() {
         const data=await liveRequest('state');
         if(!flashLive.visible || generation!==flashLive.generation)return;
         const estimate=data.estimate || {}, running=data.running && data.config?.engine==='experiment';
-        flashLive.previewDepthProcessing=data.config?.depth_processing;
+        if(estimate.camera_streams)showFlashCameraStreams(estimate.camera_streams);
+        flashLive.previewDepthProcessing=estimate.depth_processing||data.config?.depth_processing;
         flashLive.running=running; updateFlashPipelineControls(running);
+        for(const button of liveElement('depth-source').querySelectorAll('button'))button.disabled=running;
+        if(estimate.depth_processing && (!flashLive.depthFilterPendingId ||
+            estimate.command_id===flashLive.depthFilterPendingId)){
+            for(const key of ['spatial','temporal','hole-filling'])
+                liveElement('depth-'+key).checked=!!estimate.depth_processing[key.replace('-','_')];
+            flashLive.depthFilterPendingId=null;
+            updateFlashDepthFilterSummary();
+        }
         updateFlashLiveMode();
-        for(const id of ['matching','matcher','camera','history-seconds',
-            'depth-spatial','depth-temporal','depth-hole-filling']) liveElement(id).disabled=running;
+        for(const id of ['matching','matcher','camera','resolution','history-seconds']) liveElement(id).disabled=running;
         liveElement('start').disabled=data.running || flashLive.busy;
         liveElement('stop').disabled=!running;
         liveElement('pick').disabled=!running || flashLive.historyActive || flashLive.view!=='2d';
         liveElement('select').disabled=!running || flashLive.historyActive;
         liveElement('clear').disabled=!running;
         const timing=estimate.timings;
+        const modelTime=estimate.depth_source && estimate.depth_source!=='sensor'
+            ?`model depth ${(timing?.depth_ms||0).toFixed(0)} ms · `:'';
         if(running) liveElement('status').textContent=estimate.message || (timing ?
-            `${timing.processed_fps.toFixed(1)} fps · mask ${timing.mask_ms.toFixed(0)} ms · tracking ${(timing.processing_ms-timing.mask_ms).toFixed(0)} ms · frame age ${timing.age_ms.toFixed(0)} ms` : estimate.status);
+            `${timing.processed_fps.toFixed(1)} fps · ${modelTime}mask ${timing.mask_ms.toFixed(0)} ms · tracking ${(timing.processing_ms-timing.mask_ms).toFixed(0)} ms · frame age ${timing.age_ms.toFixed(0)} ms` : estimate.status);
         else liveElement('status').textContent=data.estimate?.status==='error' ? data.estimate.message : 'Camera stopped. Press Start for a new tracking session.';
         if(!flashLive.historyActive && running && estimate.status==='tracking' && estimate.frame_id!==flashLive.processed) {
             const request=flashLive.historyRequest||0;
@@ -369,9 +445,21 @@ async function displayFlashLivePacket(buffer, generation, request, replay=false)
     const measured=buffer.slice(start,start+packet.depth_bytes);
     if(packet.depth_format==='sensor_u16'){
         const raw=new Uint16Array(measured), scale=packet.depth_m_per_unit;
-        packet.depth=Float32Array.from(raw,z=>z*scale);
+        packet.depth=new Float32Array(raw.length);
+        for(let i=0;i<raw.length;i++)packet.depth[i]=raw[i]*scale;
     }else packet.depth=new Float32Array(measured);
-    const rgb=buffer.slice(start+packet.depth_bytes);
+    const beforeBytes=packet.depth_before_filter_bytes||0;
+    if(beforeBytes){
+        const rawBefore=new Uint16Array(buffer.slice(start+packet.depth_bytes,start+packet.depth_bytes+beforeBytes));
+        packet.depthBeforeFilters=new Float32Array(rawBefore.length);
+        const scale=packet.depth_before_filter_m_per_unit||packet.depth_m_per_unit||0.001;
+        for(let i=0;i<rawBefore.length;i++)packet.depthBeforeFilters[i]=rawBefore[i]*scale;
+    }
+    const modelStart=start+packet.depth_bytes+beforeBytes+2*(packet.infrared_bytes||0);
+    if(packet.model_depth_bytes){
+        packet.modelDepth=new Float32Array(buffer.slice(modelStart,modelStart+packet.model_depth_bytes));
+    }
+    const rgb=buffer.slice(modelStart+(packet.model_depth_bytes||0));
     let bitmap;
     if(packet.rgb_format==='raw_rgb8'){
         const raw=new Uint8Array(rgb), rgba=new Uint8ClampedArray(packet.camera.width*packet.camera.height*4);
@@ -392,6 +480,9 @@ async function refreshFlashHistory() {
     flashLive.historyUpdated=Date.now();
     if(recording!==liveElement('recording').value)return;
     flashLive.recordings=data.recordings;
+    flashLive.overlayIndices=data.overlay_indices||[];
+    flashLive.episodeCamera=data.episode_camera;
+    if(flashLive.historyActive && data.camera_streams)showFlashCameraStreams(data.camera_streams);
     const list=liveElement('recordings');
     list.replaceChildren();
     for(const item of [{id:'recent', label:'Recent history', frames:data.recent_frames ?? (data.recording==='recent'?data.frames.length:0)},
@@ -428,7 +519,8 @@ async function refreshFlashHistory() {
     const gaps=(data.dropped_frames?` · ${data.dropped_frames} frames not logged`:'') +
         (missing?` · older source frames unavailable for ${missing} frames`:'');
     liveElement('history-info').textContent=`${frames.length} frames · ${span.toFixed(1)} seconds retained · ${((data.bytes||0)/1048576).toFixed(0)} MiB${gaps}${data.error?' · '+data.error:''}`;
-    if(flashLive.historyActive && !flashLive.packet && frames.length)await loadFlashHistory(frames.length-1);
+    if(flashLive.historyActive && !flashLive.packet && !flashLive.episodePlayer && frames.length && recording==='recent')
+        await loadFlashHistory(frames.length-1);
 }
 function editFlashHistoryName(item,row) {
     flashLive.renaming=item.id;
@@ -451,8 +543,112 @@ function editFlashHistoryName(item,row) {
     input.onkeydown=event=>{if(event.key==='Enter')void save.click();if(event.key==='Escape')finish();};
     row.replaceChildren(input,save,cancel);input.focus();input.select();
 }
+function closeFlashEpisode() {
+    flashLive.episodePlayer?.close();
+    flashLive.episodePlayer=null;
+    flashLive.episodeHasPreFilterDepth=false;
+    flashLive.episodeHasModelDepth=false;
+    flashLive.episodeImage=null;
+    flashLive.episodeDepthRequest=(flashLive.episodeDepthRequest||0)+1;
+}
+async function openFlashEpisode(recording) {
+    const selected=flashLive.recordings?.find(item=>item.id===recording);
+    if(!selected)return;
+    const request=flashLive.historyRequest;
+    liveElement('history-info').textContent='Preparing episode playback…';
+    let root=selected.episode_root;
+    if(!root){
+        const exported=await liveRequest('history/episode',{recording});
+        root=exported.episode_root;
+    }
+    const response=await fetch('/api/datasets',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({local_path:root})});
+    if(!response.ok)throw new Error(`Could not open saved episode: ${await response.text()}`);
+    const dataset=await response.json();
+    flashLive.episodeHasPreFilterDepth=!!dataset.features_schema?.['observation.images.camera_depth_before_filters'];
+    flashLive.episodeHasModelDepth=!!dataset.features_schema?.['observation.images.camera_depth_model'];
+    if(request!==flashLive.historyRequest || !flashLive.historyActive || liveElement('recording').value!==recording)return;
+    const camera=flashLive.episodeCamera || flashLive.overlay?.camera;
+    const stored=dataset.features_schema?.['observation.images.camera']?.shape;
+    const width=camera?.width || stored?.[1], height=camera?.height || stored?.[0];
+    if(!width || !height)throw new Error('Saved episode has no camera dimensions');
+    flashLive.episodeImage=document.createElement('canvas');
+    flashLive.episodeImage.width=width;flashLive.episodeImage.height=height;
+    const tile=document.createElement('canvas');
+    const player=window.ChunkPlayer.create({datasetId:dataset.id,fps:dataset.fps,
+        length:flashLive.historyFrames.length,cameras:['observation.images.camera'],
+        tiles:()=>tile,
+        onPaint:frame=>{if(flashLive.episodePlayer!==player)return;
+            flashLive.episodeImage.getContext('2d').drawImage(tile,0,0,width,height);
+            const row=flashLive.historyFrames[frame];
+            flashLive.frame={frame_id:row.frame,frozen:false};
+            // Never render this RGB frame against the preceding depth frame.
+            flashLive.previewDepth=null;
+            liveElement('history-position').value=frame;
+            liveElement('play-time').textContent=`${(row.time_s-flashLive.historyFrames[0].time_s).toFixed(1)} s`;
+            if(flashLive.view!=='2d')void loadFlashEpisodeDepth(frame);
+            void loadFlashEpisodeOverlay(frame,recording);
+            void drawFlashLive();
+        },
+        onHold:waiting=>{if(waiting)liveElement('history-info').textContent='Buffering episode…';},
+        onLog:line=>console.debug('[FLASH episode]',line),
+    });
+    flashLive.episodePlayer=player;
+    flashLive.episodeDataset=dataset.id;
+    player.open(0);
+    player.seek(flashLive.historyFrames.length-1);
+    liveElement('history-info').textContent=`${flashLive.historyFrames.length} frames · LeRobot episode`;
+}
+async function loadFlashEpisodeOverlay(index,recording) {
+    const indices=flashLive.overlayIndices||[];
+    const source=indices.findLast(i=>i<=index);
+    if(source===flashLive.episodeOverlaySource)return;
+    flashLive.episodeOverlaySource=source;
+    if(source==null){flashLive.overlay=null;liveElement('objects').textContent='';return;}
+    const response=await fetch(`/api/run/flash/tracking/history/overlay?recording=${encodeURIComponent(recording)}&index=${index}`);
+    if(!response.ok)return;
+    const packet=await response.json();
+    if(flashLive.episodeOverlaySource!==source || liveElement('recording').value!==recording)return;
+    rememberFlashOverlay(packet,recording);
+    void drawFlashLive();
+}
+async function loadFlashEpisodeDepth(index) {
+    const player=flashLive.episodePlayer;if(!player)return;
+    const request=++flashLive.episodeDepthRequest;
+    const url=`/api/datasets/${encodeURIComponent(flashLive.episodeDataset)}/episodes/0/frame/${index}/depth?camera=observation.images.camera_depth`;
+    try {
+        const beforeUrl=`/api/datasets/${encodeURIComponent(flashLive.episodeDataset)}/episodes/0/frame/${index}/depth?camera=observation.images.camera_depth_before_filters`;
+        const modelUrl=`/api/datasets/${encodeURIComponent(flashLive.episodeDataset)}/episodes/0/frame/${index}/depth?camera=observation.images.camera_depth_model`;
+        const [response,beforeResponse,modelResponse]=await Promise.all([fetch(url),
+            flashLive.episodeHasPreFilterDepth?fetch(beforeUrl):Promise.resolve(null),
+            flashLive.episodeHasModelDepth?fetch(modelUrl):Promise.resolve(null)]);
+        if(!response.ok)throw new Error(`Depth frame ${index}: HTTP ${response.status}`);
+        if(beforeResponse && !beforeResponse.ok)throw new Error(`Pre-filter depth frame ${index}: HTTP ${beforeResponse.status}`);
+        if(modelResponse && !modelResponse.ok)throw new Error(`Model depth frame ${index}: HTTP ${modelResponse.status}`);
+        const raw=new Uint16Array(await response.arrayBuffer());
+        const rawBefore=beforeResponse?new Uint16Array(await beforeResponse.arrayBuffer()):null;
+        const rawModel=modelResponse?new Uint16Array(await modelResponse.arrayBuffer()):null;
+        if(request!==flashLive.episodeDepthRequest || flashLive.episodePlayer!==player)return;
+        const camera=flashLive.episodeCamera || flashLive.overlay?.camera;
+        if(!camera)return;
+        const depth=new Float32Array(raw.length);
+        for(let i=0;i<raw.length;i++)depth[i]=raw[i]*0.001;
+        const depthBeforeFilters=rawBefore?new Float32Array(rawBefore.length):null;
+        if(rawBefore)for(let i=0;i<rawBefore.length;i++)depthBeforeFilters[i]=rawBefore[i]*0.001;
+        const modelDepth=rawModel && rawModel.some(value=>value>0)?new Float32Array(rawModel.length):null;
+        if(modelDepth)for(let i=0;i<rawModel.length;i++)modelDepth[i]=rawModel[i]*0.001;
+        flashLive.previewDepth={depth,camera,
+            depthBeforeFilters,
+            modelDepth,
+            tracking_depth_source:flashLive.historyFrames[index]?.tracking_depth_source,
+            depth_processing:flashLive.historyFrames[index]?.depth_processing||null,
+            depth_filter_revision:flashLive.historyFrames[index]?.depth_filter_revision};
+        void drawFlashLive();
+    }catch(error){liveElement('history-info').textContent=error.message;}
+}
 async function loadFlashHistory(index) {
     const frames=flashLive.historyFrames, row=frames?.[index];if(!row)return;
+    if(flashLive.episodePlayer){flashLive.episodePlayer.seek(index);return;}
     flashLive.historyActive=true;
     updateFlashLiveMode();
     liveElement('history-position').value=index;
@@ -483,18 +679,26 @@ async function loadFlashHistory(index) {
 }
 async function selectFlashHistory(recording) {
     stopFlashHistoryPlayback();
+    closeFlashEpisode();
+    flashLive.episodeOverlaySource=undefined;
+    flashLive.historyRequest=(flashLive.historyRequest||0)+1;
     if(recording)liveElement('recording').value=recording;
     flashLive.historyActive=true;flashLive.historyUpdated=0;flashLive.packet=null;
+    flashLive.bitmap?.close();flashLive.bitmap=null;flashLive.frame=null;flashLive.previewDepth=null;
     flashLive.overlay=null;flashLive.overlayRecording=null;liveElement('objects').textContent='';
     flashLive.depthColorRange=null;
     updateFlashLiveMode();
     await refreshFlashHistory();
     const last=flashLive.historyFrames.length-1;
     liveElement('history-position').value=last;
-    if(last>=0)await loadFlashHistory(last);
+    if(last>=0 && recording!=='recent'){
+        try{await openFlashEpisode(recording);}
+        catch(error){liveElement('history-info').textContent=error.message;}
+    }else if(last>=0)await loadFlashHistory(last);
 }
 function followFlashLive() {
     stopFlashHistoryPlayback();
+    closeFlashEpisode();
     flashLive.historyRequest=(flashLive.historyRequest||0)+1;
     flashLive.historyActive=false;flashLive.processed=null;flashLive.depthColorRange=null;
     flashLive.overlay=null;flashLive.overlayRecording=null;liveElement('objects').textContent='';
@@ -510,23 +714,33 @@ function updateFlashLiveMode() {
 }
 function stopFlashHistoryPlayback() {
     flashLive.playing=false;clearTimeout(flashLive.playTimer);
+    flashLive.episodePlayer?.pause();
     if(liveElement('play'))liveElement('play').textContent='Play';
 }
 async function playFlashHistory() {
     if(flashLive.playing){stopFlashHistoryPlayback();return;}
     if(!flashLive.historyFrames?.length)return;
+    if(flashLive.episodePlayer){
+        if(flashLive.episodePlayer.frame()>=flashLive.historyFrames.length-1)flashLive.episodePlayer.seek(0);
+        flashLive.playing=true;liveElement('play').textContent='Pause';flashLive.episodePlayer.play();return;
+    }
     flashLive.playing=true;liveElement('play').textContent='Pause';
+    if(Number(liveElement('history-position').value)>=flashLive.historyFrames.length-1)
+        await loadFlashHistory(0);
+    const frames=flashLive.historyFrames;
+    const firstTime=frames[0].time_s;
+    const startedAt=performance.now()-(frames[Number(liveElement('history-position').value)].time_s-firstTime)*1000;
     const advance=async()=>{
         if(!flashLive.playing || !flashLive.historyActive)return;
         const index=Number(liveElement('history-position').value), next=index+1;
         if(next>=flashLive.historyFrames.length){stopFlashHistoryPlayback();return;}
-        const dt=flashLive.historyFrames[next].time_s-flashLive.historyFrames[index].time_s;
         await loadFlashHistory(next);
-        flashLive.playTimer=setTimeout(advance,Math.max(16,Math.min(500,dt*1000)));
+        if(flashLive.playing)
+            flashLive.playTimer=setTimeout(advance,next+1<frames.length
+                ?Math.max(0,startedAt+(frames[next+1].time_s-firstTime)*1000-performance.now()):0);
     };
-    if(Number(liveElement('history-position').value)>=flashLive.historyFrames.length-1)
-        await loadFlashHistory(0);
-    flashLive.playTimer=setTimeout(advance,16);
+    const next=Number(liveElement('history-position').value)+1;
+    flashLive.playTimer=setTimeout(advance,Math.max(0,startedAt+(frames[next].time_s-firstTime)*1000-performance.now()));
 }
 async function deleteFlashHistory(recording) {
     try {

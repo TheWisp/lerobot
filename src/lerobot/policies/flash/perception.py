@@ -32,12 +32,31 @@ class RGBDFrame:
     source_time_s: float
     available_time_s: float
     calibration_version: str
+    depth_processing: dict[str, bool] | None = None
+    depth_filter_revision: int = 0
+    depth_before_filters: np.ndarray | None = None
+    infrared_left: np.ndarray | None = None
+    infrared_right: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         if self.rgb.ndim != 3 or self.rgb.shape[2] != 3 or self.rgb.dtype != np.uint8:
             raise ValueError("RGB must be HxWx3 uint8")
         if self.depth.shape != self.rgb.shape[:2] or self.depth.dtype not in (np.uint16, np.float32):
             raise ValueError("depth must be aligned HxW uint16 or float32")
+        if self.depth_before_filters is not None and (
+            self.depth_before_filters.shape != self.depth.shape
+            or self.depth_before_filters.dtype != self.depth.dtype
+        ):
+            raise ValueError("pre-filter depth must share the aligned depth layout and dtype")
+        if (self.infrared_left is None) != (self.infrared_right is None):
+            raise ValueError("infrared images must be a synchronized pair")
+        if self.infrared_left is not None and (
+            self.infrared_left.shape != self.infrared_right.shape
+            or self.infrared_left.ndim != 2
+            or self.infrared_left.dtype != np.uint8
+            or self.infrared_right.dtype != np.uint8
+        ):
+            raise ValueError("infrared images must share a grayscale uint8 grid")
         if self.intrinsics.shape != (3, 3) or not np.isfinite(self.intrinsics).all():
             raise ValueError("intrinsics must be a finite 3x3 matrix")
         if not np.isfinite(self.depth_m_per_unit) or self.depth_m_per_unit <= 0:
@@ -65,8 +84,16 @@ class LatestRGBDFrameStore:
     def publish(self, frame: RGBDFrame) -> None:
         rgb = frame.rgb.copy()
         depth = frame.depth.copy()
+        before = frame.depth_before_filters.copy() if frame.depth_before_filters is not None else None
+        infrared_left = frame.infrared_left.copy() if frame.infrared_left is not None else None
+        infrared_right = frame.infrared_right.copy() if frame.infrared_right is not None else None
         rgb.setflags(write=False)
         depth.setflags(write=False)
+        if before is not None:
+            before.setflags(write=False)
+        if infrared_left is not None:
+            infrared_left.setflags(write=False)
+            infrared_right.setflags(write=False)
         snapshot = RGBDFrame(
             frame.frame_id,
             rgb,
@@ -77,6 +104,11 @@ class LatestRGBDFrameStore:
             frame.source_time_s,
             frame.available_time_s,
             frame.calibration_version,
+            dict(frame.depth_processing) if frame.depth_processing is not None else None,
+            frame.depth_filter_revision,
+            before,
+            infrared_left,
+            infrared_right,
         )
         snapshot.intrinsics.setflags(write=False)
         snapshot.base_from_camera.setflags(write=False)

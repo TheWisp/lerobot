@@ -30,35 +30,41 @@ export function sceneControls(camera, canvas) {
 export function createRgbdCloud({stride = 1, opacity = 1, brightness = 1} = {}) {
     const geometry = new THREE.BufferGeometry();
     const uniforms = {
-        depthTex: {value: null}, rgbTex: {value: null}, size: {value: new THREE.Vector2()},
+        depthTex: {value: null}, beforeDepthTex: {value: null}, rgbTex: {value: null}, size: {value: new THREE.Vector2()},
         K: {value: new THREE.Vector4()}, depthScale: {value: 1},
         pointSize: {value: 2}, opacity: {value: opacity}, brightness: {value: brightness},
+        hasBeforeDepth: {value: false}, highlightFilled: {value: false},
     };
     const material = new THREE.ShaderMaterial({
         uniforms, transparent: opacity < 1, depthWrite: opacity === 1,
-        vertexShader: `uniform sampler2D depthTex;
+        vertexShader: `uniform sampler2D depthTex; uniform sampler2D beforeDepthTex;
             uniform vec2 size; uniform vec4 K; uniform float depthScale; uniform float pointSize;
-            varying vec2 vUv; varying float valid;
+            uniform bool hasBeforeDepth; varying vec2 vUv; varying float valid; varying float filled;
             void main() {
                 vec2 pix = position.xy;
                 vUv = (pix + 0.5) / size;
                 float z = texture2D(depthTex, vUv).r * depthScale;
                 valid = z > 0.0 ? 1.0 : 0.0;
+                filled = hasBeforeDepth && texture2D(beforeDepthTex, vUv).r <= 0.0 ? 1.0 : 0.0;
                 vec3 p = vec3((pix.x-K.z)*z/K.x, -(pix.y-K.w)*z/K.y, -z);
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
                 gl_PointSize = pointSize;
             }`,
         fragmentShader: `uniform sampler2D rgbTex; uniform float opacity; uniform float brightness;
-            varying vec2 vUv; varying float valid;
+            uniform bool highlightFilled; varying vec2 vUv; varying float valid; varying float filled;
             void main() {
                 if (valid < 0.5) discard;
+                if (highlightFilled && filled > 0.5) {
+                    gl_FragColor = vec4(1.0, 0.35, 0.75, opacity);
+                    return;
+                }
                 gl_FragColor = vec4(texture2D(rgbTex, vUv).rgb * brightness, opacity);
             }`,
     });
     const points = new THREE.Points(geometry, material);
     points.frustumCulled = false;
     let width = 0, height = 0;
-    function update(depth, rgb, frame, scale = 1) {
+    function update(depth, rgb, frame, scale = 1, beforeDepth = null) {
         if (depth.length !== frame.width * frame.height)
             throw new Error('Depth dimensions differ from the calibrated image');
         if (rgb instanceof Uint8Array || rgb instanceof Uint8ClampedArray) {
@@ -75,9 +81,22 @@ export function createRgbdCloud({stride = 1, opacity = 1, brightness = 1} = {}) 
             uniforms.depthTex.value?.dispose();
             uniforms.depthTex.value = new THREE.DataTexture(new Float32Array(depth.length), width, height, THREE.RedFormat, THREE.FloatType);
             uniforms.depthTex.value.flipY = false;
+            uniforms.beforeDepthTex.value?.dispose();
+            uniforms.beforeDepthTex.value = null;
         }
         uniforms.depthTex.value.image.data.set(depth);
         uniforms.depthTex.value.needsUpdate = true;
+        uniforms.hasBeforeDepth.value = !!beforeDepth;
+        if(beforeDepth) {
+            if(beforeDepth.length !== depth.length)throw new Error('Pre-filter depth dimensions differ');
+            if(!uniforms.beforeDepthTex.value) {
+                uniforms.beforeDepthTex.value = new THREE.DataTexture(
+                    new Float32Array(depth.length), width, height, THREE.RedFormat, THREE.FloatType);
+                uniforms.beforeDepthTex.value.flipY = false;
+            }
+            uniforms.beforeDepthTex.value.image.data.set(beforeDepth);
+            uniforms.beforeDepthTex.value.needsUpdate = true;
+        }
         const arrayImage = ArrayBuffer.isView(rgb);
         if (!uniforms.rgbTex.value || !!uniforms.rgbTex.value.isDataTexture !== arrayImage) {
             uniforms.rgbTex.value?.dispose();
@@ -94,7 +113,7 @@ export function createRgbdCloud({stride = 1, opacity = 1, brightness = 1} = {}) 
         uniforms.depthScale.value = scale;
     }
     function dispose() {
-        uniforms.depthTex.value?.dispose(); uniforms.rgbTex.value?.dispose();
+        uniforms.depthTex.value?.dispose(); uniforms.beforeDepthTex.value?.dispose(); uniforms.rgbTex.value?.dispose();
         geometry.dispose(); material.dispose();
     }
     return {points, update, dispose, uniforms};
@@ -123,6 +142,13 @@ export function createRgbdScene(canvas) {
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, 1, 0.001, 100);
     const controls = sceneControls(camera, canvas);
+    const ruler = document.createElement('div');
+    ruler.className = 'rgbd-metric-ruler';
+    ruler.setAttribute('aria-label', 'Metric scale at the orbit focus');
+    ruler.innerHTML = '<span class="rgbd-metric-bar"></span><span class="rgbd-metric-label"></span>';
+    canvas.parentElement?.append(ruler);
+    const rulerBar = ruler.querySelector('.rgbd-metric-bar');
+    const rulerLabel = ruler.querySelector('.rgbd-metric-label');
     const cloud = createRgbdCloud();
     scene.add(cloud.points);
     const layers = new Map();
@@ -134,6 +160,16 @@ export function createRgbdScene(canvas) {
         if (canvas.width !== Math.round(w * renderer.getPixelRatio()) || canvas.height !== Math.round(h * renderer.getPixelRatio()))
             renderer.setSize(w, h, false);
         if (calibration) calibratedProjection(camera, calibration, w, h);
+        // Project a real one-centimetre segment at the orbit focus. The scale
+        // changes with zoom and perspective, so this is local to that depth.
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+        const focus = controls.target.clone();
+        const a = focus.clone().project(camera);
+        const b = focus.addScaledVector(right, 0.01).project(camera);
+        const pxPerCm = Math.abs(b.x - a.x) * w / 2;
+        const shownCm = pxPerCm * 5 < w * 0.35 ? 5 : 1;
+        rulerBar.style.width = `${Math.max(1, pxPerCm * shownCm).toFixed(1)}px`;
+        rulerLabel.textContent = `${shownCm} cm at focus · 1 mm ≈ ${(pxPerCm / 10).toFixed(1)} px`;
         cloud.uniforms.pointSize.value = Math.max(1, Math.min(w / (calibration?.width || w), h / (calibration?.height || h))) * renderer.getPixelRatio() * 1.3;
         renderer.render(scene, camera);
     }
@@ -158,15 +194,16 @@ export function createRgbdScene(canvas) {
     function setOptions(next) {
         options = {...options, ...next};
         cloud.points.visible = options.scene;
+        cloud.uniforms.highlightFilled.value = !!options.highlightFilled;
         for (const [name, group] of layers) {
             group.visible = !!options[name];
             group.traverse(child => { if (child.userData.axis) child.visible = options.axes; });
         }
         draw();
     }
-    function update(depth, rgb, frame, descriptions) {
+    function update(depth, rgb, frame, descriptions, beforeDepth = null) {
         calibration = frame;
-        cloud.update(depth, rgb, frame);
+        cloud.update(depth, rgb, frame, 1, beforeDepth);
         for (const group of layers.values()) { scene.remove(group); disposeLayer(group); }
         layers.clear(); bounds = new THREE.Box3();
         const opticalToView = new THREE.Matrix4().makeScale(1, -1, -1);
@@ -209,6 +246,7 @@ export function createRgbdScene(canvas) {
     return {update, draw, reset, focus, setOptions,
         view: () => ({position: camera.position.toArray(), target: controls.target.toArray(), aligned}),
         dispose() {
+            ruler.remove();
             resize.disconnect(); controls.dispose(); cloud.dispose();
             for (const group of layers.values()) disposeLayer(group);
             renderer.dispose();
