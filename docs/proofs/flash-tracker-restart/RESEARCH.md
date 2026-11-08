@@ -4417,3 +4417,28 @@ not a new two-object performance benchmark. Both demos and the five reviewed
 external scenes are refreshed on 9102 with the accepted surface-fit results.
 
 ![Video examples with shared 3D inspection](library-registration-20261105/cleaned-examples-ui-20261106.png)
+
+## 2026-11-08 — Learned depth and SAM on the same frame
+
+On the RTX 5090, using recorded tray frames with two SAM text concepts, warm
+depth-plus-mask median wall times were:
+
+| Depth source                                  | Sequential | Same-frame overlap |
+| --------------------------------------------- | ---------: | -----------------: |
+| LingBot-Depth-v0.5                            |      62 ms |              60 ms |
+| Lite Any Stereo V2-S                          |      68 ms |              43 ms |
+| Lite Any Stereo V2-M                          |      73 ms |              48 ms |
+| Lite Any Stereo V2-L                          |      75 ms |              53 ms |
+| Lite Any Stereo V2-H                          |      79 ms |              58 ms |
+| Fast-FoundationStereo (fixed TensorRT engine) |      97 ms |              72 ms |
+
+These are 8-frame medians after warmup for each schedule, except the
+Fast-FoundationStereo comparison used 10 frames per schedule. GPU memory free
+after loading and warmup ranged from 22.9 to 24.0 GB out of 32.1 GB. In a
+separate Fast-FoundationStereo GPU trace, model kernels and SAM kernels occupied
+different CUDA streams but overlapped for only 0.095 ms across three frames;
+most savings came from SAM running while the depth result was prepared and
+projected into the color camera. The live worker now starts both measurements
+from one capture and joins them before pose fitting, without queuing frames.
+This measures stage latency and memory headroom on this tray, not depth quality
+or complete tracking FPS. Model selection remains opt-in.

@@ -1,7 +1,9 @@
 """Same measured frames must take the same path through live and offline adapters."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Event
 
 import numpy as np
 import pytest
@@ -9,8 +11,10 @@ import pytest
 from benchmarks.flash_tracker_experiment import run_case
 from lerobot.gui.flash_group_overlay import SceneGroupOverlay
 from lerobot.gui.flash_live_scene import live_scene_packet, loss_reason
+from lerobot.policies.flash.depth_enhancement import DepthOutput
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
+from lerobot.policies.flash.live_surface_worker import _prepare_measurements
 from lerobot.policies.flash.motion_groups import GroupConfig
 from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
 from lerobot.policies.flash.surface_session_config import defaults
@@ -118,8 +122,9 @@ def test_live_timing_command_loads_the_selected_image_matcher(tmp_path, monkeypa
 
 @pytest.mark.parametrize("backend", ["lk", "ufm"])
 @pytest.mark.parametrize("matcher", ["visible_icp"])
+@pytest.mark.parametrize("split_mask_measurement", [False, True])
 def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covariance(
-    tmp_path, monkeypatch, backend, matcher
+    tmp_path, monkeypatch, backend, matcher, split_mask_measurement
 ):
     import torch
 
@@ -139,7 +144,8 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
     history = RollingHistory(tmp_path / "history", reserve_bytes=0)
     group_overlay = SceneGroupOverlay()
     for i, (f, _) in enumerate(frames):
-        row, matches, mask = live.step(f)
+        measured_masks = live.measure_masks(f) if split_mask_measurement else None
+        row, matches, mask = live.step(f, measured_masks=measured_masks)
         live_rows.append(row)
         maps.append(
             {role: live.engine.candidates[method][role].store.points.copy() for role in source.prompts}
@@ -225,6 +231,68 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
                 np.testing.assert_array_equal(maps[i][role], saved["points"])
     assert source.calls == list(range(5))
     assert live_model.calls == recorded_model.calls == (4 if backend == "ufm" else 0)
+
+
+def test_live_mask_measurement_uses_raw_frame_and_rejects_another_depth_frame(monkeypatch):
+    frames = list(sequence())
+    raw_frame = frames[0][0]
+    model_frame = replace(raw_frame, depth=raw_frame.depth + 2)
+    source = SuppliedMasks(frames)
+    live = LiveSurfaceSession(defaults(), source)
+    measured = live.measure_masks(raw_frame)
+    assert measured[0] == raw_frame.frame_id
+
+    def engine_step(frame, masks, *, mask_ms):
+        assert frame is model_frame
+        assert mask_ms >= 0
+        assert source.calls == [raw_frame.frame_id]
+        np.testing.assert_array_equal(masks["left"], frames[0][1]["left"])
+        return {"frame": frame.frame_id}, {}
+
+    monkeypatch.setattr(live.engine, "step", engine_step)
+    try:
+        row, _, _ = live.step(model_frame, measured_masks=measured)
+        assert row["frame"] == raw_frame.frame_id
+        with pytest.raises(ValueError, match="same camera frame"):
+            live.step(frames[1][0], measured_masks=measured)
+        assert source.calls == [raw_frame.frame_id]
+    finally:
+        live.close()
+
+
+def test_learned_depth_and_sam_measure_the_same_frame_concurrently():
+    captured = frame(7)
+    mask_started, depth_started = Event(), Event()
+
+    class Masks:
+        def measure_masks(self, incoming):
+            assert incoming is captured
+            mask_started.set()
+            assert depth_started.wait(2), "depth did not start while SAM was active"
+            return incoming.frame_id, masks(), 1.0
+
+    class Depth:
+        def predict(self, incoming):
+            np.testing.assert_array_equal(incoming.rgb, captured.rgb)
+            np.testing.assert_array_equal(incoming.sensor_depth_m, captured.metric_depth())
+            depth_started.set()
+            assert mask_started.wait(2), "SAM did not start while depth was active"
+            return DepthOutput(incoming.sensor_depth_m + 0.002, "fixture", captured.depth > 0)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        tracking_frame, measured, depth_ms = _prepare_measurements(captured, Masks(), Depth(), None, executor)
+    assert measured[0] == tracking_frame.frame_id == captured.frame_id
+    np.testing.assert_array_equal(tracking_frame.depth, captured.depth + 2)
+    np.testing.assert_array_equal(tracking_frame.depth_before_filters, captured.depth)
+    assert depth_ms >= 0
+
+
+def test_sensor_depth_does_not_start_a_second_mask_path():
+    captured = frame(7)
+    tracking_frame, measured, depth_ms = _prepare_measurements(captured, None, None, None, None)
+    assert tracking_frame is captured
+    assert measured is None
+    assert depth_ms == 0
 
 
 def test_new_selection_has_no_old_surface_or_point_memory():

@@ -13,6 +13,8 @@ import sys
 import time
 import traceback
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
@@ -37,6 +39,31 @@ from .tracking_history import RollingHistory
 from .vision_pipeline import VisionPipelineConfig
 
 
+def _prepare_measurements(frame, live, depth_source, stereo_geometry, mask_executor):
+    """Join the same frame's SAM mask and optional learned depth before fitting."""
+    if depth_source is None:
+        return frame, None, 0.0
+    depth_started = time.perf_counter()
+    mask_future = mask_executor.submit(live.measure_masks, frame)
+    try:
+        stereo = None
+        if stereo_geometry is not None:
+            stereo = StereoInput(frame.infrared_left, frame.infrared_right, *stereo_geometry)
+        selected_depth = depth_source.predict(
+            DepthInput(frame.rgb, frame.metric_depth(), frame.intrinsics, stereo)
+        )
+        tracking_frame = replace(
+            frame,
+            depth=np.rint(selected_depth.depth_m / frame.depth_m_per_unit).clip(0, 65535).astype(np.uint16),
+            depth_before_filters=frame.depth,
+        )
+        depth_ms = (time.perf_counter() - depth_started) * 1000
+    finally:
+        # Finish SAM before this session can be cleared or replaced.
+        measured_masks = mask_future.result()
+    return tracking_frame, measured_masks, depth_ms
+
+
 def run(directory: Path, config: dict):
     import pyrealsense2 as rs
 
@@ -46,7 +73,7 @@ def run(directory: Path, config: dict):
     from lerobot.overlays.adapters import Sam3TrackByDetectionAdapter
 
     stop, latest, commands = Event(), LatestRGBDFrameStore(), Queue(maxsize=8)
-    camera = capture = live = adapter = pool = history = group_overlay = None
+    camera = capture = live = adapter = pool = history = group_overlay = mask_executor = None
     model = None
     model_loaded = False
     frozen = None
@@ -162,6 +189,8 @@ def run(directory: Path, config: dict):
             # before the camera read thread starts, or acquisition can time out.
             state("loading_depth_model", depth_source=depth_source_name)
             depth_source = make_depth_source(depth_source_name)
+            # Only one in-flight mask for the camera frame being processed.
+            mask_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-live-mask")
         camera.connect()
         intr = camera.rs_profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
         k = np.array([[intr.fx, 0, intr.ppx], [0, intr.fy, intr.ppy], [0, 0, 1]], float)
@@ -344,34 +373,11 @@ def run(directory: Path, config: dict):
                 continue
             try:
                 started = time.perf_counter()
-                tracking_frame = frame
-                depth_started = time.perf_counter()
-                if depth_source is not None:
-                    stereo = None
-                    if stereo_geometry is not None:
-                        stereo = StereoInput(frame.infrared_left, frame.infrared_right, *stereo_geometry)
-                    selected_depth = depth_source.predict(
-                        DepthInput(
-                            frame.rgb,
-                            frame.metric_depth(),
-                            frame.intrinsics,
-                            stereo,
-                        )
-                    )
-                    # The raw capture remains in history; only this processing
-                    # frame receives the model result. Keep sensor depth as a
-                    # separate comparison map for the 3D/Depth display.
-                    from dataclasses import replace
-
-                    tracking_frame = replace(
-                        frame,
-                        depth=np.rint(selected_depth.depth_m / frame.depth_m_per_unit)
-                        .clip(0, 65535)
-                        .astype(np.uint16),
-                        depth_before_filters=frame.depth,
-                    )
-                depth_ms = (time.perf_counter() - depth_started) * 1000
-                row, matches, masks = live.step(tracking_frame)
+                tracking_frame, measured_masks, depth_ms = _prepare_measurements(
+                    frame, live, depth_source, stereo_geometry, mask_executor
+                )
+                row, matches, masks = live.step(tracking_frame, measured_masks=measured_masks)
+                render_started = time.perf_counter()
                 packet = live_scene_packet(
                     tracking_frame,
                     live,
@@ -402,7 +408,7 @@ def run(directory: Path, config: dict):
                         "mask_ms": row["mask_ms"],
                         "depth_ms": depth_ms,
                         "image_matching_ms": row.get("scene_point_tracking_ms", 0.0),
-                        "display_ms": elapsed * 1000 - row["processing_ms"],
+                        "display_ms": (time.perf_counter() - render_started) * 1000,
                         "skipped_camera_frames": max(0, frame.frame_id - last_id - 1) if last_id >= 0 else 0,
                         "age_ms": (time.perf_counter() - frame.source_time_s) * 1000,
                     },
@@ -420,6 +426,8 @@ def run(directory: Path, config: dict):
         raise
     finally:
         stop.set()
+        if mask_executor:
+            mask_executor.shutdown(wait=True)
         if live:
             live.close()
         if pool:

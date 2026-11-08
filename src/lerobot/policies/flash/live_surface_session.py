@@ -35,11 +35,19 @@ class LiveSurfaceSession:
             else None,
         )
 
-    def step(self, frame):
+    def measure_masks(self, frame):
         start = time.perf_counter()
         measured = self.mask_source.masks(frame)
         masks = {role: measured.get(role, np.zeros(frame.depth.shape, bool)) for role in self.engine.sessions}
         elapsed = (time.perf_counter() - start) * 1000
+        return frame.frame_id, masks, elapsed
+
+    def step(self, frame, *, measured_masks=None):
+        if measured_masks is None:
+            measured_masks = self.measure_masks(frame)
+        measured_frame_id, masks, elapsed = measured_masks
+        if measured_frame_id != frame.frame_id:
+            raise ValueError("Masks must come from the same camera frame as the depth")
         row, matches = self.engine.step(frame, masks, mask_ms=elapsed)
         return row, matches, masks
 
