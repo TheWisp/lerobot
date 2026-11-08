@@ -675,17 +675,17 @@
         </p>
         <div class="depth-diagram" aria-label="Live mask and depth paths for frame t">
           <div class="depth-capture">
-            Camera frame <code>t</code>
+            One camera capture · frame <code>t</code>
             <strong>RGB + aligned RealSense depth; infrared pair when stereo is selected</strong>
           </div>
           <div class="depth-parallel">
             <div class="depth-lane">
-              <small>Mask path</small>
+              <small>Object tracker · only after selection</small>
               <strong>RGB[t] → SAM3 → visible mask[t]</strong>
               <p>Video reruns normally load a saved or dataset mask for each frame.</p>
             </div>
             <div class="depth-lane">
-              <small>Choose one live depth source · learned models overlap SAM3</small>
+              <small>Independent camera-frame depth · runs before object selection</small>
               <div class="depth-options">
                 <div class="depth-option">
                   <strong>RealSense sensor · default</strong>
@@ -700,11 +700,11 @@
                   <span>IR left/right[t] → stereo depth → project onto RGB[t].</span>
                 </div>
               </div>
-              <div class="depth-select">One selected color-aligned depth map[t]</div>
+              <div class="depth-select">Latest completed color-aligned depth[t] · available to preview and tracker</div>
             </div>
           </div>
           <div class="depth-join">
-            <strong>mask[t] + selected depth[t] → O[t]</strong>
+            <strong>Tracker joins mask[t] + selected depth[t] by frame ID → O[t]</strong>
             <a class="metric-link" href="#metric-depth">Depth source · valid pixels · model time</a>
           </div>
         </div>

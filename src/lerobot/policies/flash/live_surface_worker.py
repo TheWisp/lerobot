@@ -14,7 +14,6 @@ import sys
 import time
 import traceback
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
@@ -22,7 +21,7 @@ from threading import Event, Lock, Thread
 import cv2
 import numpy as np
 
-from .depth_enhancement import make_depth_source, needs_stereo_pair, tracking_frame_with_depth_source
+from .depth_enhancement import LiveDepthStream, make_depth_source, needs_stereo_pair
 from .live_surface_io import (
     image_snapshot,
     new_selection,
@@ -49,39 +48,27 @@ def _freeze_startup_heap():
     gc.freeze()
 
 
-def _prepare_measurements(frame, live, depth_source, stereo_geometry, mask_executor):
-    """Join the same frame's SAM mask and optional learned depth before fitting."""
-    if depth_source is None:
-        return frame, None, 0.0
-    depth_started = time.perf_counter()
-    mask_future = mask_executor.submit(live.measure_masks, frame)
-    try:
-        tracking_frame = tracking_frame_with_depth_source(frame, depth_source, stereo_geometry)
-        depth_ms = (time.perf_counter() - depth_started) * 1000
-    finally:
-        # Finish SAM before this session can be cleared or replaced.
-        measured_masks = mask_future.result()
-    return tracking_frame, measured_masks, depth_ms
-
-
 def run(directory: Path, config: dict):
     import pyrealsense2 as rs
 
     from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
     from lerobot.gui.flash_group_overlay import SceneGroupOverlay
-    from lerobot.gui.flash_live_scene import live_scene_packet
+    from lerobot.gui.flash_live_scene import encode_rgbd_scene, live_scene_packet
     from lerobot.overlays.adapters import Sam3TrackByDetectionAdapter
 
     stop, latest, commands = Event(), LatestRGBDFrameStore(), Queue(maxsize=8)
-    camera = capture = live = adapter = pool = history = group_overlay = mask_executor = None
+    camera = capture = live = adapter = pool = history = group_overlay = depth_stream = None
     model = None
     model_loaded = False
     frozen = None
     displayed_frame = None
     preview_frames = deque(maxlen=8)
+    model_preview_frames = deque(maxlen=32)
     preview_lock = Lock()
     command_id = None
     last_id = -1
+    last_model_preview_id = -1
+    last_model_preview_s = 0.0
     sequence = 0
     paused = True
     errors = []
@@ -189,8 +176,6 @@ def run(directory: Path, config: dict):
             # before the camera read thread starts, or acquisition can time out.
             state("loading_depth_model", depth_source=depth_source_name)
             depth_source = make_depth_source(depth_source_name)
-            # Only one in-flight mask for the camera frame being processed.
-            mask_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-live-mask")
         _freeze_startup_heap()
         camera.connect()
         intr = camera.rs_profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
@@ -280,6 +265,11 @@ def run(directory: Path, config: dict):
                 errors.append(str(exc))
                 stop.set()
 
+        if depth_source is not None:
+            # Depth is a camera-stream producer. It has no object, mask or pose
+            # dependency; the tracker consumes its completed frame by ID.
+            depth_stream = LiveDepthStream(latest, depth_source, stereo_geometry, stop)
+            depth_stream.start()
         capture = Thread(target=acquire, daemon=True, name="flash-live-capture")
         capture.start()
         Thread(target=controls, daemon=True, name="flash-live-controls").start()
@@ -288,6 +278,9 @@ def run(directory: Path, config: dict):
         state("preview", depth_processing=camera.depth_processing, camera_streams=streams)
         while not stop.is_set():
             selected = None
+            selected_depth_ms = 0.0
+            if depth_stream is not None and depth_stream.error is not None:
+                raise RuntimeError("Depth stream failed") from depth_stream.error
             try:
                 command = commands.get_nowait()
             except Empty:
@@ -319,23 +312,40 @@ def run(directory: Path, config: dict):
                         displayed = frozen
                         if command.get("point") is not None:
                             frame_id = command.get("frame_id")
-                            if displayed is None or displayed.frame_id != frame_id:
+                            if depth_stream is not None:
+                                displayed = next(
+                                    (f for f, _ in reversed(model_preview_frames) if f.frame_id == frame_id),
+                                    None,
+                                )
+                            elif displayed is None or displayed.frame_id != frame_id:
                                 displayed = (
                                     displayed_frame
                                     if displayed_frame and displayed_frame.frame_id == frame_id
                                     else None
                                 )
-                            if displayed is None:
+                            if displayed is None and depth_stream is None:
                                 with preview_lock:
                                     displayed = next(
                                         (f for f in reversed(preview_frames) if f.frame_id == frame_id), None
                                     )
+                        latest_depth, latest_depth_ms = (
+                            depth_stream.snapshot() if depth_stream is not None else (latest.snapshot(), 0.0)
+                        )
                         selected = seed_frame(
                             command,
                             displayed,
-                            latest.snapshot(),
-                            history.directory if history else None,
+                            latest_depth,
+                            history.directory if history and depth_stream is None else None,
                         )
+                        if depth_stream is not None:
+                            selected_depth_ms = next(
+                                (
+                                    ms
+                                    for f, ms in reversed(model_preview_frames)
+                                    if f.frame_id == selected.frame_id
+                                ),
+                                latest_depth_ms,
+                            )
                         paused = True
                         state("loading_models", frame=image_snapshot(selected))
                         if not model_loaded:
@@ -366,21 +376,55 @@ def run(directory: Path, config: dict):
                     state("error", message=str(exc), depth_processing=camera.depth_processing)
                     traceback.print_exc()
             if paused:
+                if live is None and frozen is None and depth_stream is not None:
+                    preview_frame, depth_ms = depth_stream.snapshot()
+                    if (
+                        preview_frame is not None
+                        and preview_frame.frame_id > last_model_preview_id
+                        and time.perf_counter() - last_model_preview_s >= 1 / config["preview_fps"]
+                    ):
+                        packet = encode_rgbd_scene(
+                            preview_frame,
+                            {
+                                "frame": preview_frame.frame_id,
+                                "time_s": preview_frame.source_time_s,
+                                "objects": {},
+                                "scene_group_tracks": [],
+                                "depth_source": depth_source_name,
+                                "preview_model": True,
+                            },
+                            rgb_format="jpeg",
+                        )
+                        temporary = directory / "scene.tmp"
+                        temporary.write_bytes(packet)
+                        temporary.replace(directory / "scene.bin")
+                        model_preview_frames.append((preview_frame, depth_ms))
+                        last_model_preview_id = preview_frame.frame_id
+                        last_model_preview_s = time.perf_counter()
+                        state(
+                            "preview_model",
+                            frame_id=preview_frame.frame_id,
+                            depth_source=depth_source_name,
+                            depth_processing=preview_frame.depth_processing,
+                            timings={"depth_ms": depth_ms},
+                        )
                 stop.wait(0.02)
                 continue
-            frame = selected if selected is not None else latest.snapshot()
+            if selected is not None:
+                frame, depth_ms = selected, selected_depth_ms
+            elif depth_stream is not None:
+                frame, depth_ms = depth_stream.snapshot()
+            else:
+                frame, depth_ms = latest.snapshot(), 0.0
             if frame is None or frame.frame_id <= last_id:
                 stop.wait(0.005)
                 continue
             try:
                 started = time.perf_counter()
-                tracking_frame, measured_masks, depth_ms = _prepare_measurements(
-                    frame, live, depth_source, stereo_geometry, mask_executor
-                )
-                row, matches, masks = live.step(tracking_frame, measured_masks=measured_masks)
+                row, matches, masks = live.step(frame)
                 render_started = time.perf_counter()
                 packet = live_scene_packet(
-                    tracking_frame,
+                    frame,
                     live,
                     row,
                     masks,
@@ -421,6 +465,8 @@ def run(directory: Path, config: dict):
                 paused = True
                 state("error", message=str(exc))
                 traceback.print_exc()
+        if depth_stream is not None and depth_stream.error is not None:
+            raise RuntimeError("Depth stream failed") from depth_stream.error
         if errors:
             raise RuntimeError(errors[0])
     except Exception as exc:
@@ -428,8 +474,8 @@ def run(directory: Path, config: dict):
         raise
     finally:
         stop.set()
-        if mask_executor:
-            mask_executor.shutdown(wait=True)
+        if depth_stream:
+            depth_stream.join(timeout=2)
         if live:
             live.close()
         if pool:

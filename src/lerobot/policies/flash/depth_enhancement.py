@@ -8,8 +8,10 @@ remain distinct from camera measurements.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
+from threading import Event, Lock, Thread
 
 import cv2
 import numpy as np
@@ -74,6 +76,54 @@ def tracking_frame_with_depth_source(frame, source, stereo_geometry=None):
     else:
         depth = selected.depth_m.astype(np.float32)
     return replace(frame, depth=depth, depth_before_filters=frame.depth)
+
+
+class LiveDepthStream:
+    """Continuously publish selected depth for captured frames, without a tracker.
+
+    The newest completed frame is the only one retained for live consumption;
+    the camera recorder independently keeps every raw capture.
+    """
+
+    def __init__(self, captured, source, stereo_geometry, stop: Event):
+        self.captured = captured
+        self.source = source
+        self.stereo_geometry = stereo_geometry
+        self.stop = stop
+        self._lock = Lock()
+        self._latest = None
+        self._elapsed_ms = 0.0
+        self.error = None
+        self._thread = Thread(target=self._run, daemon=True, name="flash-live-depth")
+
+    def start(self):
+        self._thread.start()
+
+    def join(self, timeout=None):
+        self._thread.join(timeout)
+
+    def snapshot(self):
+        with self._lock:
+            return self._latest, self._elapsed_ms
+
+    def _run(self):
+        last_id = -1
+        while not self.stop.is_set():
+            frame = self.captured.snapshot()
+            if frame is None or frame.frame_id <= last_id:
+                self.stop.wait(0.005)
+                continue
+            try:
+                started = time.perf_counter()
+                selected = tracking_frame_with_depth_source(frame, self.source, self.stereo_geometry)
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                with self._lock:
+                    self._latest, self._elapsed_ms = selected, elapsed_ms
+            except Exception as exc:
+                self.error = exc
+                self.stop.set()
+                return
+            last_id = frame.frame_id
 
 
 def _valid_output(depth: np.ndarray, shape: tuple[int, int]) -> np.ndarray:

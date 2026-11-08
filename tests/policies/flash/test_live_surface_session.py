@@ -4,9 +4,9 @@ import gc
 import json
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from threading import Event
+from time import monotonic, sleep
 
 import numpy as np
 import pytest
@@ -14,11 +14,15 @@ import pytest
 from benchmarks.flash_tracker_experiment import run_case
 from lerobot.gui.flash_group_overlay import SceneGroupOverlay
 from lerobot.gui.flash_live_scene import live_scene_packet, loss_reason
-from lerobot.policies.flash.depth_enhancement import DepthOutput, tracking_frame_with_depth_source
+from lerobot.policies.flash.depth_enhancement import (
+    DepthOutput,
+    LiveDepthStream,
+    tracking_frame_with_depth_source,
+)
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
-from lerobot.policies.flash.live_surface_worker import _prepare_measurements
 from lerobot.policies.flash.motion_groups import GroupConfig
+from lerobot.policies.flash.perception import LatestRGBDFrameStore
 from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
 from lerobot.policies.flash.surface_session_config import defaults
 from lerobot.policies.flash.tracking_history import RollingHistory, decode_record, read_packet
@@ -376,31 +380,38 @@ def test_saved_camera_history_replays_through_the_live_frame_session(tmp_path, m
             assert before["objects"][role]["group_growing"] == after["objects"][role]["group_growing"]
 
 
-def test_learned_depth_and_sam_measure_the_same_frame_concurrently():
-    captured = frame(7)
-    mask_started, depth_started = Event(), Event()
-
-    class Masks:
-        def measure_masks(self, incoming):
-            assert incoming is captured
-            mask_started.set()
-            assert depth_started.wait(2), "depth did not start while SAM was active"
-            return incoming.frame_id, masks(), 1.0
+def test_learned_depth_runs_on_camera_frames_without_an_object_tracker():
+    camera = LatestRGBDFrameStore()
+    stop = Event()
+    calls = []
 
     class Depth:
         def predict(self, incoming):
-            np.testing.assert_array_equal(incoming.rgb, captured.rgb)
-            np.testing.assert_array_equal(incoming.sensor_depth_m, captured.metric_depth())
-            depth_started.set()
-            assert mask_started.wait(2), "SAM did not start while depth was active"
-            return DepthOutput(incoming.sensor_depth_m + 0.002, "fixture", captured.depth > 0)
+            calls.append(float(incoming.sensor_depth_m[0, 0]))
+            return DepthOutput(incoming.sensor_depth_m + 0.002, "fixture", incoming.sensor_depth_m > 0)
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        tracking_frame, measured, depth_ms = _prepare_measurements(captured, Masks(), Depth(), None, executor)
-    assert measured[0] == tracking_frame.frame_id == captured.frame_id
-    np.testing.assert_array_equal(tracking_frame.depth, captured.depth + 2)
-    np.testing.assert_array_equal(tracking_frame.depth_before_filters, captured.depth)
-    assert depth_ms >= 0
+    stream = LiveDepthStream(camera, Depth(), None, stop)
+    stream.start()
+    try:
+        for index in (7, 8):
+            raw = frame(index)
+            camera.publish(raw)
+            deadline = monotonic() + 2
+            while monotonic() < deadline:
+                selected, depth_ms = stream.snapshot()
+                if selected is not None and selected.frame_id == index:
+                    break
+                sleep(0.005)
+            else:
+                pytest.fail(f"Depth stream did not publish camera frame {index}")
+            np.testing.assert_array_equal(selected.depth, raw.depth + 2)
+            np.testing.assert_array_equal(selected.depth_before_filters, raw.depth)
+            assert depth_ms >= 0
+        assert len(calls) == 2
+        assert stream.error is None
+    finally:
+        stop.set()
+        stream.join(2)
 
 
 def test_live_and_recorded_depth_selection_preserve_camera_measurement():
@@ -421,12 +432,9 @@ def test_live_and_recorded_depth_selection_preserve_camera_measurement():
     np.testing.assert_allclose(selected_metric.depth, metric.depth + 0.002, rtol=0, atol=1e-7)
 
 
-def test_sensor_depth_does_not_start_a_second_mask_path():
+def test_sensor_depth_is_the_camera_frame_without_an_extra_source():
     captured = frame(7)
-    tracking_frame, measured, depth_ms = _prepare_measurements(captured, None, None, None, None)
-    assert tracking_frame is captured
-    assert measured is None
-    assert depth_ms == 0
+    assert tracking_frame_with_depth_source(captured, None) is captured
 
 
 def test_new_selection_has_no_old_surface_or_point_memory():

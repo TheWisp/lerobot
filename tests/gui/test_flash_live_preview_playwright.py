@@ -38,6 +38,72 @@ def test_unselected_camera_recording_displays_raw_rgb_and_depth(gui_page):
     assert gui_page.evaluate("Object.keys(flashLive.packet.objects).length") == 0
 
 
+def test_unselected_model_preview_exposes_sensor_and_model_depth(gui_page):
+    from dataclasses import replace
+
+    from lerobot.gui.flash_live_scene import encode_rgbd_scene
+    from lerobot.policies.flash.perception import RGBDFrame
+
+    sensor = RGBDFrame(
+        9,
+        np.full((8, 8, 3), 80, np.uint8),
+        np.full((8, 8), 427, np.uint16),
+        np.array([[8, 0, 4], [0, 8, 4], [0, 0, 1]]),
+        0.001,
+        np.eye(4),
+        9.0,
+        9.0,
+        "test",
+    )
+    model = replace(sensor, depth=sensor.depth + 10, depth_before_filters=sensor.depth)
+    packet = encode_rgbd_scene(
+        model,
+        {
+            "frame": 9,
+            "objects": {},
+            "scene_group_tracks": [],
+            "depth_source": "foundation_stereo",
+            "preview_model": True,
+        },
+        rgb_format="jpeg",
+    )
+    gui_page.route(
+        "**/api/run/flash/tracking/state",
+        lambda route: route.fulfill(
+            json={
+                "running": True,
+                "config": {"engine": "experiment", "depth_source": "foundation_stereo"},
+                "estimate": {
+                    "status": "preview_model",
+                    "frame_id": 9,
+                    "depth_source": "foundation_stereo",
+                    "timings": {"depth_ms": 37},
+                },
+            }
+        ),
+    )
+    gui_page.route(
+        "**/api/run/flash/tracking/scene",
+        lambda route: route.fulfill(body=packet, content_type="application/octet-stream"),
+    )
+    gui_page.route(
+        "**/api/run/flash/tracking/history*",
+        lambda route: route.fulfill(json={"recording": "recent", "recordings": [], "frames": [], "bytes": 0}),
+    )
+    gui_page.evaluate(
+        "flashLive.visible = true; flashLive.view = '2d'; "
+        "document.getElementById('tab-flash').classList.add('active'); setFlashSource(true); void pollFlashLive()"
+    )
+    gui_page.wait_for_function("flashLive.processedMode === 'preview_model' && flashLive.packet?.frame === 9")
+    gui_page.evaluate("setFlashLiveView('depth')")
+    assert gui_page.evaluate("flashLive.packet.depth[0]") == pytest.approx(0.437, abs=1e-6)
+    assert gui_page.evaluate("flashLive.packet.depthBeforeFilters[0]") == pytest.approx(0.427, abs=1e-6)
+    assert not gui_page.locator("#flash-live-model-depth-control").is_hidden()
+    assert "RealSense depth" in gui_page.locator("#flash-live-depth-info").inner_text()
+    gui_page.locator("#flash-live-model-depth").check()
+    assert "Fast-FoundationStereo" in gui_page.locator("#flash-live-depth-info").inner_text()
+
+
 def test_filter_created_depth_toggle_marks_only_new_values(gui_page):
     from lerobot.policies.flash.perception import RGBDFrame
     from lerobot.policies.flash.tracking_history import capture_packet

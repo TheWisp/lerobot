@@ -95,6 +95,7 @@ async function startFlashLive() {
         if(!picker.value) throw new Error('No RGB-D camera found');
         const depthProcessing=Object.fromEntries(['spatial','temporal','hole-filling'].map(key=>
             [key.replace('-','_'),liveElement('depth-'+key).checked]));
+        liveElement('model-depth').checked=liveElement('depth-source').dataset.mode!=='sensor';
         const [width,height]=liveElement('resolution').value.split('x').map(Number);
         flashLive.starting = liveRequest('start', {engine: 'experiment', pipeline_settings: settings,
             serial: picker.value, width, height, fps:30,
@@ -103,7 +104,7 @@ async function startFlashLive() {
             history_seconds:Number(liveElement('history-seconds').value)});
         await flashLive.starting;
         if (!flashLive.visible || generation !== flashLive.generation) return;
-        flashLive.processed = null; flashLive.packet = null; flashLive.overlay=null; flashLive.previewDepth=null;
+        flashLive.processed = null; flashLive.processedMode=null; flashLive.packet = null; flashLive.overlay=null; flashLive.previewDepth=null;
         flashLive.depthColorRange=null; flashLive.frame = null;
         liveElement('objects').textContent='';
         flashLive.historyActive=false; liveElement('recording').value='recent'; flashLive.historyUpdated=0;
@@ -276,7 +277,16 @@ async function drawFlashLive() {
     liveElement('groups').title = 'Connected measured points; group predictions remain in the recording.';
     // Saved episodes decode RGB and depth separately. An older live packet
     // must never override the depth for the episode frame on screen.
-    const rawDepthPacket=state.episodePlayer ? state.previewDepth : packet||state.previewDepth;
+    const capturedDepthPacket=state.episodePlayer ? state.previewDepth : packet||state.previewDepth;
+    // Live tracking packets carry the selected model depth as their primary
+    // depth and the aligned sensor map as the preceding measurement. History
+    // packets already carry these as separate sensor/model fields.
+    const rawDepthPacket=capturedDepthPacket?.depth_source!=='sensor' &&
+        capturedDepthPacket?.depthBeforeFilters && !capturedDepthPacket?.modelDepth
+        ? {...capturedDepthPacket, depth:capturedDepthPacket.depthBeforeFilters,
+           modelDepth:capturedDepthPacket.depth, depthBeforeFilters:null,
+           depth_source:'sensor', tracking_depth_source:capturedDepthPacket.depth_source}
+        : capturedDepthPacket;
     liveElement('model-depth-control').hidden=!rawDepthPacket?.modelDepth || state.view==='2d';
     const depthPacket=rawDepthPacket?.modelDepth && liveElement('model-depth').checked
         ? {...rawDepthPacket, depth:rawDepthPacket.modelDepth, depthBeforeFilters:rawDepthPacket.depth,
@@ -300,7 +310,7 @@ async function drawFlashLive() {
     }
     if(three) {
         const module=await import('/static/rgbd_scene.js?v=9');
-        if(!state.visible || (state.packet||state.previewDepth)!==rawDepthPacket) return;
+        if(!state.visible || (state.packet||state.previewDepth)!==capturedDepthPacket) return;
         state.viewer ||= module.createRgbdScene(liveElement('scene'));
         const descriptions=[];
         for(const obj of Object.values(overlay?.objects||{})) {
@@ -378,16 +388,19 @@ async function pollFlashLive() {
         const timing=estimate.timings;
         const modelTime=estimate.depth_source && estimate.depth_source!=='sensor'
             ?`model depth ${(timing?.depth_ms||0).toFixed(0)} ms · `:'';
-        if(running) liveElement('status').textContent=estimate.message || (timing ?
+        if(running) liveElement('status').textContent=estimate.message || (
+            estimate.status==='preview_model' ? `${modelTime}Pick an object to track` : timing?.processed_fps ?
             `${timing.processed_fps.toFixed(1)} fps · ${modelTime}mask ${timing.mask_ms.toFixed(0)} ms · tracking ${(timing.processing_ms-timing.mask_ms).toFixed(0)} ms · frame age ${timing.age_ms.toFixed(0)} ms` : estimate.status);
         else liveElement('status').textContent=data.estimate?.status==='error' ? data.estimate.message : 'Camera stopped. Press Start for a new tracking session.';
-        if(!flashLive.historyActive && running && estimate.status==='tracking' && estimate.frame_id!==flashLive.processed) {
+        if(!flashLive.historyActive && running && ['tracking','preview_model'].includes(estimate.status) &&
+            (estimate.frame_id!==flashLive.processed || estimate.status!==flashLive.processedMode)) {
             const request=flashLive.historyRequest||0;
             const response=await fetch('/api/run/flash/tracking/scene');
             if(!response.ok) throw new Error('Processed scene unavailable');
             await displayFlashLivePacket(await response.arrayBuffer(), generation, request);
         }
-        if(!flashLive.historyActive && running) {
+        if(!flashLive.historyActive && running &&
+            !(data.config?.depth_source && data.config.depth_source!=='sensor' && flashLive.packet)) {
             const frame=estimate.status==='frozen' || estimate.status==='loading_models' ? estimate.frame : data.preview;
             if(frame && frame.frame_id>(flashLive.frame?.frame_id ?? -1)) {
                 const request=flashLive.historyRequest||0;
@@ -438,9 +451,12 @@ async function displayFlashLivePacket(buffer, generation, request, replay=false)
         rememberFlashOverlay(packet,replay?liveElement('recording').value:'live');
     if(!replay){
         flashLive.processed=packet.frame;
+        flashLive.processedMode=packet.preview_model?'preview_model':'tracking';
+        if(packet.preview_model)flashLive.overlay=null;
         // The tracker may finish an older frame after a newer camera preview is
         // already visible. Update its overlay without jumping the image back.
-        if(packet.frame<(flashLive.frame?.frame_id ?? -1)){await drawFlashLive();return;}
+        if(packet.frame<(flashLive.frame?.frame_id ?? -1) &&
+            !(packet.depth_source && packet.depth_source!=='sensor')){await drawFlashLive();return;}
     }
     const measured=buffer.slice(start,start+packet.depth_bytes);
     if(packet.depth_format==='sensor_u16'){
