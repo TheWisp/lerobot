@@ -290,6 +290,7 @@ peft = ["lerobot[transformers-dep]", "lerobot[peft-dep]"]
 # explicitly — keeps the install resilient if fastapi ever swaps backend.
 gui = [
     "fastapi>=0.115.0,<1.0.0",
+    "zstandard>=0.23.0,<1.0.0",  # lossless full-rate RGB-D history writer
     "uvicorn>=0.30.0,<1.0.0",
     "python-multipart>=0.0.9,<1.0.0",
     "lerobot[mcp]",  # gui/server.py unconditionally mounts the MCP app

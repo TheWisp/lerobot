@@ -576,6 +576,11 @@
               object cannot be.
             </p>
             <p style="margin-top: 10px; font-size: 14px">
+              The live camera first aligns depth to the image. Optional camera
+              filters run before this cleanup; the Depth view shows that camera
+              input, with missing readings in black.
+            </p>
+            <p style="margin-top: 10px; font-size: 14px">
               <b>Live:</b> SAM3. <b>Video reruns:</b> by default, load masks
               saved during earlier segmentation (our FLASH demos) or supplied by
               the dataset (such as YCB), one mask per frame.
@@ -1200,14 +1205,13 @@
             <p>The player reads these results alongside the recorded RGB-D, masks, image matches
               and surface versions. Inspecting a frame does not rerun the tracker.</p></article>
           <article class="source memory"><h3>Live camera → rolling frame history</h3>
-            <p>The same result is saved with that frame's RGB-D, exact masks, image matches and surfaces.
-              Default retention: 60 seconds. Scrub recent frames or save the window
-              to keep it across sessions.</p></article>
+            <p>Every captured RGB-D frame enters history from camera start, including frames before selection
+              and frames skipped by the tracker. A processed result adds masks, matches and surfaces to its
+              frame later. Scrub recent frames or save the window across sessions.</p></article>
         </div>
-        <p>Compression and disk writing run separately through a two-frame queue. A full queue drops
-          logging frames, not tracking frames; the UI reports the gaps. Retained source frames are kept
-          alongside the window. Logging pauses if disk space is critically low. Saved windows preserve evidence for inspection, not a complete
-          checkpoint of all tracker state.</p>
+        <p>Compression and disk writing run on a separate thread. The default window is 60 seconds.
+          If the writer cannot keep up, the UI reports dropped camera frames. A full disk stops recording
+          with an error. Saved windows preserve evidence for inspection, not a complete tracker checkpoint.</p>
         <p>Live and video settings use the same typed controls and units. Live changes apply when opening
           the camera; video changes apply on rerun. Segmentation controls are hidden for video reruns
           that reuse recorded masks.</p>

@@ -131,13 +131,13 @@ def test_slow_writer_drops_logs_instead_of_blocking_tracker(tmp_path, monkeypatc
     history = new_history(tmp_path / "recent")
     history.submit(packet(0))
     assert started.wait(5)
-    for i in range(1, 10):
+    for i in range(1, 80):
         history.submit(packet(i))
-    assert history.queue.qsize() == 2
-    assert history.dropped == 7
+    assert history.queue.qsize() == 64
+    assert history.dropped == 15
     release.set()
     history.close()
-    assert read_index(history.directory)["dropped_frames"] == 7
+    assert read_index(history.directory)["dropped_frames"] == 15
 
 
 def test_disk_full_is_reported_without_hanging_or_changing_results(tmp_path, monkeypatch):
@@ -147,5 +147,61 @@ def test_disk_full_is_reported_without_hanging_or_changing_results(tmp_path, mon
     history.close()
     index = read_index(history.directory)
     assert not index["frames"]
+    assert index["dropped_frames"] == 1
+    assert "disk reserve" in index["error"]
+
+
+def test_camera_frames_precede_selection_and_tracking_attaches_without_replacing_pixels(tmp_path):
+    recent = tmp_path / "recent"
+    history = new_history(recent, seconds=10)
+    originals = [replace(frame(i), source_time_s=float(i), available_time_s=float(i)) for i in range(3)]
+    for measured in originals:
+        history.submit_frame(measured)
+    history.queue.join()
+    assert [r["frame"] for r in read_index(recent)["frames"]] == [0, 1, 2]
+    before, masks, result, _ = decode_record(read_packet(recent, 1))
+    assert masks == {} and result is None
+    np.testing.assert_array_equal(before.rgb, originals[1].rgb)
+    np.testing.assert_array_equal(before.depth, originals[1].depth)
+
+    history.attach_result(packet(1))
+    history.queue.join()
+    after, masks, result, _ = decode_record(read_packet(recent, 1))
+    np.testing.assert_array_equal(after.rgb, before.rgb)
+    np.testing.assert_array_equal(after.depth, before.depth)
+    assert result["frame"] == 1 and masks["object"].any()
+    assert not read_index(recent)["frames"][0]["objects"]
+    assert read_index(recent)["frames"][1]["objects"]["object"]["status"] == "lost"
+
+    saved = tmp_path / save_window(recent, tmp_path)
+    history.close()
+    assert decode_record(read_packet(saved, 1))[2] == result
+    assert decode_record(read_packet(saved, 0))[2] is None
+
+
+def test_capture_copies_camera_buffers_before_they_are_reused(tmp_path):
+    recent = tmp_path / "recent"
+    history = new_history(recent)
+    measured = frame(0)
+    original_rgb, original_depth = measured.rgb.copy(), measured.depth.copy()
+    history.submit_frame(measured)
+    measured.rgb[:] = 0
+    measured.depth[:] = 0
+    history.close()
+    restored, _, _, _ = decode_record(read_packet(recent, 0))
+    np.testing.assert_array_equal(restored.rgb, original_rgb)
+    np.testing.assert_array_equal(restored.depth, original_depth)
+
+
+def test_camera_history_reports_disk_full_without_shortening_its_window(tmp_path, monkeypatch):
+    recent = tmp_path / "recent"
+    history = new_history(recent, seconds=60)
+    history.submit_frame(replace(frame(0), source_time_s=0.0, available_time_s=0.0))
+    history.queue.join()
+    monkeypatch.setattr(shutil, "disk_usage", lambda _: type("Usage", (), {"free": 0})())
+    history.submit_frame(replace(frame(1), source_time_s=1.0, available_time_s=1.0))
+    history.close()
+    index = read_index(recent)
+    assert [row["frame"] for row in index["frames"]] == [0]
     assert index["dropped_frames"] == 1
     assert "disk reserve" in index["error"]

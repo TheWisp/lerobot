@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lerobot.policies.flash.live_surface_io import write_snapshot
 from lerobot.policies.flash.tracking_history import history_root, read_index, read_packet, save_window
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
@@ -37,6 +38,11 @@ class TrackingStart(BaseModel):
     fps: int = Field(default=30, gt=0)
     preview_fps: int = Field(default=10, gt=0)
     history_seconds: int = Field(default=60, ge=1, le=600)
+    # Applied by the camera before FLASH sees the depth map. Off by default so
+    # the live depth view exposes sensor holes and measured noise.
+    depth_processing: dict[Literal["spatial", "temporal", "hole_filling"], bool] = Field(
+        default_factory=lambda: dict.fromkeys(("spatial", "temporal", "hole_filling"), False)
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -62,6 +68,12 @@ class TrackingControl(BaseModel):
     prompt: str = ""
     point: tuple[float, float] | None = None
     frame_id: int | None = None
+
+
+class RecordingRename(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    recording: str
+    name: str = Field(min_length=1, max_length=80)
 
 
 def _python() -> str:
@@ -237,6 +249,19 @@ async def scene():
     return Response(packet, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
 
 
+@router.get("/preview-depth")
+async def preview_depth():
+    directory = _directory
+
+    def read():
+        if directory is None or not (directory / "preview_depth.bin").is_file():
+            raise HTTPException(404, "No live depth preview yet")
+        return (directory / "preview_depth.bin").read_bytes()
+
+    packet = await asyncio.get_running_loop().run_in_executor(_io, read)
+    return Response(packet, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
+
+
 def _history_directory(identity):
     if identity != "recent" and not re.fullmatch(r"saved-[0-9a-f]{32}", identity):
         raise HTTPException(404, "Unknown recording")
@@ -264,18 +289,21 @@ async def history(recording: str = "recent"):
             recordings.append(
                 {
                     "id": directory.name,
+                    "name": index.get("name"),
                     "saved_at": index.get("saved_at"),
                     "frames": len(index["frames"]),
                     "objects": names,
                 }
             )
         recordings.sort(key=lambda row: row["saved_at"] or 0, reverse=True)
-        index = (
-            read_index(root / "recent")
-            if recording == "recent"
-            else read_index(_history_directory(recording))
-        )
-        return {**index, "recording": recording, "recordings": recordings}
+        recent = read_index(root / "recent")
+        index = recent if recording == "recent" else read_index(_history_directory(recording))
+        return {
+            **index,
+            "recording": recording,
+            "recordings": recordings,
+            "recent_frames": len(recent["frames"]),
+        }
 
     return await asyncio.get_running_loop().run_in_executor(_io, read)
 
@@ -301,6 +329,24 @@ async def save_history():
             raise HTTPException(409, str(exc)) from exc
 
     return await asyncio.get_running_loop().run_in_executor(_io, save)
+
+
+@router.patch("/history/name")
+async def rename_history(request: RecordingRename):
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(422, "Recording name cannot be blank")
+    if request.recording == "recent":
+        raise HTTPException(400, "Save recent history before naming it")
+
+    def rename():
+        directory = _history_directory(request.recording)
+        index = read_index(directory)
+        index["name"] = name
+        write_snapshot(directory / "index.json", index)
+        return {"id": request.recording, "name": name}
+
+    return await asyncio.get_running_loop().run_in_executor(_io, rename)
 
 
 @router.delete("/history")

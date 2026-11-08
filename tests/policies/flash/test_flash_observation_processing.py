@@ -74,7 +74,9 @@ def test_gui_launches_shared_observation_worker_with_frozen_config(tmp_path, mon
     assert "--seed" in launched["args"] and "box=50.0,30.0" in launched["args"]
     config_path = Path(launched["args"][5])
     assert config_path.parent == extension / "observation-inputs"
-    assert json.loads(config_path.read_text()) == defaults
+    # JSON stores the configured voxel sizes as an array, not the tuple used
+    # by the in-memory defaults.
+    assert json.loads(config_path.read_text()) == json.loads(json.dumps(defaults))
     with pytest.raises(HTTPException, match="name at least one object"):
         asyncio.run(
             run.flash_observation_process(request.model_copy(update={"prompts_by_role": {"../bad": "box"}}))

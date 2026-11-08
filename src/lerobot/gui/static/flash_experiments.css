@@ -118,21 +118,27 @@
 .flash-live-recording-panel { display: flex; flex: 1; flex-direction: column; min-height: 100px; padding: 12px; gap: 9px; overflow: hidden; }
 .flash-live-recording-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .flash-live-recordings { display: flex; flex: 1; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; }
-.flash-live-recording-row { display: flex; align-items: stretch; gap: 3px; }
-.flash-live-recording-row > button:first-child { flex: 1; text-align: left; min-width: 0; }
+.flash-live-recording-row { display: grid; grid-template-columns: minmax(0,1fr) 44px 44px; align-items: stretch; gap: 4px; min-width: 0; }
+.flash-live-recording-row > .flash-live-recording-select { text-align: left; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flash-live-recording-row > input { min-width: 0; width: 100%; box-sizing: border-box; background: #101923; color: #e4ecf5; border: 1px solid #72b7ff; border-radius: 4px; }
 .flash-live-recording-row > button[aria-current="true"] { background: #234b71; border-color: #72b7ff; }
 .flash-live-recording-row .flash-live-delete { flex: 0 0 auto; color: #f1adad; }
 .flash-live-recording-panel button, .flash-live-history button { padding: 6px 9px; border: 1px solid #415b74; border-radius: 5px; background: #20344b; color: #edf3fa; cursor: pointer; }
+.flash-live-recording-panel button { white-space: nowrap; }
 #flash-live-history-info { font-size: 11px; line-height: 1.4; margin: 0; color: #aebfd0; }
-.flash-live-mode { align-self: flex-start; }
-.flash-live-mode button { padding: 7px 12px; border: 0; background: #16263c; color: #b9cce0; cursor: pointer; }
-.flash-live-mode button + button { border-left: 1px solid #31516c; }
-.flash-live-mode button[aria-pressed="true"] { background: #315b80; color: #fff; }
 #flash-live-pick[aria-pressed="true"] { background: #245579; border-color: #72b7ff; }
 #flash-live-image.flash-live-picking { cursor: crosshair; }
 .flash-live-settings > label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: #b8c7d8; }
 .flash-live-settings select, .flash-live-settings textarea { width: 100%; box-sizing: border-box; padding: 7px; background: #101923; color: #e4ecf5; border: 1px solid #31516c; border-radius: 4px; }
 .flash-live-settings details { font-size: 13px; color: #b8c7d8; }
+.flash-live-depth-processing { border: 1px solid #31516c; border-radius: 5px; padding: 7px; }
+.flash-live-depth-processing summary { cursor: pointer; }
+.flash-live-depth-processing label { display: block; margin: 7px 0; }
+.flash-live-depth-processing .training-field-hint { margin: 8px 0; }
+.flash-live-depth-info { display: inline-flex; align-items: center; gap: 7px; color: #b8c7d8; font-size: 11px; font-variant-numeric: tabular-nums; }
+.flash-live-depth-info::before { content: ''; display: inline-block; width: 72px; height: 8px; background: linear-gradient(90deg,#7a0403,#f05b12,#e1dd37,#43f787,#4099ff,#30123b); border-radius: 3px; }
+.flash-live-depth-info[hidden] { display: none; }
+.flash-experiment-tools [hidden] { display: none !important; }
 .flash-live-settings textarea { height: 180px; font: 12px monospace; }
 #flash-live-panel { display: flex; flex: 1; flex-direction: column; gap: 10px; padding: 16px; min-height: 0; overflow-y: auto; }
 #flash-live-status, #flash-live-objects { margin: 0; font-size: 13px; color: #b8c7d8; }
@@ -142,6 +148,8 @@
 @media (max-width: 700px) { #tab-flash #flash-live-sidebar { width: 180px; min-width: 150px; } }
 
 .flash-live-settings input[type=number] { width: 100%; box-sizing: border-box; padding: 7px; background: #101923; color: #e4ecf5; border: 1px solid #31516c; border-radius: 4px; }
+#flash-live-setup .run-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; padding: 0; border: 0; }
+#flash-live-setup .run-actions button { min-width: 0; white-space: nowrap; }
 .flash-pipeline-form section { border-top: 1px solid #415268; padding: 4px 0 14px; }
 .flash-pipeline-form .training-field-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
 .flash-pipeline-form .training-field { min-width: 0; }

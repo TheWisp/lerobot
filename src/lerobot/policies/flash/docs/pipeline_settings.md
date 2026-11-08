@@ -1,5 +1,7 @@
 # FLASH experiment pipeline settings
 
+Live camera setup also has RealSense depth filters (spatial, temporal, hole filling), all off by default for FLASH. They act on the depth image before the observation settings below; the Depth view shows their output, including any remaining holes. Decimation is fixed off to keep depth pixels aligned with the color image and mask. A saved replay retains the depth image it captured, so changing camera filters requires a new capture. Camera-filter comparisons are not interchangeable with rerunning a saved clip using different observation thresholds.
+
 Open **Run → FLASH → Pipeline settings** beside the selected video. Fresh live sessions use **LK + surface fit + groups + growing surface + Kalman**. Recorded experiments retain their saved settings; use the same complete configuration for a fair live/replay comparison. The JSON contains settings for the next rerun. Retired SciPy settings migrate to the new surface fitter; saved playback keeps its original matcher label. **Rerun this scene with these settings** validates and runs it. Playback itself never recomputes poses.
 
 This is the restart experiment pipeline. It does not configure robot control. Saved-mask benchmarks reuse segmentation, so SAM/detection options are listed but not executed. Shared matching replaces the legacy object-crop matcher. Live-only scheduling options have no effect in the sequential benchmark.

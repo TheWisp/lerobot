@@ -2,12 +2,23 @@
 
 import base64
 import json
+import struct
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from .appearance import Sam3MaskSource
 from .perception import RGBDFrame
+
+
+def tracker_depth_layout(rgb: np.ndarray, depth: np.ndarray) -> np.ndarray:
+    """Adapt the camera's H×W×1 recording layout to FLASH's H×W depth map."""
+    if depth.shape == (*rgb.shape[:2], 1):
+        return depth[..., 0]
+    if depth.shape == rgb.shape[:2]:
+        return depth
+    raise ValueError("camera depth is not aligned with RGB")
 
 
 def write_snapshot(path: Path, value: dict) -> None:
@@ -29,6 +40,15 @@ def image_snapshot(frame: RGBDFrame) -> dict:
         "depth_m_per_unit": frame.depth_m_per_unit,
         "image": "data:image/jpeg;base64," + base64.b64encode(encoded).decode(),
     }
+
+
+def preview_depth_packet(frame: RGBDFrame) -> bytes:
+    """Frame ID plus aligned uint16 depth for the optional live Depth preview.
+
+    The preview replaces one file at camera-preview cadence; it is not a
+    second tracking input or a retained recording.
+    """
+    return struct.pack("<I", frame.frame_id) + frame.depth.astype("<u2", copy=False).tobytes()
 
 
 def seed_frame(command: dict, displayed: RGBDFrame | None, latest: RGBDFrame | None) -> RGBDFrame:

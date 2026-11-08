@@ -144,7 +144,15 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
         maps.append(
             {role: live.engine.candidates[method][role].store.points.copy() for role in source.prompts}
         )
-        packet = live_scene_packet(f, live, row, mask, matches, group_overlay=group_overlay)
+        packet = live_scene_packet(
+            f,
+            live,
+            row,
+            mask,
+            matches,
+            group_overlay=group_overlay,
+            depth_processing={"decimation": False, "spatial": True, "temporal": False, "hole_filling": False},
+        )
         history.submit(packet)
         history.queue.join()
         import struct
@@ -153,6 +161,7 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
         header = json.loads(packet[4 : 4 + n])
         assert header["frame"] == f.frame_id
         assert header["time_s"] == f.source_time_s
+        assert header["depth_processing"]["spatial"] is True
         assert [g["id"] for g in header["scene_group_tracks"]] == [
             g["id"] for g in row.get("scene_group_tracks", [])
         ]

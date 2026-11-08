@@ -165,6 +165,10 @@ class RealSenseCamera(Camera):
         # Required protocol: ``processor.process_frame_with_depth(color, depth)``
         # returning the processed color frame.
         self.post_grab_processor = None
+        # Optional non-blocking observer of each owned, aligned RGB-D grab.
+        # Installed by FLASH's rolling recorder before connect(); independent
+        # of consumers that poll the latest-frame slot.
+        self.aligned_frame_listener = None
 
         self.rs_pipeline: rs.pipeline | None = None
         self.rs_profile: rs.pipeline_profile | None = None
@@ -184,6 +188,7 @@ class RealSenseCamera(Camera):
         self.latest_color_frame: NDArray[Any] | None = None
         self.latest_depth_frame: NDArray[Any] | None = None
         self.latest_timestamp: float | None = None
+        self.latest_frame_sequence: int | None = None
         self.new_frame_event: Event = Event()
         self._read_timing = RealSenseReadTiming()
 
@@ -554,12 +559,12 @@ class RealSenseCamera(Camera):
             DeviceNotConnectedError: If the camera is not connected.
             RuntimeError: If depth is not enabled or no frames are available.
         """
-        color, depth, _ = self.read_color_and_aligned_depth_with_timestamp(color_mode, timeout_ms)
-        return color, depth
+        frame = self.read_color_and_aligned_depth_with_timestamp(color_mode, timeout_ms)
+        return frame[0], frame[1]
 
     def read_color_and_aligned_depth_with_timestamp(
-        self, color_mode: ColorMode | None = None, timeout_ms: int = 200
-    ) -> tuple[NDArray[Any], NDArray[Any], float]:
+        self, color_mode: ColorMode | None = None, timeout_ms: int = 200, *, include_sequence: bool = False
+    ) -> tuple[NDArray[Any], NDArray[Any], float] | tuple[NDArray[Any], NDArray[Any], float, int]:
         """Return one aligned frameset and its monotonic capture-time estimate.
 
         All three values are read under the same frame lock. The timestamp is
@@ -589,11 +594,16 @@ class RealSenseCamera(Camera):
             color_frame = self.latest_color_frame
             depth_frame = self.latest_depth_frame
             timestamp = self.latest_timestamp
+            sequence = getattr(self, "latest_frame_sequence", None)
             self.new_frame_event.clear()
 
         if color_frame is None or depth_frame is None or timestamp is None:
             raise RuntimeError(f"No aligned frames available for {self}.")
 
+        if include_sequence:
+            if sequence is None:
+                raise RuntimeError(f"No frame sequence available for {self}.")
+            return color_frame, depth_frame, timestamp, sequence
         return color_frame, depth_frame, timestamp
 
     @check_if_not_connected
@@ -701,6 +711,7 @@ class RealSenseCamera(Camera):
             self._read_timing = RealSenseReadTiming()
 
         failure_count = 0
+        frame_sequence = 0
         while not stop_event.is_set():
             try:
                 hardware_start_s = time.perf_counter()
@@ -794,6 +805,17 @@ class RealSenseCamera(Camera):
                 if processed_depth_frame is not None:
                     processed_depth_frame = processed_depth_frame.copy()
 
+                listener = getattr(self, "aligned_frame_listener", None)
+                if (
+                    listener is not None
+                    and processed_color_frame is not None
+                    and processed_depth_frame is not None
+                ):
+                    try:
+                        listener(processed_color_frame, processed_depth_frame, capture_time, frame_sequence)
+                    except Exception as exc:
+                        logger.warning("%s: aligned frame listener failed: %s", self, exc)
+
                 publish_s = time.perf_counter()
                 with self.frame_lock:
                     timing = self._read_timing
@@ -812,10 +834,12 @@ class RealSenseCamera(Camera):
                     if self.use_depth and processed_depth_frame is not None:
                         self.latest_depth_frame = processed_depth_frame
                     self.latest_timestamp = capture_time
+                    self.latest_frame_sequence = frame_sequence
                     # Publishing the notification with the snapshot prevents a
                     # reader from clearing an older event between this cache
                     # update and set(), then consuming this frame twice.
                     self.new_frame_event.set()
+                frame_sequence += 1
                 failure_count = 0
 
             except DeviceNotConnectedError:
@@ -880,6 +904,7 @@ class RealSenseCamera(Camera):
             self.latest_color_frame = None
             self.latest_depth_frame = None
             self.latest_timestamp = None
+            self.latest_frame_sequence = None
             self.new_frame_event.clear()
 
     def _async_read(self, timeout_ms: float, read_depth: bool = False) -> NDArray[Any]:
@@ -1082,6 +1107,7 @@ class RealSenseCamera(Camera):
             self.latest_color_frame = None
             self.latest_depth_frame = None
             self.latest_timestamp = None
+            self.latest_frame_sequence = None
             self.new_frame_event.clear()
 
         logger.info(f"{self} disconnected.")

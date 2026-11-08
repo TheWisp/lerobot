@@ -20,7 +20,14 @@ from threading import Event, Lock, Thread
 import cv2
 import numpy as np
 
-from .live_surface_io import image_snapshot, new_selection, seed_frame, write_snapshot
+from .live_surface_io import (
+    image_snapshot,
+    new_selection,
+    preview_depth_packet,
+    seed_frame,
+    tracker_depth_layout,
+    write_snapshot,
+)
 from .live_surface_session import LIVE_METHOD, LiveSurfaceSession
 from .perception import LatestRGBDFrameStore, RGBDFrame
 from .surface_acceleration import SearchPool, compiled_kernels
@@ -94,34 +101,69 @@ def run(directory: Path, config: dict):
                 height=config["height"],
                 fps=config["fps"],
                 use_depth=True,
+                # Decimation changes the aligned pixel grid; FLASH requires a
+                # one-to-one depth/color correspondence for mask grounding.
                 enable_decimation=False,
-                enable_spatial=False,
-                enable_temporal=False,
-                enable_hole_filling=False,
+                enable_spatial=config.get("depth_processing", {}).get("spatial", False),
+                enable_temporal=config.get("depth_processing", {}).get("temporal", False),
+                enable_hole_filling=config.get("depth_processing", {}).get("hole_filling", False),
             )
         )
+        if history:
+            # The camera calls this for every aligned hardware grab. Tracking
+            # may skip frames in its latest-only slot, but recording does not.
+            recording_geometry = []
+
+            def record_capture(rgb, depth, stamp, sequence):
+                if not recording_geometry:
+                    profile = camera.rs_profile
+                    intr = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
+                    intrinsics = np.array([[intr.fx, 0, intr.ppx], [0, intr.fy, intr.ppy], [0, 0, 1]], float)
+                    unit = profile.get_device().first_depth_sensor().get_depth_scale()
+                    recording_geometry.append((intrinsics, unit))
+                intrinsics, unit = recording_geometry[0]
+                history.submit_frame(
+                    RGBDFrame(
+                        sequence,
+                        rgb,
+                        tracker_depth_layout(rgb, depth),
+                        intrinsics,
+                        unit,
+                        np.eye(4),
+                        stamp,
+                        time.perf_counter(),
+                        "camera_native",
+                    )
+                )
+
+            camera.aligned_frame_listener = record_capture
         camera.connect()
         intr = camera.rs_profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
         k = np.array([[intr.fx, 0, intr.ppx], [0, intr.fy, intr.ppy], [0, 0, 1]], float)
         scale = camera.rs_profile.get_device().first_depth_sensor().get_depth_scale()
 
         def acquire():
-            index, last_stamp, published = 0, None, 0
+            last_stamp, published = None, 0
             try:
                 while not stop.is_set():
-                    rgb, depth, stamp = camera.read_color_and_aligned_depth_with_timestamp(timeout_ms=1000)
+                    rgb, depth, stamp, sequence = camera.read_color_and_aligned_depth_with_timestamp(
+                        timeout_ms=1000, include_sequence=True
+                    )
+                    depth = tracker_depth_layout(rgb, depth)
                     if stamp == last_stamp:
                         stop.wait(0.005)
                         continue
                     last_stamp = stamp
                     frame = RGBDFrame(
-                        index, rgb, depth, k, scale, np.eye(4), stamp, time.perf_counter(), "camera_native"
+                        sequence, rgb, depth, k, scale, np.eye(4), stamp, time.perf_counter(), "camera_native"
                     )
                     latest.publish(frame)
-                    index += 1
                     if time.perf_counter() - published >= 1 / config["preview_fps"]:
                         with preview_lock:
                             preview_frames.append(frame)
+                        preview_depth = directory / "preview_depth.tmp"
+                        preview_depth.write_bytes(preview_depth_packet(frame))
+                        preview_depth.replace(directory / "preview_depth.bin")
                         write_snapshot(directory / "preview.json", image_snapshot(frame))
                         published = time.perf_counter()
             except Exception as exc:
@@ -211,12 +253,20 @@ def run(directory: Path, config: dict):
             try:
                 started = time.perf_counter()
                 row, matches, masks = live.step(frame)
-                packet = live_scene_packet(frame, live, row, masks, matches, group_overlay=group_overlay)
+                packet = live_scene_packet(
+                    frame,
+                    live,
+                    row,
+                    masks,
+                    matches,
+                    group_overlay=group_overlay,
+                    depth_processing=camera.depth_processing,
+                )
                 temporary = directory / "scene.tmp"
                 temporary.write_bytes(packet)
                 temporary.replace(directory / "scene.bin")
                 if history:
-                    history.submit(packet)
+                    history.attach_result(packet)
                 elapsed = time.perf_counter() - started
                 state(
                     "tracking",

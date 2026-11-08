@@ -27,12 +27,17 @@ def test_aligned_rgbd_returns_capture_timestamp_without_changing_old_api():
     camera.latest_color_frame = np.zeros((2, 3, 3), dtype=np.uint8)
     camera.latest_depth_frame = np.ones((2, 3), dtype=np.uint16)
     camera.latest_timestamp = 123.456
+    camera.latest_frame_sequence = 12
     camera.new_frame_event.set()
 
     color, depth, timestamp = camera.read_color_and_aligned_depth_with_timestamp()
     assert color is camera.latest_color_frame
     assert depth is camera.latest_depth_frame
     assert timestamp == 123.456
+
+    camera.new_frame_event.set()
+    _, _, _, sequence = camera.read_color_and_aligned_depth_with_timestamp(include_sequence=True)
+    assert sequence == 12
 
     camera.new_frame_event.set()
     legacy_color, legacy_depth = camera.read_color_and_aligned_depth()
@@ -85,6 +90,8 @@ def test_reader_cannot_consume_one_cached_frameset_twice_during_publication():
     camera.latest_color_frame = None
     camera.latest_depth_frame = None
     camera.latest_timestamp = None
+    captured = []
+    camera.aligned_frame_listener = lambda rgb, depth, stamp, seq: captured.append((seq, int(rgb[0, 0])))
     camera._postprocess_image = lambda frame, depth_frame=False: frame
     frames = iter((Frameset(1), Frameset(2)))
 
@@ -111,6 +118,7 @@ def test_reader_cannot_consume_one_cached_frameset_twice_during_publication():
         assert not reader.is_alive()
         assert len(result) == 1
         assert np.all(result[0][0] == 2)
+        assert captured == [(0, 1), (1, 2)]
         with pytest.raises(TimeoutError):
             camera.read_color_and_aligned_depth_with_timestamp(timeout_ms=30)
     finally:
@@ -157,6 +165,10 @@ def test_cached_rgbd_frames_do_not_hold_realsense_buffers():
     camera.latest_color_frame = None
     camera.latest_depth_frame = None
     camera.latest_timestamp = None
+    seen = []
+    camera.aligned_frame_listener = lambda rgb, depth, stamp, seq: seen.append(
+        (rgb.copy(), depth.copy(), seq)
+    )
     calls = 0
     finish = Event()
     second_started = Event()
@@ -177,6 +189,8 @@ def test_cached_rgbd_frames_do_not_hold_realsense_buffers():
         assert camera.new_frame_event.wait(2)
         cached_color, cached_depth, _ = camera.read_color_and_aligned_depth_with_timestamp()
         assert cached_color.flags.owndata and cached_depth.flags.owndata
+        assert len(seen) == 1 and seen[0][2] == 0
+        assert np.all(seen[0][0] == 17) and np.all(seen[0][1] == 42)
         color[:] = 99
         depth[:] = 77
         assert np.all(cached_color == 17)

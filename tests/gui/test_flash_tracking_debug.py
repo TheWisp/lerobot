@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import struct
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -51,6 +53,16 @@ def test_retired_camera_engine_is_not_a_hidden_alternative():
         flash_tracking.TrackingStart(fps=0)
 
 
+def test_live_depth_filters_default_off_and_reject_unaligned_decimation():
+    request = flash_tracking.TrackingStart()
+    assert request.depth_processing == {"spatial": False, "temporal": False, "hole_filling": False}
+    assert flash_tracking.TrackingStart(depth_processing={"spatial": True}).depth_processing == {
+        "spatial": True
+    }
+    with pytest.raises(ValidationError):
+        flash_tracking.TrackingStart(depth_processing={"decimation": True})
+
+
 def test_snapshot_keeps_camera_and_estimate_frame_identity_separate(tmp_path, monkeypatch):
     monkeypatch.setattr(flash_tracking, "_directory", tmp_path)
     monkeypatch.setattr(run, "_active_command", None)
@@ -62,6 +74,27 @@ def test_snapshot_keeps_camera_and_estimate_frame_identity_separate(tmp_path, mo
     assert state["preview"]["frame_id"] == 31
     assert state["estimate"]["frame"]["frame_id"] == 27
     assert state["running"] is False
+
+
+def test_preview_depth_preserves_frame_identity_and_sensor_holes(tmp_path, monkeypatch):
+    from lerobot.policies.flash.live_surface_io import preview_depth_packet, tracker_depth_layout
+
+    rgb = np.zeros((2, 2, 3), dtype=np.uint8)
+    camera_depth = np.array([[[0], [412]], [[420], [0]]], dtype=np.uint16)
+    frame = SimpleNamespace(frame_id=31, depth=tracker_depth_layout(rgb, camera_depth))
+    assert frame.depth.shape == (2, 2)
+    np.testing.assert_array_equal(frame.depth, camera_depth[..., 0])
+    with pytest.raises(ValueError, match="not aligned"):
+        tracker_depth_layout(rgb, np.zeros((3, 2, 1), dtype=np.uint16))
+    packet = preview_depth_packet(frame)
+    assert struct.unpack_from("<I", packet)[0] == 31
+    np.testing.assert_array_equal(np.frombuffer(packet, dtype="<u2", offset=4), frame.depth.ravel())
+    monkeypatch.setattr(flash_tracking, "_directory", tmp_path)
+    with pytest.raises(HTTPException, match="No live depth preview"):
+        asyncio.run(flash_tracking.preview_depth())
+    (tmp_path / "preview_depth.bin").write_bytes(packet)
+    response = asyncio.run(flash_tracking.preview_depth())
+    assert response.body == packet
 
 
 def test_click_command_preserves_frozen_frame_identity(monkeypatch):
@@ -431,6 +464,17 @@ def test_history_api_survives_new_session_and_rejects_path_traversal(tmp_path):
     listing = asyncio.run(flash_tracking.history(saved))
     assert [r["frame"] for r in listing["frames"]] == [0, 1]
     assert listing["recordings"][0]["id"] == saved
+    renamed = asyncio.run(
+        flash_tracking.rename_history(
+            flash_tracking.RecordingRename(recording=saved, name="  Controller turn  ")
+        )
+    )
+    assert renamed["name"] == "Controller turn"
+    assert asyncio.run(flash_tracking.history(saved))["recordings"][0]["name"] == "Controller turn"
+    with pytest.raises(HTTPException):
+        asyncio.run(
+            flash_tracking.rename_history(flash_tracking.RecordingRename(recording="recent", name="Invalid"))
+        )
     packet = asyncio.run(flash_tracking.history_scene(1, saved))
     assert packet.media_type == "application/octet-stream"
     with pytest.raises(HTTPException):

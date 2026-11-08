@@ -86,7 +86,7 @@ def frame_evidence(row, masks):
     return {"evidence_schema": 1, "result": row, "masks_rle": runs}
 
 
-def live_scene_packet(frame, live, row, masks, matches=None, *, group_overlay=None):
+def live_scene_packet(frame, live, row, masks, matches=None, *, group_overlay=None, depth_processing=None):
     objects = {}
     for role, reference in live.engine.references.items():
         track = live.engine.candidates[live.method][role]
@@ -134,5 +134,6 @@ def live_scene_packet(frame, live, row, masks, matches=None, *, group_overlay=No
             ),
             **frame_evidence(row, masks),
             "image_matches": matches,
+            "depth_processing": depth_processing,
         },
     )

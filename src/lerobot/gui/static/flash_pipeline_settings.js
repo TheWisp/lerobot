@@ -10,10 +10,12 @@ function createFlashPipelineForm(form, fields, values, context) {
             const text=document.createElement('span');text.className='training-field-label';text.textContent=field.label;
             const input=document.createElement('input');input.name=field.key;input.setAttribute('aria-label',field.label);
             input.type=field.type==='bool'?'checkbox':'number';
-            const value=field.key.split('.').reduce((v,key)=>v?.[key],values) ?? field.default;
+            const stored=field.key.split('.').reduce((v,key)=>v?.[key],values);
+            const value=stored===undefined?field.default:stored;
             if(field.type==='bool') {input.checked=value;label.classList.add('training-field-bool');}
             else {
-                input.value=Number((value*(field.scale||1)).toPrecision(10));input.required=true;
+                input.value=field.nullable&&value==null?'':Number((value*(field.scale||1)).toPrecision(10));
+                input.required=!field.nullable;
                 for(const key of ['min','max','step'])if(field[key]!==undefined)input[key]=field[key];
                 if(field.type==='float')input.step='any';
             }
@@ -44,7 +46,8 @@ function createFlashPipelineForm(form, fields, values, context) {
             }
             const keys=field.key.split('.'), key=keys.pop();
             const parent=keys.reduce((v,k)=>v[k]??=( {} ),result);
-            parent[key]=field.type==='bool'?input.checked:Number(input.value)/(field.scale||1);
+            parent[key]=field.type==='bool'?input.checked:
+                field.nullable&&input.value===''?null:Number(input.value)/(field.scale||1);
         }
         const current=context();
         result.config.shape.registration.backend=current.matcher;
