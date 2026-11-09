@@ -19,6 +19,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import torch
 from PIL import Image
@@ -26,7 +28,9 @@ from PIL import Image
 pytest.importorskip("datasets", reason="datasets is required (install lerobot[dataset])")
 
 from lerobot.configs import VideoEncoderConfig
+from lerobot.datasets import io_utils
 from lerobot.datasets.dataset_writer import _encode_video_worker
+from lerobot.datasets.io_utils import write_table_one_row_group_per_episode
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import DEFAULT_IMAGE_PATH
 from tests.fixtures.constants import DEFAULT_FPS, DUMMY_REPO_ID, DUMMY_VIDEO_FEATURES
@@ -35,6 +39,64 @@ SIMPLE_FEATURES = {
     "state": {"dtype": "float32", "shape": (6,), "names": None},
     "action": {"dtype": "float32", "shape": (6,), "names": None},
 }
+
+
+def test_long_depth_episode_splits_parquet_row_groups_and_reloads(tmp_path, monkeypatch):
+    """Large lossless depth columns must remain readable as an ordinary LeRobot episode."""
+    monkeypatch.setattr(io_utils, "MAX_ROW_GROUP_BYTES", 8 * 1024)
+    features = {
+        "observation.images.depth": {
+            "dtype": "image",
+            "shape": (32, 32, 1),
+            "names": ["height", "width", "channels"],
+            "info": {"is_depth_map": True},
+        },
+    }
+    root = tmp_path / "depth_episode"
+    dataset = LeRobotDataset.create(
+        repo_id=DUMMY_REPO_ID, fps=DEFAULT_FPS, features=features, root=root, use_videos=False
+    )
+    rng = np.random.default_rng(13)
+    depths = []
+    for _ in range(20):
+        depth = rng.integers(0, 5000, size=(32, 32, 1), dtype=np.uint16)
+        depths.append(depth)
+        dataset.add_frame({"task": "Depth recording", "observation.images.depth": depth})
+    dataset.save_episode()
+    dataset.finalize()
+
+    parquet = next((root / "data").rglob("*.parquet"))
+    metadata = pq.read_metadata(parquet)
+    assert metadata.num_row_groups > 1
+    assert sum(metadata.row_group(i).num_rows for i in range(metadata.num_row_groups)) == len(depths)
+
+    restored = LeRobotDataset(DUMMY_REPO_ID, root=root, local_files_only=True)
+    assert len(restored) == len(depths)
+    for i in (0, 9, 19):
+        np.testing.assert_array_equal(restored[i]["observation.images.depth"].numpy()[0], depths[i][:, :, 0])
+
+
+def test_episode_row_groups_are_bounded_and_never_shared(tmp_path, monkeypatch):
+    """Aggregation and annotation rewrites keep episodes apart and large ones within the bound."""
+    monkeypatch.setattr(io_utils, "MAX_ROW_GROUP_BYTES", 256)
+    table = pa.table(
+        {
+            "episode_index": pa.array([0] * 8 + [1] * 2, pa.int64()),
+            "blob": pa.array([b"x" * 64] * 8 + [b"y"] * 2),
+        }
+    )
+    path = tmp_path / "shard.parquet"
+    write_table_one_row_group_per_episode(table, path)
+
+    shard = pq.ParquetFile(path)
+    episodes_per_group = [
+        set(shard.read_row_group(i, columns=["episode_index"]).column(0).to_pylist())
+        for i in range(shard.metadata.num_row_groups)
+    ]
+    assert all(len(episodes) == 1 for episodes in episodes_per_group)
+    assert episodes_per_group.count({0}) > 1
+    assert episodes_per_group.count({1}) == 1
+    assert shard.read().equals(table)
 
 
 def _make_frame(features: dict, task: str = "Dummy task") -> dict:

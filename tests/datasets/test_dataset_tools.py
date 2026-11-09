@@ -2255,3 +2255,42 @@ def test_reencode_dataset_multi_key_multiprocessing(
     for vk in dataset.meta.video_keys:
         persisted_encoder = RGBEncoderConfig.from_video_info(persisted_info.features[vk].get("info", {}))
         assert persisted_encoder == target_cfg
+
+
+def test_delete_episodes_keeps_image_row_groups_bounded(tmp_path, monkeypatch):
+    """Rewritten data files must not collapse a large image episode into one row group."""
+    import pyarrow.parquet as pq
+
+    from lerobot.datasets import io_utils
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    monkeypatch.setattr(io_utils, "MAX_ROW_GROUP_BYTES", 8 * 1024)
+    features = {
+        "observation.images.depth": {
+            "dtype": "image",
+            "shape": (32, 32, 1),
+            "names": ["height", "width", "channels"],
+            "info": {"is_depth_map": True},
+        },
+    }
+    dataset = LeRobotDataset.create(
+        repo_id="test/depth_source", fps=30, features=features, root=tmp_path / "source", use_videos=False
+    )
+    rng = np.random.default_rng(7)
+    kept = []
+    for episode in range(2):
+        for _ in range(12):
+            depth = rng.integers(0, 5000, size=(32, 32, 1), dtype=np.uint16)
+            if episode == 1:
+                kept.append(depth)
+            dataset.add_frame({"task": "Depth recording", "observation.images.depth": depth})
+        dataset.save_episode()
+    dataset.finalize()
+
+    result = delete_episodes(dataset, [0], output_dir=tmp_path / "result", repo_id="test/depth_result")
+
+    parquet = next((result.root / "data").rglob("*.parquet"))
+    assert pq.read_metadata(parquet).num_row_groups > 1
+    assert len(result) == len(kept)
+    for i in (0, 5, 11):
+        np.testing.assert_array_equal(np.asarray(result[i]["observation.images.depth"])[0], kept[i][:, :, 0])

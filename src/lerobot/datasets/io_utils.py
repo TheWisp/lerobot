@@ -333,19 +333,37 @@ def hf_transform_to_torch(items_dict: dict[str, list[Any]]) -> dict[str, list[to
     return items_dict
 
 
-def write_table_one_row_group_per_episode(table: pa.Table, path: Path) -> None:
-    """Write ``table`` with one parquet row group per episode (in episode order).
+# Parquet decodes each column chunk (one row group) into a single Arrow array.
+# Binary arrays carry 32-bit offsets, so a row group holding more than 2 GiB of
+# embedded image bytes comes back chunked, and nested (struct) image columns
+# then fail to convert at all. ``datasets`` also reads a file in batches of its
+# first row group's rows, so this bound is also the batch it materialises.
+# 256 MiB leaves an 8x margin for uneven image sizes between rows.
+MAX_ROW_GROUP_BYTES = 256 * 1024**2
 
-    Keeps shards random-access friendly (``read_row_group(i)`` fetches episode i),
-    mirroring the recording writer. ``table`` must carry a contiguous
-    ``episode_index`` column.
+
+def row_group_size(table: pa.Table) -> int:
+    """Rows per row group: all of them, unless ``table`` exceeds ``MAX_ROW_GROUP_BYTES``."""
+    if table.num_rows == 0 or table.nbytes <= MAX_ROW_GROUP_BYTES:
+        return max(1, table.num_rows)
+    return max(1, MAX_ROW_GROUP_BYTES * table.num_rows // table.nbytes)
+
+
+def write_table_one_row_group_per_episode(table: pa.Table, path: Path) -> None:
+    """Write ``table`` with episodes on parquet row-group boundaries (in episode order).
+
+    Keeps shards random-access friendly (an episode is read without touching
+    its neighbours), mirroring the recording writer. An episode larger than
+    ``MAX_ROW_GROUP_BYTES`` spans several row groups instead of one oversized
+    Arrow array. ``table`` must carry a contiguous ``episode_index`` column.
     """
     episode_index = table.column("episode_index").to_numpy(zero_copy_only=False)
     starts = np.concatenate(([0], np.nonzero(np.diff(episode_index))[0] + 1))
     writer = pq.ParquetWriter(str(path), table.schema, compression="snappy", use_dictionary=True)
     try:
         for start, stop in zip(starts, np.append(starts[1:], len(episode_index)), strict=True):
-            writer.write_table(table.slice(start, stop - start))  # one episode -> one row group
+            episode = table.slice(start, stop - start)
+            writer.write_table(episode, row_group_size=row_group_size(episode))
     finally:
         writer.close()
 

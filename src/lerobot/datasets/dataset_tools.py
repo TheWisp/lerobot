@@ -2424,7 +2424,7 @@ def _write_parquet(df: pd.DataFrame, path: Path, meta: LeRobotDatasetMetadata) -
     This ensures images are properly embedded and the file can be loaded correctly by HF datasets.
     """
     from lerobot.datasets.feature_utils import get_hf_features_from_features
-    from lerobot.datasets.io_utils import embed_images
+    from lerobot.datasets.io_utils import embed_images, row_group_size
 
     hf_features = get_hf_features_from_features(meta.features)
     ep_dataset = datasets.Dataset.from_dict(df.to_dict(orient="list"), features=hf_features, split="train")
@@ -2434,7 +2434,7 @@ def _write_parquet(df: pd.DataFrame, path: Path, meta: LeRobotDatasetMetadata) -
 
     table = ep_dataset.with_format("arrow")[:]
     writer = pq.ParquetWriter(path, schema=table.schema, compression="snappy", use_dictionary=True)
-    writer.write_table(table)
+    writer.write_table(table, row_group_size=row_group_size(table))
     writer.close()
 
 

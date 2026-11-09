@@ -53,6 +53,7 @@ from .io_utils import (
     embed_images,
     get_file_size_in_mb,
     load_episodes,
+    row_group_size,
     write_info,
 )
 from .utils import (
@@ -584,7 +585,7 @@ class DatasetWriter:
             self._pq_writer = pq.ParquetWriter(
                 path, schema=table.schema, compression="snappy", use_dictionary=True
             )
-        self._pq_writer.write_table(table)
+        self._pq_writer.write_table(table, row_group_size=row_group_size(table))
 
         metadata = {
             "data/chunk_index": chunk_idx,
