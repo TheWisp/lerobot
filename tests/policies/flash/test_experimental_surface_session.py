@@ -340,6 +340,9 @@ def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(mo
         assert result["status"] == "lost"
         assert result["camera_from_reference"] is None
         assert result["diagnostics"]["fit"]["reason"] == "measured_empty_space_conflict"
+        assert result["diagnostics"]["fit_seed_source"] in {"previous_pose", "object_matches"}
+        assert "image_pairs" in result["diagnostics"]
+        assert result["diagnostics"]["point_sources"] == []
         np.testing.assert_array_equal(tracker.store.points, initial)
         assert tracker.store.version == 1
         assert tracker.accepted_frame == 0

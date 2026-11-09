@@ -31,6 +31,20 @@ def needs_stereo_pair(source: str) -> bool:
     return source == "foundation_stereo" or source.startswith("lite_any_stereo_v2")
 
 
+def foundation_stereo_model_path(model_path: str | Path | None = None) -> Path:
+    return Path(
+        model_path
+        or os.environ.get("LEROBOT_FOUNDATION_STEREO_MODEL")
+        or os.environ.get("LEROBOT_FOUNDATION_STEREO_ONNX")
+        or Path.home() / ".cache/flash-foundationstereo/fixed-480x864-d192-i8/fast_foundationstereo.engine"
+    )
+
+
+def preferred_depth_source() -> str:
+    """Use the stereo model when its engine is installed; otherwise use sensor depth."""
+    return "foundation_stereo" if foundation_stereo_model_path().is_file() else "sensor"
+
+
 @dataclass(frozen=True)
 class StereoInput:
     left: np.ndarray
@@ -85,11 +99,12 @@ class LiveDepthStream:
     the camera recorder independently keeps every raw capture.
     """
 
-    def __init__(self, captured, source, stereo_geometry, stop: Event):
+    def __init__(self, captured, source, stereo_geometry, stop: Event, on_result=None):
         self.captured = captured
         self.source = source
         self.stereo_geometry = stereo_geometry
         self.stop = stop
+        self.on_result = on_result
         self._lock = Lock()
         self._latest = None
         self._elapsed_ms = 0.0
@@ -119,6 +134,8 @@ class LiveDepthStream:
                 elapsed_ms = (time.perf_counter() - started) * 1000
                 with self._lock:
                     self._latest, self._elapsed_ms = selected, elapsed_ms
+                if self.on_result is not None:
+                    self.on_result(selected)
             except Exception as exc:
                 self.error = exc
                 self.stop.set()
@@ -334,13 +351,7 @@ class FoundationStereoDepth:
     source = "foundation_stereo"
 
     def __init__(self, model_path: str | Path | None = None):
-        path = Path(
-            model_path
-            or os.environ.get("LEROBOT_FOUNDATION_STEREO_MODEL")
-            or os.environ.get("LEROBOT_FOUNDATION_STEREO_ONNX")
-            or Path.home()
-            / ".cache/flash-foundationstereo/fixed-480x864-d192-i8/fast_foundationstereo.engine"
-        )
+        path = foundation_stereo_model_path(model_path)
         if not path.is_file():
             raise FileNotFoundError(
                 f"Fast-FoundationStereo model not found: {path}. "

@@ -76,6 +76,15 @@ def test_live_depth_filters_default_off_and_reject_unaligned_decimation():
         )
 
 
+def test_live_depth_default_uses_installed_foundation_stereo_or_sensor(tmp_path, monkeypatch):
+    model = tmp_path / "fast_foundationstereo.engine"
+    monkeypatch.setenv("LEROBOT_FOUNDATION_STEREO_MODEL", str(model))
+    assert flash_tracking.TrackingStart().depth_source == "sensor"
+    model.write_bytes(b"installed model")
+    assert flash_tracking.TrackingStart().depth_source == "foundation_stereo"
+    assert flash_tracking.TrackingStart(depth_source="sensor").depth_source == "sensor"
+
+
 def test_preview_image_records_the_depth_filter_state_of_its_own_frame():
     from dataclasses import replace
 
@@ -354,6 +363,9 @@ def test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_process
     assert not page.locator("#flash-live-camera-view").is_visible()
     state["preview"] = {**displayed, "frame_id": 99}
     state["estimate"] = {"status": "error", "message": "small_gicp is unavailable"}
+    page.wait_for_timeout(400)
+    assert page.evaluate("flashLive.packet?.frame === 43 && flashLive.frame?.frame_id === 43")
+    page.locator('#flash-live-stream-mode button[data-mode="raw"]').click()
     page.wait_for_function("flashLive.packet === null && flashLive.frame?.frame_id === 99")
     assert "small_gicp is unavailable" in page.locator("#flash-live-status").inner_text()
 
@@ -608,12 +620,20 @@ def test_typed_pipeline_form_submits_to_real_start_schema(gui_page):
 
 @pytest.mark.requires_playwright
 def test_history_scrub_save_and_reload_use_retained_evidence(gui_page):
+    from dataclasses import replace
+
     from lerobot.policies.flash.tracking_history import history_root, read_packet
-    from tests.policies.flash.test_tracking_history import new_history, submit
+    from tests.policies.flash.test_shared_image_tracking import frame
+    from tests.policies.flash.test_tracking_history import new_history, packet
 
     recent = history_root() / "recent"
     history = new_history(recent)
-    submit(history, 0, 1, 2)
+    for i in range(3):
+        history.submit_frame(replace(frame(i), source_time_s=float(i), available_time_s=float(i)))
+        history.queue.join()
+        history.attach_processed_frame(i, "sensor")
+        history.attach_result(packet(i))
+        history.queue.join()
     history.close()
     page = gui_page
     errors = []

@@ -662,6 +662,7 @@
         the current mask plus selected depth (sensor or model);
         <code>S[&lt;t]</code> is the confirmed surface stored before now;
         <code>H[t]</code> is an inferred motion hint;
+        <code>Q[t]</code> is a candidate 6D pose being fitted;
         <code>P[t]</code> is the estimated pose published for now.
       </p>
 
@@ -688,7 +689,7 @@
               <small>Independent camera-frame depth · runs before object selection</small>
               <div class="depth-options">
                 <div class="depth-option">
-                  <strong>RealSense sensor · default</strong>
+                  <strong>RealSense sensor · fallback when stereo model is absent</strong>
                   <span>Aligned sensor depth[t]; optional spatial, temporal and hole-filling filters.</span>
                 </div>
                 <div class="depth-option">
@@ -754,12 +755,17 @@
           </div>
         </div>
         <div class="converge" aria-hidden="true">↓</div>
-        <div class="fit">
-          <strong>Fit S[&lt;t] against O[t] once per frame</strong>
+        <div class="fit" id="surface-fit">
+          <strong>Find pose Q[t] that aligns stored surface S[&lt;t] with current observation O[t]</strong>
           <span>
-            The geometry is the combined grown surface, not just the first view.
-            H[t] and the last pose supply a starting guess; image/group evidence
-            can help rank a fit. O[t] checks the result.
+            <code>S[&lt;t]</code> is the combined grown surface in fixed object
+            coordinates; fitting changes its candidate pose, not the stored
+            surface. The initial pose is the motion of object image points since
+            the last accepted view applied to that view's pose. If those matches
+            are unavailable, use the associated group's predicted pose; if that
+            is unavailable, use the previous pose. LK/UFM and group point
+            correspondences then guide the fit. Current mask and depth
+            <code>O[t]</code> decide whether the resulting pose is allowed.
           </span>
         </div>
       </section>
@@ -809,7 +815,7 @@
         <p class="intro">This is a separate downstream path. Each object tracker owns its association between the object's point IDs and a scene group. An accepted object observation may add new IDs to that association; it never edits the scene group.</p>
         <div class="lifecycle" aria-label="Object group query and pose decision">
           <article><small>Scene perception</small><strong>G[t]</strong><p>Read-only group snapshot, including surrounding scene points.</p></article>
-          <article><small>Object-side query</small><strong>Associated group → H[t]</strong><p>Known object point IDs select a group. Its measured motion predicts hidden object points.</p></article>
+          <article><small>Object-side query</small><strong>Associated group → H[t]</strong><p>Known object point IDs select a group. When enough measured object IDs separate into another group, the old association ends. With no object measurement, a supported surrounding group can still predict its hidden points.</p></article>
           <article><small>Object pose decision</small><strong>Surface fit → Kalman → pose</strong><p>Depth and mask check the fit. Kalman belongs to the object pose estimator, not the group tracker. The pose can be observed, predicted or lost.</p></article>
         </div>
         <p class="intro"><a href="#metric-motion">Group support metric</a> → <a href="#metric-kalman">pose update metric</a> → <a href="#pose-flow">pose decision paths</a>. Display modes: None hides groups; Objects shows groups associated with tracked objects; All shows every scene group. These display choices do not affect pose estimation.</p>
@@ -1004,9 +1010,9 @@
             <g class="node measured" data-routes="clear fallback lost">
               <rect x="110" y="295" width="255" height="82" rx="17" />
               <text x="237.5" y="325">
-                Fit S[&lt;t] to O[t]
+                Find pose Q[t] for S[&lt;t]
                 <tspan class="sub" x="237.5" dy="21">
-                  Start from motion / predicted pose
+                  Compare transformed S with O[t]
                 </tspan>
               </text>
             </g>
@@ -1185,7 +1191,7 @@
           <article id="metric-depth">
             <h3>Depth[t] · what reached the observation?</h3>
             <p><b>Read:</b> selected depth source, valid versus missing depth pixels, applied camera filters, and <code>depth_ms</code> for a learned model.</p>
-            <p><b>Choice:</b> RealSense sensor by default; LingBot-Depth-v0.5 or one stereo model is opt-in. Model estimates do not turn sensor holes into measured depth.</p>
+            <p><b>Choice:</b> Fast-FoundationStereo by default when its engine is installed; otherwise RealSense sensor depth. LingBot-Depth-v0.5 and Lite Any Stereo V2 remain selectable. Model estimates do not turn sensor holes into measured depth.</p>
             <p><b>Tune:</b> depth source before camera start; spatial, temporal and hole-filling filters while running.</p>
           </article>
           <article id="metric-input">
@@ -1350,8 +1356,18 @@
               and surface versions. Inspecting a frame does not rerun the tracker.</p></article>
           <article class="source memory"><h3>Live camera → rolling frame history</h3>
             <p>Every captured RGB-D frame enters history from camera start, including frames before selection
-              and frames skipped by the tracker. A processed result adds masks, matches and surfaces to its
-              frame later. Scrub recent frames or save the window across sessions.</p></article>
+              and frames skipped by the tracker. Processed depth, SAM masks, and the later pose result
+              each retain their source frame ID and completion time. Scrub recent frames or save the
+              window across sessions.</p></article>
+        </div>
+        <div class="after">
+          <article class="source measure"><h3>Raw · camera capture time</h3>
+            <p>Every camera RGB-D frame. A saved clip stores RGB as a LeRobot video and sensor depth
+              as episode data.</p></article>
+          <article class="source memory"><h3>Processed · completion time</h3>
+            <p>Only frames whose selected depth and enabled SAM mask are ready. This variable-rate
+              stream feeds group tracking and pose estimation. A saved clip references the matching
+              RGB video frame and stores exact processed depth and masks in compressed sidecars.</p></article>
         </div>
         <p>Compression and disk writing run on a separate thread. The default window is 60 seconds.
           If the writer cannot keep up, the UI reports dropped camera frames. A full disk stops recording

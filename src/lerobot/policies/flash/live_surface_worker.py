@@ -21,7 +21,7 @@ from threading import Event, Lock, Thread
 import cv2
 import numpy as np
 
-from .depth_enhancement import LiveDepthStream, make_depth_source, needs_stereo_pair
+from .depth_enhancement import LiveDepthStream, make_depth_source, needs_stereo_pair, preferred_depth_source
 from .live_surface_io import (
     image_snapshot,
     new_selection,
@@ -53,10 +53,15 @@ def run(directory: Path, config: dict):
 
     from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
     from lerobot.gui.flash_group_overlay import SceneGroupOverlay
-    from lerobot.gui.flash_live_scene import encode_rgbd_scene, live_scene_packet
+    from lerobot.gui.flash_live_scene import (
+        encode_rgbd_image,
+        encode_rgbd_scene,
+        frame_evidence,
+        live_scene_packet,
+    )
     from lerobot.overlays.adapters import Sam3TrackByDetectionAdapter
 
-    stop, latest, commands = Event(), LatestRGBDFrameStore(), Queue(maxsize=8)
+    stop, sam_active, latest, commands = Event(), Event(), LatestRGBDFrameStore(), Queue(maxsize=8)
     camera = capture = live = adapter = pool = history = group_overlay = depth_stream = None
     model = None
     model_loaded = False
@@ -68,13 +73,12 @@ def run(directory: Path, config: dict):
     command_id = None
     last_id = -1
     last_model_preview_id = -1
-    last_model_preview_s = 0.0
     sequence = 0
     paused = True
     errors = []
     camera_streams = None
     stereo_geometry = None
-    depth_source_name = config.get("depth_source", "sensor")
+    depth_source_name = config.get("depth_source") or preferred_depth_source()
     depth_source = None
     settings = config["pipeline_settings"]
     vision = VisionPipelineConfig.from_dict(settings["config"])
@@ -162,6 +166,8 @@ def run(directory: Path, config: dict):
                         right,
                     )
                 )
+                if depth_source_name == "sensor" and not sam_active.is_set():
+                    history.attach_processed_frame(sequence, "sensor")
 
             if needs_stereo_pair(depth_source_name):
                 camera.aligned_frame_with_stereo_listener = (
@@ -268,7 +274,19 @@ def run(directory: Path, config: dict):
         if depth_source is not None:
             # Depth is a camera-stream producer. It has no object, mask or pose
             # dependency; the tracker consumes its completed frame by ID.
-            depth_stream = LiveDepthStream(latest, depth_source, stereo_geometry, stop)
+            depth_stream = LiveDepthStream(
+                latest,
+                depth_source,
+                stereo_geometry,
+                stop,
+                on_result=(
+                    lambda frame: history.attach_processed_frame(
+                        frame, depth_source_name, complete=not sam_active.is_set()
+                    )
+                )
+                if history
+                else None,
+            )
             depth_stream.start()
         capture = Thread(target=acquire, daemon=True, name="flash-live-capture")
         capture.start()
@@ -297,6 +315,7 @@ def run(directory: Path, config: dict):
                             sequence = max(sequence, live.mask_source.next_click_sequence)
                             live.close()
                         live, frozen, paused, group_overlay = None, None, True, None
+                        sam_active.clear()
                         state("preview")
                     elif command["action"] == "clear_history":
                         if history:
@@ -367,6 +386,7 @@ def run(directory: Path, config: dict):
                         )
                         source.detection_correction = vision.detection_correction.control(offline=False)
                         live = LiveSurfaceSession(settings, source, model, kernels, pool)
+                        sam_active.set()
                         group_overlay = SceneGroupOverlay()
                         frozen, last_id, paused = None, -1, False
                     else:
@@ -378,11 +398,7 @@ def run(directory: Path, config: dict):
             if paused:
                 if live is None and frozen is None and depth_stream is not None:
                     preview_frame, depth_ms = depth_stream.snapshot()
-                    if (
-                        preview_frame is not None
-                        and preview_frame.frame_id > last_model_preview_id
-                        and time.perf_counter() - last_model_preview_s >= 1 / config["preview_fps"]
-                    ):
+                    if preview_frame is not None and preview_frame.frame_id > last_model_preview_id:
                         packet = encode_rgbd_scene(
                             preview_frame,
                             {
@@ -400,7 +416,6 @@ def run(directory: Path, config: dict):
                         temporary.replace(directory / "scene.bin")
                         model_preview_frames.append((preview_frame, depth_ms))
                         last_model_preview_id = preview_frame.frame_id
-                        last_model_preview_s = time.perf_counter()
                         state(
                             "preview_model",
                             frame_id=preview_frame.frame_id,
@@ -421,7 +436,29 @@ def run(directory: Path, config: dict):
                 continue
             try:
                 started = time.perf_counter()
-                row, matches, masks = live.step(frame)
+                measured_masks = live.measure_masks(frame)
+                if history:
+                    history.attach_processed_frame(frame, depth_source_name, masks=measured_masks[1])
+                display_rgb = encode_rgbd_image(frame, "jpeg")
+                processed_packet = encode_rgbd_scene(
+                    frame,
+                    {
+                        "frame": frame.frame_id,
+                        "time_s": frame.source_time_s,
+                        "objects": {},
+                        "scene_group_tracks": [],
+                        "depth_source": depth_source_name,
+                        "processed_input": True,
+                        "masks_rle": frame_evidence({}, measured_masks[1])["masks_rle"],
+                    },
+                    rgb_format="jpeg",
+                    encoded_rgb=display_rgb,
+                )
+                temporary = directory / "scene.tmp"
+                temporary.write_bytes(processed_packet)
+                temporary.replace(directory / "scene.bin")
+                state("processed", frame_id=frame.frame_id, depth_source=depth_source_name)
+                row, matches, masks = live.step(frame, measured_masks=measured_masks)
                 render_started = time.perf_counter()
                 packet = live_scene_packet(
                     frame,
@@ -433,6 +470,7 @@ def run(directory: Path, config: dict):
                     depth_processing=frame.depth_processing,
                     depth_source=depth_source_name,
                     rgb_format="jpeg",
+                    encoded_rgb=display_rgb,
                 )
                 temporary = directory / "scene.tmp"
                 temporary.write_bytes(packet)

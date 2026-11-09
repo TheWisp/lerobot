@@ -19,12 +19,14 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lerobot.policies.flash.depth_enhancement import preferred_depth_source
 from lerobot.policies.flash.live_surface_io import write_snapshot
 from lerobot.policies.flash.tracking_history import (
     export_episode,
     history_root,
     read_index,
     read_packet,
+    read_processed_frame,
     save_window,
 )
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
@@ -43,9 +45,9 @@ class TrackingStart(BaseModel):
     width: int = Field(default=1280, gt=0)
     height: int = Field(default=720, gt=0)
     fps: int = Field(default=30, gt=0)
-    preview_fps: int = Field(default=10, gt=0)
+    preview_fps: int = Field(default=30, gt=0)
     history_seconds: int = Field(default=60, ge=1, le=600)
-    # Model outputs are opt-in and never replace the recorded sensor arrays.
+    # Prefer installed model depth while retaining the raw sensor arrays.
     depth_source: Literal[
         "sensor",
         "lingbot",
@@ -54,7 +56,7 @@ class TrackingStart(BaseModel):
         "lite_any_stereo_v2_s",
         "lite_any_stereo_v2_m",
         "lite_any_stereo_v2_l",
-    ] = "sensor"
+    ] = Field(default_factory=preferred_depth_source)
     # Applied by the camera before FLASH sees the depth map. Off by default so
     # the live depth view exposes sensor holes and measured noise.
     depth_processing: dict[Literal["spatial", "temporal", "hole_filling"], bool] = Field(
@@ -151,7 +153,12 @@ async def shared_defaults() -> dict:
     from lerobot.policies.flash.surface_registration import MATCHERS
     from lerobot.policies.flash.surface_session_config import defaults
 
-    return {"settings": defaults(), "matchers": MATCHERS, "fields": pipeline_fields()}
+    return {
+        "settings": defaults(),
+        "matchers": MATCHERS,
+        "fields": pipeline_fields(),
+        "default_depth_source": preferred_depth_source(),
+    }
 
 
 @router.post("/cameras")
@@ -358,6 +365,18 @@ async def history_scene(frame: int, recording: str = "recent"):
             return read_packet(_history_directory(recording), frame)
         except FileNotFoundError as exc:
             raise HTTPException(404, "Frame expired from recent history; choose a retained frame") from exc
+
+    packet = await asyncio.get_running_loop().run_in_executor(_io, read)
+    return Response(packet, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
+
+
+@router.get("/history/processed")
+async def history_processed(frame: int, recording: str = "recent"):
+    def read():
+        try:
+            return read_processed_frame(_history_directory(recording), frame)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "Processed frame is unavailable") from exc
 
     packet = await asyncio.get_running_loop().run_in_executor(_io, read)
     return Response(packet, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})

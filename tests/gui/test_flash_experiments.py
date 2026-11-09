@@ -205,6 +205,100 @@ def test_http_serves_seekable_video_but_cannot_escape_export_directory(tmp_path,
         assert client.get(base).json() == []
 
 
+def test_rejected_fit_is_available_on_original_video_frame_without_rerunning(tmp_path, monkeypatch):
+    run, _ = completed_run(tmp_path)
+    rows = [json.loads(line) for line in (run / "frames.jsonl").read_text().splitlines()]
+    rejected = np.eye(4)
+    rejected[0, 3] = 0.03
+    rows[2]["objects"]["object"].update(
+        ufm_chain_status="lost",
+        ufm_chain_details={"fit": {"rejected_camera_from_reference": rejected.tolist()}},
+    )
+    (run / "frames.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+    output = export(run, tmp_path / "browser")
+    saved = json.loads((output / "overlays.json").read_text())
+    assert saved["schema_version"] == 9
+    assert saved["frames"][2]["objects"]["object"]["rejected_projected"]["ufm_chain"]["fit"] is not None
+    monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(output.parent))
+    app = FastAPI()
+    app.include_router(flash_experiments.router)
+    with TestClient(app) as client:
+        base = f"/api/run/flash/experiments/{output.name}/rejected/"
+        response = client.get(base + "2", params={"method": "ufm_chain"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["frame"] == 2 and data["method"] == "ufm_chain"
+        assert data["objects"]["object"]["rejected_poses"]["fit"] == rejected.tolist()
+        assert len(data["objects"]["object"]["surface_used"]) == 4
+        assert client.get(base + "1", params={"method": "ufm_chain"}).json()["objects"] == {}
+
+
+@pytest.mark.requires_playwright
+@pytest.mark.parametrize("embedded,missing_source", [(True, False), (False, False), (False, True)])
+def test_video_rejected_pose_is_opt_in_and_aligned(tmp_path, monkeypatch, gui_page, embedded, missing_source):
+    run, _ = completed_run(tmp_path)
+    rows = [json.loads(line) for line in (run / "frames.jsonl").read_text().splitlines()]
+    rejected = np.eye(4)
+    rejected[0, 3] = 0.03
+    rows[2]["objects"]["object"].update(
+        ufm_chain_status="lost",
+        ufm_chain_details={"fit": {"rejected_camera_from_reference": rejected.tolist()}},
+    )
+    (run / "frames.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+    root = tmp_path / "browser"
+    output = export(run, root)
+    if not embedded:
+        # Older exports can still query their source run when it remains on disk.
+        path = output / "overlays.json"
+        data = json.loads(path.read_text())
+        data["schema_version"] = 8
+        for frame in data["frames"]:
+            for obj in frame["objects"].values():
+                obj.pop("rejected_projected", None)
+        path.write_text(json.dumps(data))
+    if missing_source:
+        (run / "frames.jsonl").unlink()
+    monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(root))
+    page = gui_page
+    page.evaluate("async () => { switchTab('run'); await runTabInit(); await selectWorkflow('flash'); }")
+    page.wait_for_selector('#flash-experiment-overlay[data-frame="0"]')
+    page.select_option("#flash-experiment-method", "ufm_chain")
+    page.uncheck("#flash-experiment-mask")
+    page.uncheck("#flash-experiment-pose")
+    page.evaluate("document.getElementById('flash-experiment-matches').value = 'off'; drawFlashExperiment()")
+    page.evaluate("document.getElementById('flash-experiment-video').currentTime = .2")
+    page.wait_for_selector('#flash-experiment-overlay[data-frame="2"]')
+    canvas = page.locator("#flash-experiment-overlay")
+    nonempty = '(c) => [...c.getContext("2d").getImageData(0,0,c.width,c.height).data].some(v => v !== 0)'
+    assert not canvas.evaluate(nonempty)
+    page.check("#flash-experiment-rejected")
+    if missing_source:
+        page.wait_for_selector("#flash-experiment-rejected-note:visible")
+        assert "rerun this scene" in page.locator("#flash-experiment-rejected-note").inner_text()
+        assert not canvas.evaluate(nonempty)
+        return
+    if not embedded:
+        page.wait_for_function("flashRejectedOverlay.key === `${flashExperiments.selected}:2:ufm_chain`")
+    assert canvas.evaluate(nonempty)
+    page.uncheck("#flash-experiment-rejected")
+    assert not canvas.evaluate(nonempty)
+    page.get_by_role("button", name="3D scene", exact=True).click()
+    page.wait_for_selector('#flash-experiment-scene[data-frame="2"]')
+    page.evaluate("""() => {
+        const viewer = flashSceneState.viewer;
+        const update = viewer.update.bind(viewer), setOptions = viewer.setOptions.bind(viewer);
+        viewer.update = (depth, rgb, camera, descriptions) => {
+            window.rejectedSceneDescriptions = descriptions.filter(item => item.layer === 'rejectedFit');
+            return update(depth, rgb, camera, descriptions);
+        };
+        viewer.setOptions = options => { window.rejectedSceneOptions = options; return setOptions(options); };
+    }""")
+    page.check("#flash-scene-rejected")
+    assert page.evaluate("window.rejectedSceneOptions.rejectedFit")
+    assert page.evaluate("window.rejectedSceneDescriptions.length") == 1
+    assert page.evaluate("window.rejectedSceneDescriptions[0].pose[0][3]") == pytest.approx(0.03)
+
+
 @pytest.mark.requires_playwright
 def test_browser_seek_method_switch_and_lost_pose_use_same_video_frame(gui_page, tmp_path, monkeypatch):
     run, _ = completed_run(tmp_path)

@@ -58,38 +58,43 @@ def read_packet(directory, frame):
             if modern.exists()
             else zlib.decompress(base.with_suffix(".bin.z").read_bytes())
         )
+        processed = base.with_suffix(".processed.json")
         overlay = base.with_suffix(".overlay.json")
-        if overlay.exists():
+        if processed.exists() or overlay.exists():
             n = struct.unpack("<I", packet[:4])[0]
             header = json.loads(packet[4 : 4 + n])
-            update = json.loads(overlay.read_text())
-            if update.get("depth_source"):
-                header["tracking_depth_source"] = update["depth_source"]
-            header.update(
-                {
-                    key: value
-                    for key, value in update.items()
-                    if key
-                    not in (
-                        "camera",
-                        "depth_bytes",
-                        "depth_before_filter_bytes",
-                        "infrared_shape",
-                        "infrared_bytes",
-                        "source_frame_id",
-                        "base_from_camera",
-                        "available_time_s",
-                        "calibration_version",
-                        "rgb_format",
-                        "depth_format",
-                        "depth_m_per_unit",
-                        "depth_before_filter_m_per_unit",
-                        "depth_processing",
-                        "depth_filter_revision",
-                        "depth_source",
-                    )
-                }
-            )
+            if processed.exists():
+                update = json.loads(processed.read_text())
+                header.update(update)
+            if overlay.exists():
+                update = json.loads(overlay.read_text())
+                if update.get("depth_source"):
+                    header["tracking_depth_source"] = update["depth_source"]
+                header.update(
+                    {
+                        key: value
+                        for key, value in update.items()
+                        if key
+                        not in (
+                            "camera",
+                            "depth_bytes",
+                            "depth_before_filter_bytes",
+                            "infrared_shape",
+                            "infrared_bytes",
+                            "source_frame_id",
+                            "base_from_camera",
+                            "available_time_s",
+                            "calibration_version",
+                            "rgb_format",
+                            "depth_format",
+                            "depth_m_per_unit",
+                            "depth_before_filter_m_per_unit",
+                            "depth_processing",
+                            "depth_filter_revision",
+                            "depth_source",
+                        )
+                    }
+                )
             model_file = base.with_suffix(".model_depth.zst")
             model_depth = (
                 zstd.ZstdDecompressor().decompress(model_file.read_bytes()) if model_file.is_file() else b""
@@ -110,6 +115,25 @@ def read_packet(directory, frame):
                 + old_payload[insert:]
             )
         return packet
+
+
+def read_processed_frame(directory, frame):
+    """Exact processed evidence for episode playback, without duplicating RGB video."""
+    directory = Path(directory)
+    with locked(directory):
+        row = next((r for r in read_index(directory)["frames"] if r["frame"] == frame), None)
+        if row is None or "processed_ready_time_s" not in row:
+            raise FileNotFoundError("Processed frame is unavailable")
+        base = directory / f"{frame:010d}"
+        metadata = json.loads(base.with_suffix(".processed.json").read_text())
+        model_file = base.with_suffix(".model_depth.zst")
+        if metadata["processed_depth_source"] != "sensor" and not model_file.is_file():
+            raise FileNotFoundError("Processed model depth is unavailable")
+        depth = zstd.ZstdDecompressor().decompress(model_file.read_bytes()) if model_file.is_file() else b""
+        metadata["source_frame_id"] = frame
+        metadata["model_depth_bytes"] = len(depth)
+        header = json.dumps(metadata, allow_nan=False, separators=(",", ":")).encode()
+        return struct.pack("<I", len(header)) + header + depth
 
 
 def capture_packet(frame):
@@ -244,7 +268,7 @@ def save_window(directory, destination_root):
                 raise ValueError("No recorded camera frames yet")
             for row in index["frames"]:
                 base = f"{row['frame']:010d}"
-                for suffix in (".bin.zst", ".bin.z", ".overlay.json", ".model_depth.zst"):
+                for suffix in (".bin.zst", ".bin.z", ".processed.json", ".overlay.json", ".model_depth.zst"):
                     name = base + suffix
                     if (directory / name).exists():
                         os.link(directory / name, temporary / name)
@@ -306,7 +330,10 @@ def export_episode(directory):
         }
         has_before = any(row.get("has_before_filters", False) for row in rows)
         has_infrared = any(row.get("has_infrared", False) for row in rows)
-        has_model_depth = any(row.get("tracking_depth_source", "sensor") != "sensor" for row in rows)
+        has_model_depth = any(
+            row.get("processed_depth_source", row.get("tracking_depth_source", "sensor")) != "sensor"
+            for row in rows
+        )
         if has_before:
             features["observation.images.camera_depth_before_filters"] = {
                 "dtype": "image",
@@ -343,6 +370,8 @@ def export_episode(directory):
             )
             overlay_root = temporary / "flash" / "v1" / "overlays"
             overlay_root.mkdir(parents=True)
+            processed_root = temporary / "flash" / "v1" / "processed"
+            processed_root.mkdir(parents=True)
             for i, row in enumerate(rows):
                 frame, _, _, _ = decode_record(read_packet(directory, row["frame"]))
                 if frame.depth.shape != (h, w):
@@ -411,6 +440,11 @@ def export_episode(directory):
                 overlay = directory / f"{row['frame']:010d}.overlay.json"
                 if overlay.is_file():
                     os.link(overlay, overlay_root / f"{i:06d}.json")
+                if "processed_ready_time_s" in row:
+                    for suffix in ("processed.json", "model_depth.zst"):
+                        source = directory / f"{row['frame']:010d}.{suffix}"
+                        if source.is_file():
+                            os.link(source, processed_root / f"{i:06d}.{suffix}")
             dataset.save_episode()
             dataset.finalize()
             shutil.copy2(directory / "config.json", temporary / "flash" / "v1" / "config.json")
@@ -439,6 +473,35 @@ def export_episode(directory):
                         }
                         for row in rows
                     ]
+                },
+            )
+            write_snapshot(
+                temporary / "flash" / "v1" / "processed_frames.json",
+                {
+                    "schema_version": 1,
+                    "frames": [
+                        {
+                            "episode_index": i,
+                            "source_frame_id": row["frame"],
+                            "source_time_s": row["time_s"],
+                            "depth_source": row["processed_depth_source"],
+                            "depth_ready_time_s": row["depth_ready_time_s"],
+                            "sam_ready_time_s": row.get("sam_ready_time_s"),
+                            "ready_time_s": row["processed_ready_time_s"],
+                            "depth_file": (
+                                f"processed/{i:06d}.model_depth.zst"
+                                if row["processed_depth_source"] != "sensor"
+                                else None
+                            ),
+                            "mask_file": (
+                                f"processed/{i:06d}.processed.json"
+                                if row.get("sam_ready_time_s") is not None
+                                else None
+                            ),
+                        }
+                        for i, row in enumerate(rows)
+                        if "processed_ready_time_s" in row
+                    ],
                 },
             )
             temporary.rename(final)
@@ -498,9 +561,33 @@ class RollingHistory:
         if self.closed:
             raise RuntimeError("History already closed")
         try:
-            self.queue.put_nowait(("result", packet))
+            self.queue.put_nowait(("result", (packet, time.perf_counter())))
         except Full:
             self.error = "Tracking result could not be recorded: history writer queue full"
+
+    def attach_processed_frame(self, frame, depth_source, *, masks=None, complete=True):
+        """Record depth and optional SAM output against one captured frame ID.
+
+        Called at the producer boundary, before the pose fitter. The writer
+        owns the compressed copy, so model and tracker throughput remain separate.
+        """
+        if self.closed:
+            raise RuntimeError("History already closed")
+        frame_id = frame if isinstance(frame, int) else frame.frame_id
+        depth = None
+        if depth_source != "sensor":
+            depth = np.ascontiguousarray(frame.metric_depth(), dtype="<f4").tobytes()
+        runs = None
+        if masks is not None:
+            runs = {}
+            for role, mask in masks.items():
+                edges = np.flatnonzero(np.diff(np.pad(mask.ravel().astype(np.int8), (1, 1))))
+                runs[role] = np.column_stack((edges[::2], edges[1::2] - edges[::2])).tolist()
+        event = (frame_id, depth_source, time.perf_counter(), depth, runs, complete)
+        try:
+            self.queue.put_nowait(("processed", event))
+        except Full:
+            self.error = "Processed frame could not be recorded: history writer queue full"
 
     def _index(self):
         return {
@@ -602,31 +689,70 @@ class RollingHistory:
             write_snapshot(self.directory / "index.json", self._index())
 
     def _remove_frame(self, frame):
-        for suffix in (".bin.z", ".bin.zst", ".overlay.json", ".model_depth.zst"):
+        for suffix in (".bin.z", ".bin.zst", ".processed.json", ".overlay.json", ".model_depth.zst"):
             # safe-destruct: remove only generated files for this rolling buffer frame.
             (self.directory / f"{frame:010d}{suffix}").unlink(missing_ok=True)
 
-    def _write_result(self, packet):
+    def _write_processed(self, event):
+        frame_id, source, ready_time_s, depth, masks, complete = event
+        with locked(self.directory, exclusive=True):
+            row = next((r for r in self.rows if r["frame"] == frame_id), None)
+            if row is None:
+                return  # Its camera capture expired or was not retained.
+            path = self.directory / f"{frame_id:010d}.processed.json"
+            previous = json.loads(path.read_text()) if path.is_file() else {}
+            if previous and previous["processed_depth_source"] != source:
+                raise ValueError("Processed depth source changed within one camera frame")
+            update = {**previous, "processed_depth_source": source}
+            if "depth_ready_time_s" not in update:
+                update["depth_ready_time_s"] = ready_time_s
+            if masks is not None:
+                update["sam_ready_time_s"] = ready_time_s
+                update["masks_rle"] = masks
+            if complete:
+                update["processed_ready_time_s"] = ready_time_s
+            before = path.stat().st_size if path.is_file() else 0
+            write_snapshot(path, update)
+            row["bytes"] += path.stat().st_size - before
+            row["processed_depth_source"] = source
+            row["depth_ready_time_s"] = update["depth_ready_time_s"]
+            if masks is not None:
+                row["sam_ready_time_s"] = ready_time_s
+            if complete:
+                row["processed_ready_time_s"] = ready_time_s
+            if depth is not None:
+                model_path = self.directory / f"{frame_id:010d}.model_depth.zst"
+                if not model_path.is_file():
+                    model_path.write_bytes(zstd.ZstdCompressor(level=3).compress(depth))
+                    row["bytes"] += model_path.stat().st_size
+            write_snapshot(self.directory / "index.json", self._index())
+
+    def _write_result(self, event):
+        packet, ready_time_s = event
         n = struct.unpack("<I", packet[:4])[0]
         header = json.loads(packet[4 : 4 + n])
+        header["tracking_ready_time_s"] = ready_time_s
         with locked(self.directory, exclusive=True):
             row = next((r for r in self.rows if r["frame"] == header["frame"]), None)
             if row is None:
                 return  # The camera frame expired or was not retained.
             path = self.directory / f"{row['frame']:010d}.overlay.json"
+            before = path.stat().st_size if path.is_file() else 0
             write_snapshot(path, header)
             if header.get("depth_source", "sensor") != "sensor":
                 depth_start = 4 + n
                 depth_bytes = packet[depth_start : depth_start + header["depth_bytes"]]
                 model_path = self.directory / f"{row['frame']:010d}.model_depth.zst"
-                model_path.write_bytes(zstd.ZstdCompressor(level=3).compress(depth_bytes))
-                row["bytes"] += model_path.stat().st_size
+                if not model_path.is_file():
+                    model_path.write_bytes(zstd.ZstdCompressor(level=3).compress(depth_bytes))
+                    row["bytes"] += model_path.stat().st_size
                 row["tracking_depth_source"] = header["depth_source"]
             row["objects"] = {
                 role: {key: obj.get(key) for key in ("name", "status", "reason")}
                 for role, obj in header.get("objects", {}).items()
             }
-            row["bytes"] += path.stat().st_size
+            row["tracking_ready_time_s"] = ready_time_s
+            row["bytes"] += path.stat().st_size - before
             write_snapshot(self.directory / "index.json", self._index())
 
     def _run(self):
@@ -639,6 +765,8 @@ class RollingHistory:
                     kind, value = item
                     if kind == "capture":
                         self._write_capture(value)
+                    elif kind == "processed":
+                        self._write_processed(value)
                     elif kind == "result":
                         self._write_result(value)
                     elif kind == "clear":

@@ -19,6 +19,7 @@ from benchmarks.flash_full_pose_score import score_transforms
 from benchmarks.flash_surface_score import LabelledSurface, distance_statistics
 from lerobot.gui.flash_live_scene import frame_evidence, object_evidence
 from lerobot.gui.flash_pose_overlay import reference_axes
+from lerobot.policies.flash.surface_observation import spatial_sample
 
 
 @lru_cache(maxsize=2)
@@ -150,3 +151,47 @@ def scene_packet(manifest: dict, index: int, method: str) -> bytes:
     from lerobot.gui.flash_live_scene import encode_rgbd_scene
 
     return encode_rgbd_scene(frame, header)
+
+
+def rejected_overlay(manifest: dict, index: int, method: str) -> dict:
+    """Small, frame-aligned candidate geometry for the opt-in 2D video overlay."""
+    if method not in manifest["methods"]:
+        raise ValueError("Unknown saved tracking method")
+    run = Path(manifest["source_run"]).expanduser().resolve()
+    stamps = [(run / name).stat().st_mtime_ns for name in ("case.json", "frames.jsonl", "summary.json")]
+    case, rows, summary, references, _, _ = _recording(run, *stamps)
+    if summary["input_sha256"] != manifest["input_sha256"] or len(rows) != manifest["frames"]:
+        raise ValueError("Candidate and playback belong to different experiment inputs")
+    if not 0 <= index < len(rows):
+        raise IndexError("Frame is outside this recording")
+    row = rows[index]
+    frame, _ = sample_at(case, index)
+    if row["frame"] != frame.frame_id or not np.isclose(
+        row["time_s"], frame.source_time_s, atol=1e-6, rtol=0
+    ):
+        raise ValueError("Candidate and RGB-D belong to different frames")
+    objects = {}
+    for role, reference in references.items():
+        result = row["objects"][role]
+        poses = object_evidence(result, method)["rejected_poses"]
+        if not any(pose is not None for pose in poses.values()):
+            continue
+        details = result.get(method + "_details", {})
+        version = details.get("map_version_used")
+        surface = reference
+        if version and method in {"conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"}:
+            path = run / "surface_models" / method / role / f"{int(version):06d}.npz"
+            with np.load(path, allow_pickle=False) as saved:
+                surface = saved["points"]
+        surface = surface[spatial_sample(surface, 1200)]
+        objects[role] = {
+            "surface_used": _points(surface),
+            "axis_points": reference_axes(reference).tolist(),
+            "rejected_poses": poses,
+        }
+    return {
+        "frame": index,
+        "method": method,
+        "camera": {"intrinsics": frame.intrinsics.tolist()},
+        "objects": objects,
+    }

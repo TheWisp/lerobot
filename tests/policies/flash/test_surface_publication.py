@@ -139,6 +139,8 @@ def test_failed_local_fit_only_publishes_depth_compatible_group_prediction(
         diagnostics = saved["diagnostics"]
         np.testing.assert_allclose(diagnostics["unpublished_camera_from_reference"], session.pose)
         np.testing.assert_allclose(diagnostics["fit"]["rejected_camera_from_reference"], wrong)
+        np.testing.assert_allclose(saved["rejected_poses"]["fit"], wrong)
+        np.testing.assert_allclose(saved["rejected_poses"]["prediction"], session.pose)
         assert diagnostics["prediction_geometry"]["scene_depth_coherent_protrusion"]
     assert session.accepted_frame == 0
     np.testing.assert_array_equal(session.store.points, original)

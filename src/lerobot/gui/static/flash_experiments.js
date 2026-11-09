@@ -18,6 +18,60 @@ const FLASH_POSE_EXPLANATIONS = {
     conditioned_growing: 'The same UFM-assisted fit, adding newly measured surface over time. The current weights do not enforce strict depth-first priority.',
 };
 const flashExperiments = { items: [], selected: null, data: null, frame: 0, request: null, listRequest: null, initialized: false };
+const flashRejectedOverlay = {key: null, packet: null, request: null, requestedKey: null, unavailable: null};
+
+function toggleFlashExperimentRejected(enabled) {
+    document.getElementById('flash-experiment-rejected').checked = enabled;
+    document.getElementById('flash-scene-rejected').checked = enabled;
+    if (!enabled) flashRejectedOverlay.request?.abort();
+    document.getElementById('flash-experiment-rejected-note').hidden =
+        !enabled || flashRejectedOverlay.unavailable !== flashExperiments.selected;
+    drawFlashExperiment();
+    drawFlashExperimentScene(true);
+}
+
+async function requestFlashExperimentRejected() {
+    if (flashSceneState.enabled || !flashExperiments.data || flashExperiments.data.schema_version >= 9 ||
+        !document.getElementById('flash-experiment-rejected').checked ||
+        flashRejectedOverlay.unavailable === flashExperiments.selected) return;
+    const identity = flashExperiments.selected, frame = flashExperiments.frame;
+    const method = document.getElementById('flash-experiment-method').value;
+    const key = `${identity}:${frame}:${method}`;
+    if (key === flashRejectedOverlay.key || key === flashRejectedOverlay.requestedKey) return;
+    flashRejectedOverlay.request?.abort();
+    const request = new AbortController();
+    flashRejectedOverlay.request = request;
+    flashRejectedOverlay.requestedKey = key;
+    document.getElementById('flash-experiment-rejected-note').hidden = true;
+    let status = null;
+    try {
+        const response = await fetch(`/api/run/flash/experiments/${identity}/rejected/${frame}?method=${encodeURIComponent(method)}`,
+            {signal: request.signal});
+        status = response.status;
+        if (!response.ok) throw new Error(`Rejected poses unavailable (${response.status})`);
+        const packet = await response.json();
+        if (request !== flashRejectedOverlay.request || !document.getElementById('flash-experiment-rejected').checked ||
+            identity !== flashExperiments.selected || frame !== flashExperiments.frame ||
+            method !== document.getElementById('flash-experiment-method').value ||
+            packet.frame !== frame || packet.method !== method) return;
+        flashRejectedOverlay.key = key;
+        flashRejectedOverlay.packet = packet;
+        drawFlashExperiment();
+    } catch (error) {
+        if (error.name !== 'AbortError' && request === flashRejectedOverlay.request) {
+            if (status === 409) flashRejectedOverlay.unavailable = identity;
+            const note = document.getElementById('flash-experiment-rejected-note');
+            note.textContent = 'Unavailable in this older export; rerun this scene.';
+            note.hidden = false;
+            note.title = error.message;
+        }
+    } finally {
+        if (request === flashRejectedOverlay.request) {
+            flashRejectedOverlay.request = null;
+            flashRejectedOverlay.requestedKey = null;
+        }
+    }
+}
 
 function flashGroupMode(id) {
     return document.getElementById(id).dataset.mode;
@@ -205,6 +259,12 @@ async function selectFlashExperiment(item) {
         if (flashLive.visible) return;
     }
     resetFlashExperimentScene();
+    flashRejectedOverlay.request?.abort();
+    flashRejectedOverlay.key = null;
+    flashRejectedOverlay.packet = null;
+    flashRejectedOverlay.requestedKey = null;
+    flashRejectedOverlay.unavailable = null;
+    document.getElementById('flash-experiment-rejected-note').hidden = true;
     flashExperiments.request?.abort();
     const request = new AbortController();
     flashExperiments.request = request;
@@ -320,6 +380,7 @@ function drawFlashExperiment() {
     context.setTransform(width / data.width, 0, 0, height / data.height, 0, 0);
     const row = data.frames[flashExperiments.frame];
     const method = document.getElementById('flash-experiment-method').value;
+    if (document.getElementById('flash-experiment-rejected').checked) requestFlashExperimentRejected();
     const visibleGroups = flashSceneGroups(row.scene_group_tracks, row.objects, groupMode, method);
     const totalGroups = row.scene_group_tracks?.length ??
         flashSceneGroups(null, row.objects, 'objects', method).length;
@@ -394,6 +455,16 @@ function drawFlashExperiment() {
         drawFlashPointPaths(context, data, flashExperiments.frame, method, matchMode, trailFrames, displayScale);
     }
     drawFlashGroupTracks(context, data, flashExperiments.frame, method, displayScale);
+    if (document.getElementById('flash-experiment-rejected').checked) {
+        if (data.schema_version >= 9) {
+            for (const object of Object.values(row.objects))
+                if (object.rejected_projected?.[method])
+                    drawFlashRejectedPixels(context, object.rejected_projected[method]);
+        } else if (flashRejectedOverlay.key === `${flashExperiments.selected}:${flashExperiments.frame}:${method}`) {
+            for (const object of Object.values(flashRejectedOverlay.packet.objects))
+                drawFlashRejectedPoses(context, object, flashRejectedOverlay.packet.camera.intrinsics);
+        }
+    }
     // Keep detailed evidence available on hover, without a changing paragraph
     // below the player or a second label covering the video.
     document.getElementById('flash-experiment-matches').title = matchMode === 'off' ? '' :
@@ -828,6 +899,12 @@ function drawFlashExperimentScene(rebuild = false) {
         for (const [role, object] of Object.entries(state.packet.objects)) {
             descriptions.push({layer: 'estimate', color: 0xffa84b, pose: object.pose,
                 points: expanded ? object.surface : object.initial_surface, axisPoints: object.axis_points});
+            for (const [kind, color] of [['prediction', 0x49bcff], ['fit', 0xff52d7]]) {
+                const pose = object.rejected_poses?.[kind];
+                if (pose && (kind !== 'prediction' || JSON.stringify(pose) !== JSON.stringify(object.rejected_poses.fit)))
+                    descriptions.push({layer: kind === 'fit' ? 'rejectedFit' : 'rejectedPrediction',
+                        color, pose, points: object.surface_used, axes: false, opacity: 0.75, pointSize: 2.5});
+            }
             descriptions.push({layer: 'labelled', color: 0x34e5a1, pose: object.labelled_pose,
                 points: object.labelled_surface, axisPoints: object.axis_points});
         }
@@ -840,6 +917,8 @@ function drawFlashExperimentScene(rebuild = false) {
     }
     state.viewer.setOptions({scene: document.getElementById('flash-scene-context').checked,
         estimate: document.getElementById('flash-scene-estimate').checked,
+        rejectedFit: document.getElementById('flash-scene-rejected').checked,
+        rejectedPrediction: document.getElementById('flash-scene-rejected').checked,
         labelled: document.getElementById('flash-scene-label').checked,
         axes: document.getElementById('flash-scene-axes').checked,
         groups: flashGroupMode('flash-experiment-groups') !== 'none'});

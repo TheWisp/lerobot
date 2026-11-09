@@ -345,6 +345,53 @@ def test_object_hidden_prediction_uses_surroundings_and_only_measured_kalman_pai
     ) == list(range(16))
 
 
+def test_visible_known_object_points_separate_from_old_environment_group():
+    """A confirmed scene split invalidates an object-side relation to the old body."""
+    points = cloud()
+    tracker = SceneMotionGroups(GroupConfig())
+    source = ObjectGroupAssociation(tracker.config)
+    for i in range(11):
+        current = scene(i, points)
+        tracker.update(current)
+    initialize(source, current, points[:16])
+    old_hint, old = source.query(tracker.frame, frame(10), current, mask_for(current, range(16)), 0)
+    assert old_hint is not None
+    old_group = old["group_id"]
+
+    moved = points.copy()
+    moved[:16, 0] += 0.03
+    for i in range(11, 14):
+        current = scene(i, moved)
+        tracker.update(current)
+    assert all(i not in tracker.frame.groups[old_group].ids for i in range(16))
+    visible_hint, visible = source.query(tracker.frame, frame(13), current, mask_for(current, range(16)), 0)
+    assert visible_hint is None
+    assert visible["object_inliers"] == 0
+
+    # With no visible object measurement, an established co-moving group is
+    # still allowed to carry a hidden object. The scene groups remain unchanged.
+    hidden_source = ObjectGroupAssociation(tracker.config)
+    hidden_source.anchors = {i: p.copy() for i, p in source.anchors.items()}
+    hidden_source.reference = source.reference.copy()
+    hidden_source.reference_frame = source.reference_frame
+    hidden_source._group = old_group
+    hidden_source._group_from_reference = old_hint.camera_from_reference.copy()
+    hidden_hint, _ = hidden_source.query(tracker.frame, frame(13), current, np.zeros((64, 64), bool), 0)
+    assert hidden_hint is not None
+    stale_hint, _ = source.query(tracker.frame, frame(13), current, np.zeros((64, 64), bool), 0)
+    assert stale_hint is None  # An observed split cannot silently regain its old relation.
+
+    for i in range(14, 24):
+        shifted = moved.copy()
+        shifted[:16, 0] += (i - 13) * 0.003
+        current = scene(i, shifted)
+        tracker.update(current)
+    new_hint, new_details = source.query(tracker.frame, frame(23), current, mask_for(current, range(16)), 0)
+    assert new_hint is not None
+    assert new_details["group_id"] != old_group
+    assert new_details["object_inliers"] >= 12
+
+
 @pytest.mark.parametrize(
     "key,value",
     [

@@ -716,12 +716,19 @@ class GrowingSurfaceSession:
         geometry = geometry if geometry is not None else self.prepare_geometry(prepared)
         source = prepared.get("match_source_frame")
         step = prepared["step"] if source == self.accepted_frame else None
+        # Measured motion of this object's points from the last accepted view
+        # starts the one local fit. A scene group can carry the
+        # object when those points are unavailable, and remains secondary fit
+        # evidence even when the measured object motion supplies the seed.
         seed = (
-            hint.camera_from_reference
-            if hint is not None
-            else (step @ self.accepted_pose if step is not None else self.pose)
+            step @ self.accepted_pose
+            if step is not None
+            else (hint.camera_from_reference if hint is not None else self.pose)
         )
         details["hint_source"] = hint.source if hint else None
+        details["fit_seed_source"] = (
+            "object_matches" if step is not None else "group" if hint is not None else "previous_pose"
+        )
         a, b = np.empty((0, 3)), np.empty((0, 3))
         if step is not None and "point_pairs" in prepared:
             a, b = prepared["point_pairs"]
@@ -749,6 +756,16 @@ class GrowingSurfaceSession:
             search_pool=self.search_pool,
             reference_views=geometry.reference_views,
             appearance_views=geometry.appearance_views,
+        )
+        details["image_pairs"] = len(a)
+        details["image_weight"] = fitter.image_weight
+        details["point_sources"] = (
+            [
+                {"source": p.source, "kind": p.kind, "count": len(p.reference), "weight": p.weight}
+                for p in hint.points
+            ]
+            if hint
+            else []
         )
         geometry_checks = {}
 
@@ -780,6 +797,7 @@ class GrowingSurfaceSession:
         # Also covers weighted fitting and replacement matchers without Kalman.
         # No candidate may update the pose or map while occupying measured air.
         if candidate is not None and not check_pose(candidate)["accepted"]:
+            fit["rejected_camera_from_reference"] = candidate.tolist()
             candidate = None
             fit["reason"] = "measured_empty_space_conflict"
         if candidate is None:
@@ -833,17 +851,10 @@ class GrowingSurfaceSession:
         accepted_geometry = check_pose(candidate)
         details.update(
             fit=fit,
-            image_pairs=len(a),
             observed_overlap=accepted_geometry["observed_overlap"],
             observed_overlap_basis=accepted_geometry["observed_overlap_basis"],
             surface_median_mm=accepted_geometry["surface_median_mm"],
             candidate_camera_from_reference=candidate.tolist(),
-            point_sources=[
-                {"source": p.source, "kind": p.kind, "count": len(p.reference), "weight": p.weight}
-                for p in hint.points
-            ]
-            if hint
-            else [],
         )
         if hint is not None:
             details["hint_disagreement_mm"] = float(

@@ -63,6 +63,7 @@ class ObjectGroupAssociation:
         if object_usable is not None:
             keep &= inside(scene, object_usable)
         own_now = set(scene.ids[keep].tolist())
+        measured_known_own = own_now & self.anchors.keys()
         candidates = []
         for gid, group in snapshot.groups.items():
             if not group.confirmed or not group.supported:
@@ -77,6 +78,17 @@ class ObjectGroupAssociation:
             # cannot outvote freshly measured object points after separation.
             visible_known = [j for j in known if group.measured[j] and int(group.ids[j]) in own_now]
             minimum = self.config.min_inliers
+            # If enough previously anchored object points are measured now,
+            # their group membership is direct evidence against an old scene
+            # relation. Do not carry that relation from its surrounding body
+            # once most of the object's measured points have separated. With
+            # no measured object points, keep the relation for occlusion.
+            if len(measured_known_own) >= minimum and 2 * len(visible_known) < len(measured_known_own):
+                if gid == self._group:
+                    self._group = self._group_from_reference = None
+                    details["group_id"] = None
+                    details["association_contradiction"] = "visible_object_points_separated"
+                continue
             binding = visible_known if len(visible_known) >= minimum else known
             if relation is None and len(binding) >= minimum:
                 a = np.array([self.anchors[int(group.ids[j])] for j in binding])

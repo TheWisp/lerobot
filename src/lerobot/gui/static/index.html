@@ -467,6 +467,8 @@
                         <div id="flash-experiment-group-control" class="flash-group-control">Groups <div id="flash-experiment-groups" class="flash-group-modes" data-mode="objects" role="group" aria-label="Group display"><button type="button" data-mode="none" aria-pressed="false" onclick="setFlashGroupMode('flash-experiment-groups','none')">None</button><button type="button" data-mode="objects" aria-pressed="true" onclick="setFlashGroupMode('flash-experiment-groups','objects')">Objects</button><button type="button" data-mode="all" aria-pressed="false" onclick="setFlashGroupMode('flash-experiment-groups','all')">All</button></div><span id="flash-experiment-group-count" class="flash-group-count" aria-live="polite"></span></div>
                         <label class="flash-experiment-mask-label flash-experiment-2d-tool"><input id="flash-experiment-mask" type="checkbox" onchange="drawFlashExperiment()">Input mask</label>
                         <label class="flash-experiment-pose-label flash-experiment-2d-tool"><input id="flash-experiment-pose" type="checkbox" onchange="drawFlashExperiment()">3D reference surface + axes</label>
+                        <label class="flash-experiment-2d-tool" title="Show attempted poses that failed the geometry check; these are not published estimates."><input id="flash-experiment-rejected" type="checkbox" onchange="toggleFlashExperimentRejected(this.checked)">Rejected poses</label>
+                        <span id="flash-experiment-rejected-note" class="flash-experiment-2d-tool form-hint" hidden></span>
                         <label class="flash-experiment-matches-label flash-experiment-2d-tool">Image point trails <select id="flash-experiment-matches" onchange="drawFlashExperiment()"><option value="off">Off</option><option value="raw" selected>Raw predictions</option><option value="used">Agree with rigid fit</option></select></label>
                         <label class="flash-experiment-2d-tool">Trail length <select id="flash-experiment-flow-trail" onchange="drawFlashExperiment()"><option value="0">Off</option><option value="5">5 frames</option><option value="10" selected>10 frames</option><option value="20">20 frames</option><option value="30">30 frames</option></select></label>
                         <button type="button" onclick="stepFlashExperiment(-1)" aria-label="Previous experiment frame">‹</button>
@@ -482,6 +484,7 @@
                         <div id="flash-experiment-scene-tools" hidden>
                             <label><input id="flash-scene-context" type="checkbox" checked onchange="drawFlashExperimentScene()">RGB-D</label>
                             <label class="flash-scene-estimate"><input id="flash-scene-estimate" type="checkbox" checked onchange="drawFlashExperimentScene()">Tracker</label>
+                            <label title="Show attempted poses that failed the geometry check; these are not published estimates."><input id="flash-scene-rejected" type="checkbox" onchange="toggleFlashExperimentRejected(this.checked)">Rejected poses</label>
                             <label class="flash-scene-label" title="The initial measured surface moved using the dataset's labelled poses. This is a partial observation, not a complete ground-truth mesh."><input id="flash-scene-label" type="checkbox" checked onchange="drawFlashExperimentScene()">Labelled reference</label>
                             <label id="flash-scene-surface-control" hidden title="Changes only the orange drawing, not the calculated pose or accuracy score.">Tracker surface <select id="flash-scene-surface" onchange="drawFlashExperimentScene(true)"><option value="starting">Starting surface</option><option value="expanded" selected>Expanded surface</option></select></label>
                             <label><input id="flash-scene-axes" type="checkbox" checked onchange="drawFlashExperimentScene()">Axes</label>
@@ -533,7 +536,7 @@
                     </details>
                     <label>Depth used for tracking</label>
                     <div id="flash-live-depth-source" class="flash-group-modes" data-mode="sensor" role="group" aria-label="Depth source">
-                        <button type="button" data-mode="sensor" aria-pressed="true" onclick="setFlashDepthSource('sensor')">RealSense depth (default)</button>
+                        <button type="button" data-mode="sensor" aria-pressed="true" onclick="setFlashDepthSource('sensor')">RealSense depth</button>
                         <button type="button" data-mode="lingbot" aria-pressed="false" onclick="setFlashDepthSource('lingbot')">LingBot-Depth-v0.5</button>
                         <button type="button" data-mode="foundation_stereo" aria-pressed="false" onclick="setFlashDepthSource('foundation_stereo')" title="Fast-FoundationStereo on synchronized infrared cameras">Fast-FoundationStereo</button>
                         <span class="flash-depth-model-heading">Lite Any Stereo V2</span>
@@ -542,7 +545,7 @@
                         <button type="button" data-mode="lite_any_stereo_v2_l" aria-label="Lite Any Stereo V2-L" aria-pressed="false" onclick="setFlashDepthSource('lite_any_stereo_v2_l')" title="Lite Any Stereo V2-L on synchronized infrared cameras">L</button>
                         <button type="button" data-mode="lite_any_stereo_v2" aria-label="Lite Any Stereo V2-H" aria-pressed="false" onclick="setFlashDepthSource('lite_any_stereo_v2')" title="Lite Any Stereo V2-H on synchronized infrared cameras">H</button>
                     </div>
-                    <p class="training-field-hint">Model depth is experimental. The sensor depth is kept in recent history. Stereo choices capture infrared pairs and must be selected before Start.</p>
+                    <p class="training-field-hint">Fast-FoundationStereo is selected by default when its model is installed; otherwise RealSense depth is used. The raw sensor depth is kept in recent history. Stereo choices capture infrared pairs and must be selected before Start.</p>
                     <label>Image matching <select id="flash-live-matching" onchange="updateFlashPipelineControls()"><option value="lk">LK</option><option value="ufm">UFM</option></select></label>
                     <label>Surface matcher <select id="flash-live-matcher" aria-label="Live surface matcher" onchange="updateFlashPipelineControls()"></select></label>
                     <button id="flash-live-settings" type="button" onclick="liveElement('settings-dialog').showModal()">Advanced pipeline settings…</button>
@@ -569,13 +572,14 @@
                         <button id="flash-live-select" type="button" onclick="controlFlashLive('select')" disabled>Track by name</button>
                         <button id="flash-live-pick" type="button" onclick="toggleFlashLivePicker()" aria-pressed="false" disabled>Pick object</button>
                         <button id="flash-live-clear" type="button" onclick="controlFlashLive('clear')" disabled>Clear object</button>
+                        <div id="flash-live-stream-mode" class="flash-group-modes" data-mode="processed" role="group" aria-label="Frame stream"><button type="button" data-mode="raw" aria-pressed="false" onclick="setFlashLiveStream('raw')">Raw</button><button type="button" data-mode="processed" aria-pressed="true" onclick="setFlashLiveStream('processed')">Processed</button></div>
                         <div id="flash-live-view-mode" class="flash-group-modes" data-mode="2d" role="group" aria-label="Viewer mode"><button type="button" data-mode="2d" aria-pressed="true" onclick="setFlashLiveView('2d')">2D</button><button type="button" data-mode="3d" aria-pressed="false" onclick="setFlashLiveView('3d')">3D</button><button type="button" data-mode="depth" aria-pressed="false" onclick="setFlashLiveView('depth')">Depth</button></div>
                         <button id="flash-live-camera-view" type="button" onclick="flashLive.viewer?.reset()" hidden>Reset 3D camera</button>
                         <span id="flash-live-depth-info" class="flash-live-depth-info" hidden></span>
                         <label><input id="flash-live-mask" type="checkbox" checked onchange="drawFlashLive()">Mask (2D)</label>
                         <label><input id="flash-live-surface" type="checkbox" checked onchange="drawFlashLive()">Surface + axes</label>
+                        <label title="Magenta: rejected fit. Blue: rejected fallback prediction. These are not published estimates."><input id="flash-live-rejected" type="checkbox" onchange="drawFlashLive()">Rejected poses</label>
                         <label id="flash-live-filled-control" hidden><input id="flash-live-filled" type="checkbox" onchange="drawFlashLive()">Highlight filled holes</label>
-                        <label id="flash-live-model-depth-control" hidden><input id="flash-live-model-depth" type="checkbox" onchange="drawFlashLive()">Show model depth</label>
                         <div class="flash-group-control">Groups <div id="flash-live-groups" class="flash-group-modes" data-mode="objects" role="group" aria-label="Live group display"><button type="button" data-mode="none" aria-pressed="false" onclick="setFlashGroupMode('flash-live-groups','none')">None</button><button type="button" data-mode="objects" aria-pressed="true" onclick="setFlashGroupMode('flash-live-groups','objects')">Objects</button><button type="button" data-mode="all" aria-pressed="false" onclick="setFlashGroupMode('flash-live-groups','all')">All</button></div><span id="flash-live-group-count" class="flash-group-count" aria-live="polite"></span></div>
                     </div>
                     <div class="flash-live-history" id="flash-live-playback" hidden>
@@ -949,9 +953,9 @@ nebius iam auth-public-key generate \
     <script src="/static/charts.js?v=5"></script>
     <script src="/static/robot.js?v=31"></script>
     <script src="/static/run.js?v=195"></script>
-    <script src="/static/flash_experiments.js?v=44"></script>
+    <script src="/static/flash_experiments.js?v=47"></script>
     <script src="/static/flash_pipeline_settings.js?v=2"></script>
-    <script src="/static/flash_live.js?v=34"></script>
+    <script src="/static/flash_live.js?v=38"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>

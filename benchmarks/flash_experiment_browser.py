@@ -25,6 +25,7 @@ import numpy as np
 from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_flow_paths import FlowPaths
 from lerobot.gui.flash_group_overlay import GroupOverlay, SceneGroupOverlay
+from lerobot.gui.flash_live_scene import object_evidence
 from lerobot.gui.flash_pose_overlay import reference_axes
 from lerobot.policies.flash.surface_grounding import project
 from lerobot.policies.flash.surface_observation import move, spatial_sample
@@ -117,7 +118,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
     if shared:
         methods = {name: label.replace("UFM", shared["backend"].upper()) for name, label in methods.items()}
     output.mkdir(parents=True, exist_ok=True)
-    identity = hashlib.sha256((str(run) + ":schema8").encode()).hexdigest()[:20]
+    identity = hashlib.sha256((str(run) + ":schema9").encode()).hexdigest()[:20]
     destination = output / identity
     if destination.exists():
         raise FileExistsError(destination)
@@ -193,6 +194,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
                         masks[role].astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
                     )
                     posed = {}
+                    rejected_projected = {}
                     for name in methods:
                         reference = references.get(role)
                         details = row["objects"][role].get(name + "_details", {})
@@ -219,6 +221,28 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
                             if reference is not None
                             else None
                         )
+                        rejected = object_evidence(row["objects"][role], name)["rejected_poses"]
+                        if any(pose is not None for pose in rejected.values()):
+                            used = references[role]
+                            before = details.get("map_version_used")
+                            if before and name in {
+                                "conditioned_fixed",
+                                "conditioned_growing",
+                                "group_fixed",
+                                "group_growing",
+                            }:
+                                with np.load(
+                                    run / "surface_models" / name / role / f"{int(before):06d}.npz",
+                                    allow_pickle=False,
+                                ) as saved:
+                                    cloud = saved["points"]
+                                used = np.concatenate((references[role][:4], cloud))
+                            cloud = used[4:]
+                            used = np.concatenate((used[:4], cloud[spatial_sample(cloud, 500)]))
+                            rejected_projected[name] = {
+                                kind: projected_geometry(used, pose, frame.intrinsics)
+                                for kind, pose in rejected.items()
+                            }
                     objects[role] = {
                         "matches": matches,
                         "match_sources": {
@@ -233,6 +257,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
                         },
                         "mask": [c[:, 0].tolist() for c in contours if len(c) >= 3],
                         "poses": posed,
+                        "rejected_projected": rejected_projected,
                         "group_tracks": {
                             name: (
                                 row["objects"][role].get(name + "_details", {}).get("group", {})
@@ -264,7 +289,7 @@ def export(run: Path, output: Path = DEFAULT_OUTPUT, *, check_cancel=None):
         if digest.hexdigest() != summary["input_sha256"]:
             raise ValueError("source RGB-D/masks changed since this experiment; refusing misaligned playback")
         data = {
-            "schema_version": 8,
+            "schema_version": 9,
             "surface_experiment": summary.get("surface_experiment"),
             "shared_matching": shared,
             "has_correspondences": evidence_path.exists(),

@@ -40,11 +40,7 @@ def loss_reason(status, details):
     return cause
 
 
-def encode_rgbd_scene(frame, header, *, rgb_format="png"):
-    depth = frame.metric_depth()
-    depth = np.where(np.isfinite(depth) & (depth > 0), depth, 0).astype("<f4")
-    before = frame.depth_before_filters
-    before_bytes = before.astype("<u2", copy=False).tobytes() if before is not None else b""
+def encode_rgbd_image(frame, rgb_format):
     color = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
     if rgb_format == "jpeg":
         # Live camera history retains lossless RGB; this copy is only for display.
@@ -55,6 +51,16 @@ def encode_rgbd_scene(frame, header, *, rgb_format="png"):
         raise ValueError(f"Unsupported scene image format: {rgb_format}")
     if not ok:
         raise ValueError("Cannot encode RGB frame")
+    return encoded.tobytes()
+
+
+def encode_rgbd_scene(frame, header, *, rgb_format="png", encoded_rgb=None):
+    depth = frame.metric_depth()
+    depth = np.where(np.isfinite(depth) & (depth > 0), depth, 0).astype("<f4")
+    before = frame.depth_before_filters
+    before_bytes = before.astype("<u2", copy=False).tobytes() if before is not None else b""
+    if encoded_rgb is None:
+        encoded_rgb = encode_rgbd_image(frame, rgb_format)
     header = {
         **header,
         "camera": {
@@ -73,18 +79,35 @@ def encode_rgbd_scene(frame, header, *, rgb_format="png"):
         "calibration_version": frame.calibration_version,
     }
     metadata = json.dumps(header, allow_nan=False, separators=(",", ":")).encode()
-    return struct.pack("<I", len(metadata)) + metadata + depth.tobytes() + before_bytes + encoded.tobytes()
+    return struct.pack("<I", len(metadata)) + metadata + depth.tobytes() + before_bytes + encoded_rgb
 
 
 def object_evidence(result, method):
     """The same saved decision fields in video inspection and live history."""
     status = result.get(method + "_status")
     details = result.get(method + "_details", {})
+    fit = details.get("fit") or {}
+    # These are attempted poses, never published estimates. Keep the local fit
+    # separate from the fallback prediction: either may fail a different check.
+    rejected_poses = (
+        {
+            "fit": fit.get("rejected_camera_from_reference")
+            or details.get("candidate_camera_from_reference"),
+            "prediction": (
+                details.get("unpublished_camera_from_reference")
+                if (details.get("prediction_geometry") or {}).get("accepted") is False
+                else None
+            ),
+        }
+        if status == "lost"
+        else {"fit": None, "prediction": None}
+    )
     return {
         "pose": result.get(method),
         "status": status,
         "reason": loss_reason(status, details),
         "reason_code": details.get("reason") if status == "lost" else None,
+        "rejected_poses": rejected_poses,
         "diagnostics": {key: value for key, value in details.items() if key != "group"},
     }
 
@@ -110,6 +133,7 @@ def live_scene_packet(
     depth_processing=None,
     depth_source="sensor",
     rgb_format="png",
+    encoded_rgb=None,
 ):
     objects = {}
     for role, reference in live.engine.references.items():
@@ -163,4 +187,5 @@ def live_scene_packet(
             "depth_filter_revision": frame.depth_filter_revision,
         },
         rgb_format=rgb_format,
+        encoded_rgb=encoded_rgb,
     )

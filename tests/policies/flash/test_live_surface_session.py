@@ -13,7 +13,7 @@ import pytest
 
 from benchmarks.flash_tracker_experiment import run_case
 from lerobot.gui.flash_group_overlay import SceneGroupOverlay
-from lerobot.gui.flash_live_scene import live_scene_packet, loss_reason
+from lerobot.gui.flash_live_scene import live_scene_packet, loss_reason, object_evidence
 from lerobot.policies.flash.depth_enhancement import (
     DepthOutput,
     LiveDepthStream,
@@ -52,6 +52,21 @@ def test_live_loss_reports_rejected_point_group_prediction():
         "prediction_geometry": {"has_visible_overlap": False, "accepted": False},
     }
     assert loss_reason("lost", details) == "Prediction misses the visible surface"
+
+
+def test_group_vetoed_candidate_remains_visible_only_as_rejected_evidence():
+    pose = np.eye(4).tolist()
+    result = {
+        "group_growing": None,
+        "group_growing_status": "lost",
+        "group_growing_details": {
+            "reason": "surface_group_disagreement",
+            "candidate_camera_from_reference": pose,
+        },
+    }
+    evidence = object_evidence(result, "group_growing")
+    assert evidence["pose"] is None
+    assert evidence["rejected_poses"] == {"fit": pose, "prediction": None}
 
 
 def test_live_startup_heap_excludes_imports_without_disabling_new_cycle_collection():
@@ -383,14 +398,14 @@ def test_saved_camera_history_replays_through_the_live_frame_session(tmp_path, m
 def test_learned_depth_runs_on_camera_frames_without_an_object_tracker():
     camera = LatestRGBDFrameStore()
     stop = Event()
-    calls = []
+    calls, completed = [], []
 
     class Depth:
         def predict(self, incoming):
             calls.append(float(incoming.sensor_depth_m[0, 0]))
             return DepthOutput(incoming.sensor_depth_m + 0.002, "fixture", incoming.sensor_depth_m > 0)
 
-    stream = LiveDepthStream(camera, Depth(), None, stop)
+    stream = LiveDepthStream(camera, Depth(), None, stop, on_result=completed.append)
     stream.start()
     try:
         for index in (7, 8):
@@ -407,11 +422,27 @@ def test_learned_depth_runs_on_camera_frames_without_an_object_tracker():
             np.testing.assert_array_equal(selected.depth, raw.depth + 2)
             np.testing.assert_array_equal(selected.depth_before_filters, raw.depth)
             assert depth_ms >= 0
+        deadline = monotonic() + 2
+        while len(completed) < 2 and monotonic() < deadline:
+            sleep(0.005)
         assert len(calls) == 2
+        assert [result.frame_id for result in completed] == [7, 8]
+        np.testing.assert_array_equal(completed[-1].depth, frame(8).depth + 2)
         assert stream.error is None
     finally:
         stop.set()
         stream.join(2)
+
+
+def test_prefit_and_finished_live_packets_can_share_one_encoded_image():
+    from lerobot.gui.flash_live_scene import encode_rgbd_image, encode_rgbd_scene
+
+    measured = frame(6)
+    header = {"frame": 6, "objects": {}, "scene_group_tracks": []}
+    encoded = encode_rgbd_image(measured, "jpeg")
+    assert encode_rgbd_scene(measured, header, rgb_format="jpeg", encoded_rgb=encoded) == (
+        encode_rgbd_scene(measured, header, rgb_format="jpeg")
+    )
 
 
 def test_live_and_recorded_depth_selection_preserve_camera_measurement():

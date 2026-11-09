@@ -313,3 +313,20 @@ async def experiment_scene(identity: str, frame: int, method: str):
     async with _scene_gate:
         data = await asyncio.get_running_loop().run_in_executor(_scenes, _scene, identity, frame, method)
     return Response(data, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
+
+
+def _rejected_overlay(identity: str, frame: int, method: str):
+    from lerobot.gui.flash_experiment_scene import rejected_overlay
+
+    manifest = json.loads(_asset(identity, "manifest.json").read_text())
+    try:
+        return rejected_overlay(manifest, frame, method)
+    except (OSError, ValueError, IndexError, KeyError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/{identity}/rejected/{frame}")
+async def experiment_rejected_overlay(identity: str, frame: int, method: str):
+    return await asyncio.get_running_loop().run_in_executor(
+        _scenes, partial(_rejected_overlay, identity, frame, method)
+    )

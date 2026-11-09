@@ -9,6 +9,7 @@ from dataclasses import replace
 from threading import Event
 
 import numpy as np
+import pytest
 
 from benchmarks.flash_experiment_inputs import decode_mask
 from lerobot.gui.flash_live_scene import encode_rgbd_scene, frame_evidence
@@ -233,6 +234,91 @@ def test_model_depth_and_stereo_pair_stay_separate_from_raw_camera_record(tmp_pa
     )
     assert "observation.images.camera_infrared_left" in dataset.meta.video_keys
     assert "observation.images.camera_infrared_right" in dataset.meta.video_keys
+
+
+def test_variable_rate_processed_frames_keep_source_ids_depth_and_sam_together(tmp_path, monkeypatch):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    clock = iter([10.07, 10.26, 10.31])
+    history = new_history(tmp_path / "recent")
+    captures = [replace(frame(i), source_time_s=10 + i / 30, available_time_s=10 + i / 30) for i in range(3)]
+    for captured in captures:
+        history.submit_frame(captured)
+    history.queue.join()
+    first_model = replace(captures[0], depth=captures[0].depth.copy() + 3)
+    last_model = replace(captures[2], depth=captures[2].depth.copy() + 5)
+    mask = np.zeros(captures[2].depth.shape, bool)
+    mask[10:20, 30:40] = True
+    with monkeypatch.context() as patch:
+        patch.setattr("lerobot.policies.flash.tracking_history.time.perf_counter", lambda: next(clock))
+        history.attach_processed_frame(first_model, "foundation_stereo")
+        history.attach_processed_frame(last_model, "foundation_stereo", complete=False)
+        history.attach_processed_frame(last_model, "foundation_stereo", masks={"cube": mask})
+    history.queue.join()
+    history.close()
+
+    rows = read_index(history.directory)["frames"]
+    assert [r["frame"] for r in rows] == [0, 1, 2]
+    assert [r["frame"] for r in rows if "processed_depth_source" in r] == [0, 2]
+    assert rows[2]["sam_ready_time_s"] == 10.31
+    assert rows[2]["processed_ready_time_s"] == 10.31
+    for i in (0, 2):
+        captured_packet = read_packet(history.directory, i)
+        n = struct.unpack("<I", captured_packet[:4])[0]
+        header = json.loads(captured_packet[4 : 4 + n])
+        assert header["depth_source"] == "sensor"  # Raw camera provenance is unchanged.
+        assert header["processed_depth_source"] == "foundation_stereo"
+        assert header["model_depth_bytes"] == captures[i].depth.size * 4
+        restored, masks, _, _ = decode_record(captured_packet)
+        np.testing.assert_array_equal(restored.depth, captures[i].depth)
+        if i == 2:
+            np.testing.assert_array_equal(masks["cube"], mask)
+    from lerobot.policies.flash.tracking_history import read_processed_frame
+
+    recent_processed = read_processed_frame(history.directory, 2)
+    with pytest.raises(FileNotFoundError):
+        read_processed_frame(history.directory, 1)
+    header_size = struct.unpack("<I", recent_processed[:4])[0]
+    recent_header = json.loads(recent_processed[4 : 4 + header_size])
+    assert recent_header["source_frame_id"] == 2
+    assert recent_header["masks_rle"]
+    np.testing.assert_array_equal(
+        np.frombuffer(recent_processed[4 + header_size :], "<f4").reshape(mask.shape),
+        last_model.metric_depth(),
+    )
+    unprocessed = read_packet(history.directory, 1)
+    n = struct.unpack("<I", unprocessed[:4])[0]
+    assert "model_depth_bytes" not in json.loads(unprocessed[4 : 4 + n])
+
+    # The fit completes after depth and SAM. A replay must not show it early.
+    recent_directory = history.directory
+    with monkeypatch.context() as patch:
+        patch.setattr("lerobot.policies.flash.tracking_history.time.perf_counter", lambda: 10.41)
+        tracking_history = new_history(tmp_path / "tracking")
+        tracking_history.submit_frame(captures[2])
+        tracking_history.queue.join()
+        tracking_history.attach_processed_frame(captures[2], "sensor")
+        tracking_history.attach_result(packet(2))
+        tracking_history.queue.join()
+        tracking_history.close()
+    assert read_index(tracking_history.directory)["frames"][0]["tracking_ready_time_s"] == 10.41
+
+    saved = tmp_path / save_window(recent_directory, tmp_path)
+    assert read_processed_frame(saved, 2) == recent_processed
+    episode = export_episode(saved)
+    processed = json.loads((episode / "flash" / "v1" / "processed_frames.json").read_text())["frames"]
+    assert [r["episode_index"] for r in processed] == [0, 2]
+    assert [r["source_time_s"] for r in processed] == [10.0, 10 + 2 / 30]
+    assert [r["depth_ready_time_s"] for r in processed] == [10.07, 10.26]
+    assert processed[1]["sam_ready_time_s"] == 10.31
+    assert (episode / "flash" / "v1" / processed[1]["depth_file"]).is_file()
+    assert (episode / "flash" / "v1" / processed[1]["mask_file"]).is_file()
+    dataset = LeRobotDataset(f"local/flash-{saved.name}", root=episode, local_files_only=True)
+    assert float(dataset[2]["timestamp"]) == pytest.approx(2 / dataset.fps)
+    assert np.asarray(dataset[1]["observation.images.camera_depth_model"]).max() == 0
+    np.testing.assert_array_equal(
+        np.asarray(dataset[2]["observation.images.camera_depth_model"])[0], last_model.depth
+    )
 
 
 def test_saved_window_exports_a_lerobot_episode_with_depth_and_tracking(tmp_path, monkeypatch):
