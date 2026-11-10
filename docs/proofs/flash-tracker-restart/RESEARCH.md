@@ -4825,7 +4825,8 @@ FLASH cache. Initialization predates the rolling window, so starting a new
 tracker at its first frame would not reproduce this live state. The
 [compact decision evidence](controller-recovery-20261110/followup.json) retains
 frame IDs and times relative to the retained window. The remaining recovery
-problem is tracked in [issue #272](https://github.com/TheWisp/lerobot/issues/272).
+problem is tracked in the branch-local `LOCAL_FLASH_TRACKER_TODO.md` under
+“2026-11-10 — checkpoint and remaining controller recovery delay”.
 The checkpoint preserves the improved defaults without further loosening
 geometry or adding another search loop.
 

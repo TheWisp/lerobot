@@ -25,7 +25,7 @@
     "No independent pose ground truth; passing geometry does not prove the pose correct.",
     "The recording does not establish whether physical movement was necessary for recovery."
   ],
-  "issue": "https://github.com/TheWisp/lerobot/issues/272",
+  "branch_todo": "LOCAL_FLASH_TRACKER_TODO.md: 2026-11-10 — checkpoint and remaining controller recovery delay",
   "frames": [
     {"frame": 219, "seconds_from_retained_window_start": 0.0, "status": "observed_candidate", "reason": null, "geometry_accepted": true, "surface_median_mm": 1.1523093255851231, "innovation_squared": 0.0006275340019205363, "innovation_limit": 12.591587243743977, "motion_source": null, "fit_seed_source": "object_matches", "image_pairs": 75, "rotation_innovation_deg": 0.11941011092732393, "prior_rotation_std_deg": [4.266967795559969, 4.5821172337490585, 4.3010698117197945]},
     {"frame": 224, "seconds_from_retained_window_start": 0.167, "status": "observed_candidate", "reason": null, "geometry_accepted": true, "surface_median_mm": 1.151912393184387, "innovation_squared": 0.003586008191569085, "innovation_limit": 12.591587243743977, "motion_source": "scene_group:0", "fit_seed_source": "object_matches", "image_pairs": 75, "rotation_innovation_deg": 0.18209040666374637, "prior_rotation_std_deg": [1.9109716300720374, 2.559009069497175, 2.028797544068744]},
