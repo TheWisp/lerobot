@@ -575,6 +575,73 @@ def test_growth_requires_stronger_overlap_before_addition_and_confirmation():
     assert store.points[:, 2].max() > 1.01
 
 
+def test_local_growth_keeps_supported_new_cells_when_unrelated_points_lower_global_overlap(monkeypatch):
+    spacing = 0.003
+    x, y = np.meshgrid(np.arange(21), np.arange(10))
+    cloud = np.column_stack(
+        ((x.ravel() + 0.25) * spacing, (y.ravel() + 0.25) * spacing, np.full(x.size, 0.3))
+    )
+    cloud[x.ravel() == 20, 0] += 0.0005  # New geometry beyond the 3 mm agreement tolerance.
+    old = cloud[x.ravel() < 20]
+    extension = cloud[x.ravel() == 20]
+    unrelated = old + [0, 0, 0.05]
+    measured = np.concatenate((old, extension, unrelated))
+    default = SurfaceStore(GrowingSurfaceConfig(spacing_m=spacing))
+    default.add(old, np.eye(4), 0, active=True)
+    default_result = default.extend(measured, np.eye(4), 1, view=None)
+    assert not default_result["alignment_accepted"]
+    assert default_result["growth_mode"] == "off"
+    assert 1 not in default.patches
+    store = SurfaceStore(GrowingSurfaceConfig(spacing_m=spacing, local_growth_enabled=True))
+    store.add(old, np.eye(4), 0, active=True)
+    # Simulate a retained view vetoing two otherwise supported edge points.
+    monkeypatch.setattr(
+        store,
+        "compatible_additions",
+        lambda novel, pose: ~((novel[:, 0] == extension[0, 0]) & (novel[:, 1] < extension[2, 1])),
+    )
+    first = store.extend(measured, np.eye(4), 1, view=None)
+    assert first["observed_overlap"] < store.config.growth_min_overlap
+    assert first["growth_mode"] == "local"
+    assert first["admitted_points"] > 0
+    assert first["contradicted_by_retained_views"] == 2
+    assert not store.patches[1].active
+    assert not np.any(store.patches[1].measured[:, 1] < extension[2, 1])
+    np.testing.assert_array_equal(store.points, old)
+    second = store.extend(measured, np.eye(4), 2, view=None)
+    assert second["growth_mode"] == "local"
+    assert store.patches[1].active
+    assert len(store.points) > len(old)
+    assert np.max(store.points[:, 2]) == pytest.approx(0.3)  # Distant cloud was never added.
+
+
+def test_local_growth_does_not_store_a_whole_surface_shifted_beyond_noise_tolerance():
+    old = points()
+    store = SurfaceStore(GrowingSurfaceConfig(local_growth_enabled=True))
+    store.add(old, np.eye(4), 0, active=True)
+    first = store.extend(old + [0, 0, 0.004], np.eye(4), 1, view=None)
+    assert first["reason"] == "insufficient_growth_overlap"
+    assert first["admitted_points"] == 0
+    assert 1 not in store.patches
+    np.testing.assert_array_equal(store.points, old)
+
+
+def test_local_growth_does_not_duplicate_an_already_projected_face():
+    old = points()
+    shifted_readings = old[:12] + [0, 0, 0.004]
+    distant_readings = old + [0, 0, 0.05]
+    measured = np.concatenate((old, shifted_readings, distant_readings))
+    store = SurfaceStore(GrowingSurfaceConfig(local_growth_enabled=True))
+    store.add(old, np.eye(4), 0, active=True)
+    intrinsics = np.array([[600.0, 0, 320.0], [0, 600.0, 240.0], [0, 0, 1.0]])
+    view = SurfaceView(np.zeros((480, 640)), np.zeros((480, 640), dtype=bool), intrinsics, 0.005)
+    result = store.extend(measured, np.eye(4), 1, view=view)
+    assert result["growth_mode"] == "local"
+    assert result["admitted_points"] == 0
+    assert 1 not in store.patches
+    np.testing.assert_array_equal(store.points, old)
+
+
 @pytest.mark.parametrize("distance,fraction", [(0.004, 1.0), (0.0, 0.6)])
 def test_patch_confirmation_has_its_own_tighter_distance_and_fraction(distance, fraction):
     patch = points()

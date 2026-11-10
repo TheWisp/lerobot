@@ -287,7 +287,14 @@ class SurfaceFrameSession:
         scene_tracker = ScenePointTracker() if group_experiment is not None and shared is None else None
         scene_groups = SceneMotionGroups(group_experiment) if group_experiment is not None else None
         sources: dict[str, dict[str, ObjectMotionSource]] = {
-            name: {role: ObjectGroupAssociation(scene_groups.config) for role in sessions}
+            name: {
+                role: ObjectGroupAssociation(
+                    scene_groups.config,
+                    point_evidence_weight=surface_experiment.group_point_evidence_weight,
+                    min_association_points=surface_experiment.group_association_min_points,
+                )
+                for role in sessions
+            }
             for name in candidates
             if name.startswith("group_")
         }

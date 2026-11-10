@@ -1,0 +1,370 @@
+{
+  "date": "2026-11-10",
+  "clip": "saved-60474f8f3b9f4dde84e16324beda6854",
+  "source": "Recorded RGB, selected Fast-FoundationStereo metric depth, saved SAM masks; shared LK/groups/small_gicp rerun from initialization",
+  "baseline": {
+    "clip": "saved-60474f8f3b9f4dde84e16324beda6854",
+    "frames": 170,
+    "observed": 71,
+    "recorded_observed": 71,
+    "predicted": 1,
+    "lost": 98,
+    "status_matches_recorded": 170,
+    "processing_ms_mean": 56.98654791888069,
+    "processing_ms_p99": 71.45330817555077,
+    "wall_s": 13.183739218045957,
+    "overrides": []
+  },
+  "trial": {
+    "clip": "saved-60474f8f3b9f4dde84e16324beda6854",
+    "frames": 170,
+    "observed": 167,
+    "recorded_observed": 71,
+    "predicted": 0,
+    "lost": 3,
+    "status_matches_recorded": 74,
+    "processing_ms_mean": 64.07911577193505,
+    "processing_ms_p99": 122.4431271885991,
+    "wall_s": 14.373566947993822,
+    "overrides": [
+      "surface_experiment.uncertainty.unmeasured_rotation_std_deg_sqrt_s=10"
+    ]
+  },
+  "repeated_trial_audit": {
+    "observed": 168,
+    "lost": 2,
+    "published_post_initialization": 167,
+    "published_geometry_failures": 0
+  },
+  "video_audit": {
+    "observed": 167,
+    "lost": 3,
+    "loss_frames": [
+      750,
+      991,
+      1003
+    ],
+    "published_surface_error_median_mm": 1.1910794088677656,
+    "published_surface_error_max_mm": 1.3004742429798046
+  },
+  "new_defaults": {
+    "surface_experiment.uncertainty.unmeasured_rotation_std_deg_sqrt_s": 10,
+    "config.shape.free_space_min_supports": 3
+  },
+  "limits": [
+    "Availability is not independent accuracy; no pose ground truth for this clip. Representative overlays visually checked; depth evidence tested independently with rendered and recorded controls.",
+    "Replay reuses depth/masks. Timing excludes camera, depth inference, and SAM.",
+    "Parallel numeric fitting produces 2\u20133 isolated dropout frames across repeats; count is not a bit-exact regression assertion.",
+    "Full clip stays in cache. The committed checkpoint tests fitting, Kalman, final geometry and publication without rerunning segmentation/groups."
+  ],
+  "dropouts": [
+    {
+      "frame": 750,
+      "reason": "no_observation_compatible_candidate",
+      "check": {
+        "scene_depth_outlier_fraction": 0.020417230745209666,
+        "scene_depth_exposed_weights": [
+          306.5830972205308,
+          1676.0744927032256
+        ],
+        "scene_depth_coherent_protrusion": true,
+        "scene_depth_views": [
+          {
+            "frame_id": 750,
+            "direction": "map_to_current",
+            "outlier_fraction": 0.020417230745209666,
+            "coherent_protrusion": false
+          },
+          {
+            "frame_id": 743,
+            "direction": "current_to_retained",
+            "outlier_fraction": 0.005369689735856858,
+            "coherent_protrusion": true
+          }
+        ],
+        "accepted": false,
+        "geometry_accepted": false,
+        "observed_overlap": 0.0,
+        "observed_overlap_basis": "not_tested_after_protrusion",
+        "surface_median_mm": null
+      },
+      "contradictions": [
+        {
+          "retained": false,
+          "frame": 750,
+          "contradictions": 4,
+          "free_beyond_tolerance_mm": [
+            5.058013719400516,
+            3.771080140860699,
+            1.212210634662044,
+            5.316979601112775
+          ],
+          "uv": [
+            [
+              618.8172628153912,
+              466.5733667421462
+            ],
+            [
+              616.8198049277937,
+              465.9332670221103
+            ],
+            [
+              615.198482734173,
+              465.6502990985751
+            ],
+            [
+              621.7076515736826,
+              467.67016076328287
+            ]
+          ],
+          "coherent": false
+        },
+        {
+          "retained": true,
+          "frame": 743,
+          "contradictions": 9,
+          "free_beyond_tolerance_mm": [
+            0.4423389980215661,
+            0.2954042757307195,
+            0.2863322762131125,
+            5.318635238501128,
+            2.2529255546499583,
+            1.2278398149124836,
+            3.923585396856148,
+            3.3202702099872683,
+            1.1523361092424382
+          ],
+          "uv": [
+            [
+              556.1743853205345,
+              547.9693972072923
+            ],
+            [
+              553.6735325131999,
+              551.6297929140783
+            ],
+            [
+              553.5412957436065,
+              552.6172224182856
+            ],
+            [
+              552.9489674433253,
+              554.0276450788895
+            ],
+            [
+              552.5197254211437,
+              558.7509861718074
+            ],
+            [
+              552.3318265968936,
+              560.6548207947023
+            ],
+            [
+              555.9117273701665,
+              562.4371142880218
+            ],
+            [
+              555.7794260698287,
+              563.4243898512142
+            ],
+            [
+              563.6178428797862,
+              573.4822302537121
+            ]
+          ],
+          "coherent": true
+        }
+      ]
+    },
+    {
+      "frame": 991,
+      "reason": "fused_pose_contradicts_observation",
+      "check": {
+        "scene_depth_outlier_fraction": 0.01604825608773302,
+        "scene_depth_exposed_weights": [
+          428.2955296789818,
+          2213.9966463042124
+        ],
+        "scene_depth_coherent_protrusion": true,
+        "scene_depth_views": [
+          {
+            "frame_id": 991,
+            "direction": "map_to_current",
+            "outlier_fraction": 0.01604825608773302,
+            "coherent_protrusion": true
+          },
+          {
+            "frame_id": 984,
+            "direction": "current_to_retained",
+            "outlier_fraction": 0.0,
+            "coherent_protrusion": false
+          }
+        ],
+        "accepted": false,
+        "geometry_accepted": false,
+        "observed_overlap": 0.0,
+        "observed_overlap_basis": "not_tested_after_protrusion",
+        "surface_median_mm": null
+      },
+      "contradictions": [
+        {
+          "retained": false,
+          "frame": 991,
+          "contradictions": 5,
+          "free_beyond_tolerance_mm": [
+            4.70084719661851,
+            5.463489006892812,
+            4.563273943329397,
+            5.131858524715946,
+            0.951933852710478
+          ],
+          "uv": [
+            [
+              575.4794952561685,
+              564.4029815490926
+            ],
+            [
+              694.6432994066732,
+              490.8411194892507
+            ],
+            [
+              581.9381008349634,
+              541.9419770272336
+            ],
+            [
+              573.6620897999505,
+              566.1099531543955
+            ],
+            [
+              574.6938073995393,
+              564.0044757666426
+            ]
+          ],
+          "coherent": true
+        },
+        {
+          "retained": true,
+          "frame": 984,
+          "contradictions": 0,
+          "free_beyond_tolerance_mm": [],
+          "uv": [],
+          "coherent": false
+        }
+      ]
+    },
+    {
+      "frame": 1003,
+      "reason": "fused_pose_contradicts_observation",
+      "check": {
+        "scene_depth_outlier_fraction": 0.03823136483714891,
+        "scene_depth_exposed_weights": [
+          442.7910601589641,
+          2299.3627475116054
+        ],
+        "scene_depth_coherent_protrusion": true,
+        "scene_depth_views": [
+          {
+            "frame_id": 1003,
+            "direction": "map_to_current",
+            "outlier_fraction": 0.03823136483714891,
+            "coherent_protrusion": true
+          },
+          {
+            "frame_id": 997,
+            "direction": "current_to_retained",
+            "outlier_fraction": 0.0008698062113794012,
+            "coherent_protrusion": false
+          }
+        ],
+        "accepted": false,
+        "geometry_accepted": false,
+        "observed_overlap": 0.0,
+        "observed_overlap_basis": "not_tested_after_protrusion",
+        "surface_median_mm": null
+      },
+      "contradictions": [
+        {
+          "retained": false,
+          "frame": 1003,
+          "contradictions": 10,
+          "free_beyond_tolerance_mm": [
+            5.365532016490597,
+            6.384707485753154,
+            6.144382050588431,
+            4.135033741395847,
+            0.07890890627049607,
+            5.056389236485885,
+            4.91752568499038,
+            3.541856700076599,
+            5.663587876517499,
+            1.1425871176171316
+          ],
+          "uv": [
+            [
+              590.2643326870315,
+              562.8574017579483
+            ],
+            [
+              591.1247313156346,
+              563.5529297106159
+            ],
+            [
+              640.4118983816436,
+              440.18485144783756
+            ],
+            [
+              641.5027970840054,
+              440.4032859172063
+            ],
+            [
+              591.3762069774046,
+              562.9278137692606
+            ],
+            [
+              593.9797574587867,
+              539.9059339615876
+            ],
+            [
+              588.6680898680372,
+              564.7480277327144
+            ],
+            [
+              591.090970294245,
+              568.75624654327
+            ],
+            [
+              634.2426607726321,
+              440.74301727165454
+            ],
+            [
+              589.3976127042268,
+              562.7624490890606
+            ]
+          ],
+          "coherent": true
+        },
+        {
+          "retained": true,
+          "frame": 997,
+          "contradictions": 2,
+          "free_beyond_tolerance_mm": [
+            0.8338946313214456,
+            1.8254155594607013
+          ],
+          "uv": [
+            [
+              654.9679654133305,
+              592.8963028851135
+            ],
+            [
+              654.897409774164,
+              594.9289964656692
+            ]
+          ],
+          "coherent": false
+        }
+      ]
+    }
+  ],
+  "fixture_sha256": "f075aaa38de327c1589e4988baaf7087069ee9848b852b00b4b8bbb1ba0d49a7"
+}

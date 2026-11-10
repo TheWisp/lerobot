@@ -106,6 +106,27 @@ def test_the_first_frame_is_a_keyframe(server):
         assert types[0] == 9, (cam, types)  # the access-unit delimiter the page splits on
 
 
+def test_native_chunks_decode_at_each_cameras_stored_size(server):
+    import gzip
+    import json
+
+    r = _get(server, 0, 0, "native")
+    assert r.status_code == 200, r.text
+    _, parts = parse_chunk(r.content)
+    for cam in CAMS:
+        part, data = parts[("video", cam)]
+        decoded = decode_h264(data)
+        assert decoded[0].shape[:2] == SIZES[cam]
+        assert frame_ids(decoded) == [(n, 0) for n in range(CHUNK_FRAMES)]
+        # Decoder configuration comes from the encoded stream's SPS, rather
+        # than assuming low-bandwidth video's H.264 level for native video.
+        sps = data.index(b"\x00\x00\x01\x67")
+        assert part["codec_string"] == "avc1." + data[sps + 4 : sps + 7].hex()
+    part, masks = parts[("masks", CAM_WIDE)]
+    assert part["size"] == list(SIZES[CAM_WIDE])
+    assert len(json.loads(gzip.decompress(masks))) == CHUNK_FRAMES
+
+
 def test_a_chunk_past_the_last_frame_is_short_not_wrong(server):
     """The last chunk of an episode is partial. The next episode's frames sit in
     the same file right after it, and must not be served as this episode's."""

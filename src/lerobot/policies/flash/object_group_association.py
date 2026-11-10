@@ -37,8 +37,10 @@ class ObjectGroupAssociation:
     fitted object pose. All writes here belong to the object association only.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, *, point_evidence_weight=1.0, min_association_points=12):
         self.config = config
+        self.point_evidence_weight = point_evidence_weight
+        self.min_association_points = min_association_points
         self.anchors = {}
         self.reference = None
         self.reference_frame = None
@@ -73,26 +75,24 @@ class ObjectGroupAssociation:
             # Re-fitting this relation from whichever few points happen to be
             # visible would move the object even when the group did not move.
             relation = self._group_from_reference if gid == self._group else None
-            # Prefer identities currently observed on the object. Historical
-            # members can establish the initial association during hiding, but
-            # cannot outvote freshly measured object points after separation.
+            # A new relation requires measured identities on the object now.
+            # Once established, its fixed transform can survive full occlusion.
             visible_known = [j for j in known if group.measured[j] and int(group.ids[j]) in own_now]
-            minimum = self.config.min_inliers
-            # If enough previously anchored object points are measured now,
-            # their group membership is direct evidence against an old scene
-            # relation. Do not carry that relation from its surrounding body
-            # once most of the object's measured points have separated. With
-            # no measured object points, keep the relation for occlusion.
-            if len(measured_known_own) >= minimum and 2 * len(visible_known) < len(measured_known_own):
+            minimum = self.min_association_points
+            # Measured membership that has separated contradicts the old
+            # relation even when only a small part of the object is visible.
+            # The scene group already required sustained 3D disagreement before
+            # releasing each point. With none measured, retain the relation
+            # for occlusion instead of treating hidden points as new evidence.
+            if measured_known_own and 2 * len(visible_known) < len(measured_known_own):
                 if gid == self._group:
                     self._group = self._group_from_reference = None
                     details["group_id"] = None
                     details["association_contradiction"] = "visible_object_points_separated"
                 continue
-            binding = visible_known if len(visible_known) >= minimum else known
-            if relation is None and len(binding) >= minimum:
-                a = np.array([self.anchors[int(group.ids[j])] for j in binding])
-                b = group.local_xyz[binding]
+            if relation is None and len(visible_known) >= minimum:
+                a = np.array([self.anchors[int(group.ids[j])] for j in visible_known])
+                b = group.local_xyz[visible_known]
                 fitted = fit_point_motion(a, b, self.config)
                 if fitted is not None:
                     relation = fitted[0]
@@ -119,7 +119,7 @@ class ObjectGroupAssociation:
             source,
             "predicted",
             max(self.config.fit_threshold_m, group.residual_m),
-            self.config.point_evidence_weight,
+            self.point_evidence_weight,
         )
         motion = None
         if group.from_time_s is not None and len(group.previous_measured) >= self.config.min_inliers:

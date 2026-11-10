@@ -177,7 +177,7 @@ residual-array layout and the uncertainty switch. Rechecking a Kalman-adjusted
 pose is necessary because fusion changes its position/orientation.
 
 **Acceptance and optimization have different jobs.** A returned measured pose
-must pass the geometry checks: no coherent protrusion into measured empty space,
+must pass the geometry checks: no supported protrusion into measured empty space,
 and agreement where the two measured surfaces are mutually visible, within the
 configured depth/boundary uncertainty. The retained depth view vetoes only
 current surface that lies beyond the saved surface under the tested pose: a
@@ -193,11 +193,13 @@ pose passes, return no measured pose. These rules are exercised with real RGB-D
 checks in [matching criteria tests](../../../../../tests/policies/flash/test_matching_criteria.py),
 including a better texture score attached to an impossible pose.
 
-**Surface fitting:** the default `visible_icp` solver refreshes visible point
-correspondences and applies one weighted rigid update per iteration. Array and
-compiled operations perform transforms, nearest-neighbour queries and SVD.
-`shape.max_evaluations` caps iterations of the single fit; `solver_tolerance` stops small
-updates. There is no second correction loop or numerical six-axis Jacobian.
+**Surface fitting:** fresh live and video sessions use `small_gicp` with shared
+LK image matching. Each configured resolution uses a point-to-point warm start
+followed by GICP. `shape.max_evaluations` caps the total iterations, including
+the warm start; `registration.iterations_per_level` bounds each resolution.
+Translation and rotation convergence tolerances can stop a solve earlier.
+The selectable `visible_icp` solver instead applies one weighted rigid update
+per iteration. There is no outer restart search.
 
 The surface fitter starts from the image/group motion proposal and does not
 restart the fit from the previous pose or coarse orientations. It keeps the
@@ -212,7 +214,7 @@ Both use `SurfaceFrameSession`; the retired editor and separate camera tracker
 are no longer GUI entry points. The robot compiler/execution APIs are retained
 for research, not exposed as a third inspector.
 
-Pipeline settings also retain small_gicp and Open3D as explicit comparison
+Pipeline settings also retain Surface fit and Open3D as explicit comparison
 solvers. They use the same geometry checks, but different numerical objectives.
 Open3D still misses the 5 mm limit in recorded gamepad placement tests; it is not
 the default. Hidden surface points must not be paired with a visible front face.
@@ -238,10 +240,19 @@ alone cannot establish a pose or a contradiction. The configurable
 `prefer_observed_overlap` cost favors alignment with measured surface over
 hiding the reference; it does not require unseen surface to exist.
 Projected saved surface outside measured object pixels remains subject to depth
-and mask checks. A connected patch in measured empty space is rejected even
-below the global outlier allowance, including inside the mask.
-`scene_depth_constraints` controls an additional search cost; rejection always runs. This check depends on surface sampling; small or
-sparse conflicts can escape it. Isolated contradictions remain tolerable.
+and mask checks. A broad connected protrusion or `free_space_min_supports`
+separate small patches in measured empty space rejects even below the global
+outlier allowance, including inside the mask. The default is three patches.
+Each hard-veto sample requires its entire interpolated depth footprint to
+contradict the pose beyond `depth_tolerance_m`. The conservative depth minimum
+protects holes, withheld boundary readings and nearer occluders. Nearby samples
+are grouped using the existing projected surface-spacing/boundary footprint;
+densifying one small erroneous patch cannot turn it into several independent
+contradictions. A single patch wider than twice that footprint rejects on its
+own. `scene_depth_constraints` controls an additional search cost; rejection
+always runs, before and after Kalman. Small isolated contradictions below the
+configured support requirement remain tolerable; unrepresented surface cannot
+be checked. This rule does not prove a pose correct.
 No scene name or grasp timing selects these rules.
 The recorded gamepad regression checks approach occlusion and subsequent
 pickup; it does not establish accuracy throughout manipulation.
@@ -249,6 +260,12 @@ pickup; it does not establish accuracy throughout manipulation.
 ## Scene groups and object association
 
 Group membership belongs to the scene, independent of which objects are selected.
+The group state machine consumes only timestamped point IDs and measured 3D
+positions. The shared image matcher currently reserves extra sample points
+inside selected masks; these improve small-object coverage but make the _input
+sampling_ selection-dependent. They do not supply labels, ownership, object
+poses, or feedback to group updates. This distinction matters when comparing
+group results across different object selections.
 
 ```text
 Shared image matches + reliable depth → measured 3D point IDs
@@ -266,12 +283,18 @@ Current mask + depth + stored surface → surface fit + Kalman → pose
 - Each group stores point IDs, fixed group-local positions and its current rigid
   transform. Visible measured members update that transform; hidden members keep
   predicted positions. Predictions never become measurements.
-- A measured departure beyond the configured tolerance separates immediately.
+- A measured departure beyond the configured tolerance separates after the
+  configured short confirmation time. One departing point does not need a
+  quorum of other departing points. Forming a new group requires the larger
+  new-group consensus; updating an existing group needs fewer visible members.
   Groups merge after sustained relative agreement, not proximity or object labels.
 - The object association identifies which groups contain its measured points.
   It can initialize/reseed object coordinates from an accepted observation. It
   cannot modify group membership, motion, or point history. Later fitted poses
-  can identify new points but do not move the existing point anchors.
+  can identify new points but do not move the existing point anchors. A new
+  association requires enough currently measured object point IDs in that
+  group. A valid existing association can carry through full occlusion; once
+  measured separation breaks it, old IDs alone cannot recreate it.
 - The fitter consumes the generic `PoseHint` / `PointEvidence` interface. Its
   geometry checks can withhold a pose, but cannot delete groups. Group predictions
   contain no new measurements for surface growth.
@@ -307,15 +330,23 @@ make the next fit look good simply because it matches its own wrong placement.
 This check reduces one source of circular evidence; it does not prove correctness.
 
 Tracking and surface growth have separate thresholds. Tracking requires 25% of
-the observed points within 5 mm of the stored surface. Growth requires 75% within
-3 mm **before either adding a patch or confirming an earlier pending patch**.
-At least 95% of a proposed addition must avoid contradicting retained depth images
-and masks; 80% of its points must then be measured again within 3 mm in a later
-frame. Every threshold is configurable in `surface_experiment`; growth cannot be
-configured to require less overlap or a larger match distance than tracking.
-These are conservative experiment defaults, not measured confidence. They can
-defer legitimate growth when the newly visible area is large. Initializing the
-first partial surface necessarily has no older surface to compare with.
+the observed points within 5 mm of the stored surface. Default growth requires
+75% within 3 mm **before either adding a patch or confirming an earlier pending
+patch**. At least 95% of a proposed addition must avoid contradicting retained
+depth images and masks; 80% of its points must then be measured again within
+3 mm in a later frame. These thresholds are assumptions, not measured confidence.
+They can defer legitimate growth when the newly visible area is large.
+
+The opt-in `local_growth_enabled` experiment allows a part of the current
+measurement to grow when broad overlap fails. A candidate must have at least
+three agreeing current points in a four-voxel neighborhood, at least 50% of
+that neighborhood must agree with the active map, and the candidate must lie
+beyond both the 3 mm map agreement range and a one-voxel projected image
+footprint. Retained views veto conflicting cells individually. The surviving
+patch still needs later confirmation. This admitted 30 additional candidate
+points on the saved cube replay, but also produced a later 206 mm / 35° pose
+jump in one run; it is not enabled by default. Initializing the first partial
+surface has no older surface to compare with.
 
 The retained-view check projects a proposed addition into earlier camera views.
 It rejects points in space that their depth/masks showed was empty. Points behind
@@ -367,6 +398,21 @@ prediction advances the previous **corrected** estimate; it does not restore an
 older absolute group pose. With no observation, only prediction runs and its
 covariance grows. No measured motion means a stationary-world prediction,
 compensated for known camera motion, with increasing uncertainty.
+
+`unmeasured_rotation_std_deg_sqrt_s` sets a larger rotation process-noise
+floor when no usable measured group motion advanced the filter, including a
+rank-deficient group-motion estimate. This uncertainty is added before fitting,
+in proportion to elapsed time; it does not depend on the candidate or whether
+the prior fails geometry. Measured group motion retains the ordinary process
+noise. Fresh shared sessions use 10°/√s; explicit `null` in recorded settings
+preserves the ordinary setting. This models
+unobserved movement, not observation confidence: a weak surface still supplies
+weak information, and innovation rejection and final geometry checks still run.
+The floor represents a motion assumption, not calibrated sensor uncertainty.
+Increasing it lets observations correct more readily but also gives a plausible
+wrong alignment more influence. Reliable empty-space rejection therefore applies
+to both the fitted and fused pose; neither can be published solely because the
+innovation test passed.
 
 The correction uses inverse covariance as directional weight. Its compatibility
 test uses the sum of prediction and observation covariance. If current depth and

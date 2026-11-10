@@ -78,6 +78,56 @@ def test_scene_has_groups_without_any_selected_object():
     np.testing.assert_allclose(group.base_xyz, move(points, delta(20, (0.05, 0, 0))), atol=1e-10)
 
 
+def test_object_queries_and_rejected_pose_cannot_change_future_scene_groups():
+    points = cloud()
+    config = GroupConfig(support_confirmation_s=0)
+    alone = SceneMotionGroups(config)
+    queried = SceneMotionGroups(config)
+    source = ObjectGroupAssociation(config)
+    for index in range(5):
+        measured = scene(index, move(points, delta(index * 2, (index * 0.002, 0, 0))))
+        baseline = alone.update(measured)
+        actual = queried.update(measured)
+        if index == 0:
+            initialize(source, measured, points[:16])
+        source.query(actual, frame(index), measured, mask_for(measured, range(16)), 0)
+        source.record_observation(
+            frame(index),
+            measured,
+            mask_for(measured, range(16)),
+            {"status": "lost", "camera_from_reference": None, "diagnostics": {}},
+            points[:16],
+        )
+        assert memberships(actual) == memberships(baseline)
+        for group_id in baseline.groups:
+            expected, observed = baseline.groups[group_id], actual.groups[group_id]
+            np.testing.assert_allclose(observed.base_from_group, expected.base_from_group)
+            np.testing.assert_allclose(observed.base_xyz, expected.base_xyz)
+            np.testing.assert_array_equal(observed.measured, expected.measured)
+
+
+def test_group_settings_reject_pose_estimator_parameters():
+    with pytest.raises(TypeError):
+        GroupConfig.from_dict({"point_evidence_weight": 1.0})
+
+
+def test_new_object_association_threshold_does_not_change_scene_group_birth():
+    points = cloud(16)
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
+    tracker.update(scene(0, points))
+    current = scene(1, points)
+    tracker.update(current)
+    assert len(tracker.frame.groups) == 1
+    strict = ObjectGroupAssociation(tracker.config, min_association_points=20)
+    permissive = ObjectGroupAssociation(tracker.config, min_association_points=4)
+    for source in (strict, permissive):
+        initialize(source, current, points)
+    mask = mask_for(current, range(16))
+    assert strict.query(tracker.frame, frame(1), current, mask, 0)[0] is None
+    assert permissive.query(tracker.frame, frame(1), current, mask, 0)[0] is not None
+    assert len(tracker.frame.groups) == 1
+
+
 def test_stationary_and_moving_bodies_form_separate_groups():
     points = cloud()
     tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
@@ -150,6 +200,92 @@ def test_real_separation_uses_short_confirmation_and_not_occlusion():
     result = tracker.update(scene(9, moved[24:], np.arange(24, 80)))
     assert memberships(result) == assigned
     assert result.groups[original].supported
+
+
+def test_one_measured_point_can_leave_a_group_without_twelve_disagreeing():
+    """The group-creation quorum must not block a single measured departure."""
+    points = cloud(12)
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
+    tracker.update(scene(0, points))
+    tracker.update(scene(1, points))
+    group_id = memberships(tracker.frame)[0]
+    moved = points.copy()
+    moved[0, 0] += 0.03
+    for index in range(2, 5):
+        snapshot = tracker.update(scene(index, moved))
+    assert group_id in snapshot.groups
+    assert snapshot.groups[group_id].supported
+    assert 0 not in memberships(snapshot)
+    assert all(i in memberships(snapshot) for i in range(1, 12))
+    assert len(snapshot.groups) == 1  # One departing point cannot found a group.
+    for index in range(5, 15):
+        snapshot = tracker.update(scene(index, moved[1:], np.arange(1, 12)))
+        assert 0 not in memberships(snapshot)  # Hiding cannot rejoin or found a group.
+
+
+def test_hidden_members_cannot_vote_or_form_group_with_four_visible_members():
+    points = cloud(12)
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
+    tracker.update(scene(0, points))
+    tracker.update(scene(1, points))
+    group_id = memberships(tracker.frame)[0]
+    for index in range(2, 6):
+        visible = points[8:] + [0.002 * index, 0, 0]
+        snapshot = tracker.update(scene(index, visible, np.arange(8, 12)))
+        assert len(snapshot.groups) == 1
+        group = snapshot.groups[group_id]
+        assert group.supported
+        assert set(group.ids) == set(range(12))
+        assert group.measured.sum() == 4
+        assert set(group.ids[~group.measured]) == set(range(8))
+
+
+def test_three_visible_members_preserve_but_cannot_update_existing_group_motion():
+    points = cloud(12)
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
+    tracker.update(scene(0, points))
+    tracker.update(scene(1, points))
+    group_id = memberships(tracker.frame)[0]
+    shifted = points + [0.02, 0, 0]
+    snapshot = tracker.update(scene(2, shifted[9:], np.arange(9, 12)))
+    assert len(snapshot.groups) == 1
+    assert not snapshot.groups[group_id].supported
+    assert set(snapshot.groups[group_id].ids) == set(range(12))
+    snapshot = tracker.update(scene(3, shifted[8:], np.arange(8, 12)))
+    assert snapshot.groups[group_id].supported
+    assert snapshot.groups[group_id].measured.sum() == 4
+    np.testing.assert_allclose(snapshot.groups[group_id].base_xyz, shifted, atol=1e-10)
+
+
+def test_new_group_birth_needs_twelve_measured_pairs_not_hidden_id_history():
+    points = cloud(12)
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
+    for index in range(2):
+        assert not tracker.update(scene(index, points[:11], np.arange(11))).groups
+    assert not tracker.update(scene(2, points, np.arange(12))).groups
+    # Birth uses a measured window, so the twelfth ID must persist until the
+    # earlier eleven-only frame ages out of that window.
+    assert not tracker.update(scene(3, points, np.arange(12))).groups
+    snapshot = tracker.update(scene(4, points, np.arange(12)))
+    assert len(snapshot.groups) == 1
+    assert next(iter(snapshot.groups.values())).measured.sum() == 12
+
+
+def test_hidden_point_cannot_complete_join_confirmation():
+    points = cloud(13)
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0, merge_confirmation_s=0.4))
+    tracker.update(scene(0, points[:12], np.arange(12)))
+    tracker.update(scene(1, points[:12], np.arange(12)))
+    for index in range(2, 5):
+        snapshot = tracker.update(scene(index, points, np.arange(13)))
+        assert 12 not in memberships(snapshot)
+    snapshot = tracker.update(scene(5, points[:12], np.arange(12)))
+    assert 12 not in memberships(snapshot)
+    for index in range(6, 11):
+        snapshot = tracker.update(scene(index, points, np.arange(13)))
+        assert 12 not in memberships(snapshot)
+    snapshot = tracker.update(scene(11, points, np.arange(13)))
+    assert 12 in memberships(snapshot)
 
 
 def test_hidden_members_follow_visible_group_without_becoming_measurements():
@@ -304,7 +440,7 @@ def test_object_queries_cannot_change_groups_and_camera_transform_is_applied():
 def test_associated_group_remains_visible_when_it_has_no_new_motion_hint():
     points = cloud()
     tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
-    source = ObjectGroupAssociation(tracker.config)
+    source = ObjectGroupAssociation(tracker.config, point_evidence_weight=0.25)
     first = scene(0, points)
     tracker.update(first)
     initialize(source, first, points[:16])
@@ -312,6 +448,7 @@ def test_associated_group_remains_visible_when_it_has_no_new_motion_hint():
     tracker.update(measured)
     hint, details = source.query(tracker.frame, frame(1), measured, mask_for(measured, range(16)), 0)
     assert hint is not None
+    assert hint.points[0].weight == 0.25
     associated = details["group_id"]
     hidden = scene(2, np.empty((0, 3)), np.empty(0, dtype=int))
     tracker.update(hidden)
@@ -392,10 +529,63 @@ def test_visible_known_object_points_separate_from_old_environment_group():
     assert new_details["object_inliers"] >= 12
 
 
+def test_detached_object_cannot_rebind_to_old_group_from_historical_ids_alone():
+    points = cloud()
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
+    source = ObjectGroupAssociation(tracker.config)
+    first = scene(0, points)
+    tracker.update(first)
+    first = scene(1, points)
+    tracker.update(first)
+    initialize(source, first, points[:16])
+    old_hint, old_details = source.query(tracker.frame, frame(1), first, mask_for(first, range(16)), 0)
+    assert old_hint is not None
+
+    # New measured identities identify the moved object while the old IDs
+    # still follow the surrounding scene. This is object-side evidence that
+    # the previous association broke, not a scene-group update.
+    new_ids = np.arange(80, 96)
+    source.anchors.update({int(i): p.copy() for i, p in zip(new_ids, points[:16], strict=True)})
+    current = scene(2, np.concatenate((points, points[:16] + [0.04, 0, 0])), np.arange(96))
+    tracker.update(current)
+    rejected, details = source.query(tracker.frame, frame(2), current, mask_for(current, new_ids), 0)
+    assert rejected is None
+    assert details["association_contradiction"] == "visible_object_points_separated"
+
+    hidden = scene(3, points)
+    tracker.update(hidden)
+    stale, hidden_details = source.query(tracker.frame, frame(3), hidden, np.zeros((64, 64), bool), 0)
+    assert stale is None
+    assert hidden_details["group_id"] is None
+    assert old_details["group_id"] in tracker.frame.groups
+
+
+def test_one_measured_object_point_that_left_its_group_breaks_stale_association():
+    points = cloud(16)
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
+    source = ObjectGroupAssociation(tracker.config)
+    tracker.update(scene(0, points))
+    first = scene(1, points)
+    tracker.update(first)
+    initialize(source, first, points)
+    old_hint, old = source.query(tracker.frame, frame(1), first, mask_for(first, range(16)), 0)
+    assert old_hint is not None
+    moved = points.copy()
+    moved[0, 0] += 0.03
+    for index in range(2, 5):
+        current = scene(index, moved)
+        tracker.update(current)
+    assert 0 not in tracker.frame.groups[old["group_id"]].ids
+    hint, details = source.query(tracker.frame, frame(4), current, mask_for(current, [0]), 0)
+    assert hint is None
+    assert details["association_contradiction"] == "visible_object_points_separated"
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
         ("min_inliers", 2),
+        ("min_motion_points", 2),
         ("max_points", 0),
         ("max_groups", 0),
         ("motion_hypotheses", 0),
@@ -410,6 +600,11 @@ def test_visible_known_object_points_separate_from_old_environment_group():
 def test_bad_config_rejected(key, value):
     with pytest.raises(ValueError):
         GroupConfig(**{key: value})
+
+
+def test_group_motion_support_cannot_exceed_group_birth_quorum():
+    with pytest.raises(ValueError):
+        GroupConfig(min_inliers=3, min_motion_points=4)
 
 
 def test_new_measurements_can_reassociate_after_identity_turnover_without_moving_old_anchors():

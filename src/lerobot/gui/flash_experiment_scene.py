@@ -185,6 +185,7 @@ def rejected_overlay(manifest: dict, index: int, method: str) -> dict:
                 surface = saved["points"]
         surface = surface[spatial_sample(surface, 1200)]
         objects[role] = {
+            "status": result.get(method + "_status"),
             "surface_used": _points(surface),
             "axis_points": reference_axes(reference).tolist(),
             "rejected_poses": poses,

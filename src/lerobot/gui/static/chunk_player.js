@@ -20,7 +20,7 @@
     });
     player.open(episode);
 
-  Nothing adapts: one profile, one chunk length, learned from the server's
+  Nothing adapts: a fixed requested profile, one chunk length, learned from the server's
   header and checked against what the page assumed. Playback wraps within the
   range the host sets (the episode by default) and never leaves the episode on
   its own. If any camera lacks frame j, no camera advances.
@@ -54,7 +54,6 @@
   const DECODE_QUIET_MS = 2500;
   const PAINT_LOG = 2000;      // painted frames kept for the metrics; ~a minute at 30 fps
   const MAX_REDECODES = 2;
-  const PROFILE = 'low';
 
   // ---------------------------------------------------------------- decisions
   //
@@ -185,6 +184,7 @@
     const T0 = performance.now();
     const now = () => performance.now() - T0;
     const { datasetId, fps, length, cameras } = opts;
+    const profile = opts.profile || 'low';
     // Extra request parameters the page wants on every chunk, e.g. the depth display mapping.
     const query = opts.query ? `&${opts.query}` : '';
     const tiles = opts.tiles || (() => null);
@@ -286,7 +286,7 @@
       const done = () => { if (inflight.get(start) === mine) inflight.delete(start); };
       const t = performance.now();
       const ep = episode;
-      const url = `${base()}/chunk?start=${start}&profile=${PROFILE}${query}`;
+      const url = `${base()}/chunk?start=${start}&profile=${encodeURIComponent(profile)}${query}`;
       let resp, buf;
       try {
         resp = await fetch(url, { signal: abort.signal, cache: 'no-store', headers: { 'X-Player': playerState() } });

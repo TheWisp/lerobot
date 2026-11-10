@@ -152,7 +152,8 @@ export function createRgbdScene(canvas) {
     const cloud = createRgbdCloud();
     scene.add(cloud.points);
     const layers = new Map();
-    let calibration = null, aligned = true, bounds = new THREE.Box3();
+    const labels = [];
+    let calibration = null, aligned = true, bounds = new THREE.Box3(), sceneDepth = 1;
     let options = {scene: true, estimate: true, labelled: true, axes: true};
     function draw() {
         const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -167,17 +168,28 @@ export function createRgbdScene(canvas) {
         const a = focus.clone().project(camera);
         const b = focus.addScaledVector(right, 0.01).project(camera);
         const pxPerCm = Math.abs(b.x - a.x) * w / 2;
-        const shownCm = pxPerCm * 5 < w * 0.35 ? 5 : 1;
-        rulerBar.style.width = `${Math.max(1, pxPerCm * shownCm).toFixed(1)}px`;
-        rulerLabel.textContent = `${shownCm} cm at focus · 1 mm ≈ ${(pxPerCm / 10).toFixed(1)} px`;
+        const maxBarPx = Math.min(160, w * 0.3);
+        const lengthCm = pxPerCm * 5 <= maxBarPx ? 5 : pxPerCm <= maxBarPx ? 1 : 0.1;
+        rulerBar.style.width = `${Math.max(1, pxPerCm * lengthCm).toFixed(1)}px`;
+        rulerLabel.textContent = lengthCm === 0.1 ? '1 mm' : `${lengthCm} cm`;
         cloud.uniforms.pointSize.value = Math.max(1, Math.min(w / (calibration?.width || w), h / (calibration?.height || h))) * renderer.getPixelRatio() * 1.3;
         renderer.render(scene, camera);
+        for (const label of labels) {
+            const p = label.anchor.clone().project(camera);
+            const x = (p.x + 1) * w / 2, y = (1 - p.y) * h / 2;
+            label.element.hidden = !options[label.layer] || p.z < -1 || p.z > 1 ||
+                x < 0 || x > w || y < 0 || y > h;
+            if (!label.element.hidden)
+                label.element.style.transform = `translate(${Math.round(x + 8)}px,${Math.round(y + label.offset)}px)`;
+        }
     }
     function reset() {
         aligned = true;
         camera.position.set(0, 0, 0); camera.up.set(0, 1, 0);
-        const center = bounds.isEmpty() ? new THREE.Vector3(0, 0, -1) : bounds.getCenter(new THREE.Vector3());
-        controls.target.set(0, 0, Math.min(-0.01, center.z));
+        // Keep the calibrated frontal view, but orbit around the actual scene
+        // depth instead of a fixed point behind nearby tabletop objects.
+        const focusDepth = bounds.isEmpty() ? sceneDepth : -bounds.getCenter(new THREE.Vector3()).z;
+        controls.target.set(0, 0, -Math.max(0.01, focusDepth));
         controls.update(); draw();
     }
     function focus() {
@@ -204,8 +216,20 @@ export function createRgbdScene(canvas) {
     function update(depth, rgb, frame, descriptions, beforeDepth = null) {
         calibration = frame;
         cloud.update(depth, rgb, frame, 1, beforeDepth);
+        const centralDepth = [];
+        for (let y = Math.floor(frame.height / 4); y < Math.ceil(frame.height * 3 / 4); y += 12)
+            for (let x = Math.floor(frame.width / 4); x < Math.ceil(frame.width * 3 / 4); x += 12) {
+                const z = depth[y * frame.width + x];
+                if (Number.isFinite(z) && z > 0) centralDepth.push(z);
+            }
+        if (centralDepth.length) {
+            centralDepth.sort((a, b) => a - b);
+            sceneDepth = centralDepth[Math.floor(centralDepth.length / 2)];
+        }
         for (const group of layers.values()) { scene.remove(group); disposeLayer(group); }
         layers.clear(); bounds = new THREE.Box3();
+        for (const label of labels) label.element.remove();
+        labels.length = 0;
         const opticalToView = new THREE.Matrix4().makeScale(1, -1, -1);
         for (const description of descriptions) {
             if (!description.pose || !description.points.length) continue;
@@ -235,6 +259,19 @@ export function createRgbdScene(canvas) {
             object.matrixAutoUpdate = false;
             group.add(object); object.updateMatrixWorld(true);
             bounds.union(new THREE.Box3().setFromObject(object));
+            if (description.label) {
+                const element = document.createElement('span');
+                element.className = 'rgbd-point-label';
+                element.dataset.layer = description.layer;
+                element.textContent = description.label;
+                const color = `#${description.color.toString(16).padStart(6, '0')}`;
+                element.style.color = color;
+                element.style.borderColor = color;
+                canvas.parentElement?.append(element);
+                const anchor = geometry.boundingSphere.center.clone().applyMatrix4(object.matrixWorld);
+                const offset = {estimate: -16, rejectedFit: 8, rejectedPrediction: 32, labelled: -40}[description.layer] ?? 8;
+                labels.push({element, anchor, layer: description.layer, offset});
+            }
         }
         setOptions(options);
         if (aligned) reset(); else draw();
@@ -247,6 +284,7 @@ export function createRgbdScene(canvas) {
         view: () => ({position: camera.position.toArray(), target: controls.target.toArray(), aligned}),
         dispose() {
             ruler.remove();
+            for (const label of labels) label.element.remove();
             resize.disconnect(); controls.dispose(); cloud.dispose();
             for (const group of layers.values()) disposeLayer(group);
             renderer.dispose();

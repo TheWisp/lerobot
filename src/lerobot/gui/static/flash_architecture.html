@@ -766,13 +766,15 @@
             is unavailable, use the previous pose. LK/UFM and group point
             correspondences then guide the fit. Current mask and depth
             <code>O[t]</code> decide whether the resulting pose is allowed.
+            Fresh sessions use small_gicp with shared LK image matching;
+            saved runs retain their recorded settings.
           </span>
         </div>
       </section>
 
       <section id="group-update">
         <h2>Scene-wide group tracker</h2>
-        <p class="intro">This loop knows only camera point IDs and measured 3D positions. It does not read object masks, object poses, or Kalman state. Its output exists even when no object pose is available.</p>
+        <p class="intro">The shared matcher supplies measured point IDs and 3D positions across the scene. It also samples more densely inside selected masks. All those measured points enter grouping together; hidden IDs only retain predicted positions and cannot supply evidence for joining or founding a group. The group tracker receives no masks, object labels, poses, or Kalman state.</p>
         <div class="group-scroll">
           <svg class="group-diagram" viewBox="0 0 1200 470" role="img" aria-labelledby="group-title group-description">
             <title id="group-title">Independent scene group update</title>
@@ -781,7 +783,7 @@
             <rect x="150" y="25" width="570" height="85" rx="15" fill="#edf5fc" stroke="#b7cfdf" />
             <text class="group-step" x="175" y="54">Shared LK / UFM: image t−1 → image t</text>
             <text class="group-caption" x="175" y="80">Point IDs + measured depth → 3D scene points</text>
-            <text class="group-caption" x="175" y="100">Entire scene, including points outside tracked objects</text>
+            <text class="group-caption" x="175" y="100">All points enter groups, including extra mask-guided samples</text>
             <rect x="825" y="25" width="330" height="85" rx="15" fill="#f0edf8" stroke="#c9bddf" />
             <text class="group-step" x="845" y="54">Group state from t−1</text>
             <text class="group-caption" x="845" y="80">Member IDs + fixed group coordinates</text>
@@ -789,8 +791,8 @@
             <path class="group-arrow" d="M435 110V155" /><path class="group-arrow" d="M990 110V140H700V155" />
             <rect x="150" y="155" width="570" height="100" rx="15" fill="#edf5fc" stroke="#b7cfdf" />
             <text class="group-step" x="175" y="185">Update scene groups from measured points</text>
-            <text class="group-caption" x="175" y="211">Fit shared motion · split after measured disagreement persists</text>
-            <text class="group-caption" x="175" y="235">Join after longer co-motion; keep hidden-point predictions</text>
+            <text class="group-caption" x="175" y="211">Fit existing motion from ≥4 measured members; each point can split</text>
+            <text class="group-caption" x="175" y="235">New group needs ≥12; join after sustained co-motion</text>
             <a class="metric-callout" href="#metric-group"><path d="M150 205H125" /><text x="110" y="186" text-anchor="end"><tspan x="110">Inlier count</tspan><tspan x="110" dy="18">Motion error</tspan><tspan x="110" dy="18">Agreement time</tspan></text></a>
             <path class="group-arrow" d="M720 205H825" />
             <rect x="825" y="165" width="330" height="80" rx="15" fill="#f0edf8" stroke="#c9bddf" />
@@ -805,7 +807,7 @@
           </svg>
         </div>
         <div class="mobile-path" aria-label="Independent group update steps"><ol>
-          <li>Shared image matching and depth supply measured 3D point IDs across the scene.</li>
+          <li>Shared image matching and depth supply measured 3D point IDs across the scene, with extra samples in selected masks. All samples enter grouping.</li>
           <li>Scene groups use only those points and their own previous state to update membership and motion.<a class="metric-link" href="#metric-group">Inliers · motion error · agreement time</a></li>
           <li>The group snapshot G[t] can be queried or displayed. A rejected object pose cannot change it.</li>
         </ol></div>
@@ -815,7 +817,7 @@
         <p class="intro">This is a separate downstream path. Each object tracker owns its association between the object's point IDs and a scene group. An accepted object observation may add new IDs to that association; it never edits the scene group.</p>
         <div class="lifecycle" aria-label="Object group query and pose decision">
           <article><small>Scene perception</small><strong>G[t]</strong><p>Read-only group snapshot, including surrounding scene points.</p></article>
-          <article><small>Object-side query</small><strong>Associated group → H[t]</strong><p>Known object point IDs select a group. When enough measured object IDs separate into another group, the old association ends. With no object measurement, a supported surrounding group can still predict its hidden points.</p></article>
+          <article><small>Object-side query</small><strong>Associated group → H[t]</strong><p>Measured object IDs establish an association (12 by default; separate setting from group formation). Once established, a supported group can predict through full occlusion. Measured separation can end the association with one visible point after the group's split time; hidden IDs alone cannot restore it.</p></article>
           <article><small>Object pose decision</small><strong>Surface fit → Kalman → pose</strong><p>Depth and mask check the fit. Kalman belongs to the object pose estimator, not the group tracker. The pose can be observed, predicted or lost.</p></article>
         </div>
         <p class="intro"><a href="#metric-motion">Group support metric</a> → <a href="#metric-kalman">pose update metric</a> → <a href="#pose-flow">pose decision paths</a>. Display modes: None hides groups; Objects shows groups associated with tracked objects; All shows every scene group. These display choices do not affect pose estimation.</p>
@@ -843,11 +845,12 @@
             <p>An observed pose aligns this frame's clean depth to S[&lt;t].</p>
           </article>
           <article>
-            <small>After strict growth check</small>
+            <small>After growth check</small>
             <strong>New cells · pending</strong>
             <p>
-              Previously unseen surface points are saved, but cannot affect the
-              next fit yet.
+              Broad overlap admits a consistent new patch. Optional local growth
+              admits only nearby, non-conflicting cells outside the mapped area.
+              Neither can affect the next fit until confirmed.
             </p>
             <a class="metric-link" href="#metric-growth"
               >Overlap · agreement with earlier views</a
@@ -1223,7 +1226,7 @@
             </p>
             <p>
               <b>Tune:</b> <code>ransac_distance_m</code>,
-              <code>min_inliers</code>, <code>fit_threshold_m</code>,
+              <code>min_inliers</code>, <code>min_motion_points</code>, <code>fit_threshold_m</code>,
               <code>support_confirmation_s</code>.
             </p>
           </article>
@@ -1231,11 +1234,11 @@
             <h3>Scene groups · membership and motion</h3>
             <p><b>Read:</b> group count, confirmed/supported groups, measured inlier count,
               motion residual, predicted hidden point count and group update time.</p>
-            <p><b>Gate:</b> visible measurements must fit one rigid motion within tolerance.
+            <p><b>Gate:</b> four visible members can update an existing group's motion; forming a new group needs twelve agreeing measured point pairs. These are current default settings, not fixed mathematical requirements.
               A point leaves after its measured disagreement persists for the split duration;
               points or groups join only after the longer co-motion duration.
               Missing points retain predicted positions, but do not measure motion.</p>
-            <p><b>Tune:</b> <code>fit_threshold_m</code>, <code>min_inliers</code>,
+            <p><b>Tune:</b> <code>fit_threshold_m</code>, <code>min_inliers</code>, <code>min_motion_points</code>,
               <code>split_tolerance_m</code>, <code>split_confirmation_s</code>,
               <code>merge_tolerance_m</code>, <code>merge_confirmation_s</code>,
               <code>support_confirmation_s</code>, <code>max_hidden_s</code>,
@@ -1265,12 +1268,15 @@
               <code>scene_depth_coherent_protrusion</code>.
             </p>
             <p>
-              <b>Gate:</b> no coherent protrusion into measured empty space;
+              <b>Gate:</b> reject a broad protrusion or three separate small
+              patches in reliably measured empty space, even when most of the surface fits;
               enough overlap and no more than the configured outlier fraction.
-              Missing depth is unknown, not a conflict.
+              Missing depth and nearer occluders are unknown, not conflicts.
+              A small isolated patch alone does not trigger the hard veto.
             </p>
             <p>
               <b>Tune:</b> <code>depth_tolerance_m</code>,
+              <code>free_space_min_supports</code> (default 3),
               <code>min_overlap</code>,
               <code>max_visible_outlier_fraction</code>. Outline coverage is a
               soft preference, not a hard requirement.
@@ -1286,6 +1292,10 @@
               <b>Predict:</b> move the previous pose with measured group motion
               when available; account for supplied camera motion. Add
               uncertainty for motion error and elapsed time.
+              If no usable measured group motion advances the pose,
+              <code>unmeasured_rotation_std_deg_sqrt_s</code> increases rotation
+              uncertainty before fitting (fresh-session default: 10°/√s).
+              With measured motion, the ordinary process noise applies.
             </p>
             <p>
               <b>Correct:</b> compare fitted and predicted poses using their
@@ -1304,6 +1314,8 @@
               <b>Tune:</b> process noise, measurement noise, and
               <code>compatibility_probability</code>; these are assumptions, not
               measured correctness.
+              The missing-motion uncertainty floor changes the prediction's
+              covariance, never the geometry checks or the innovation limit.
             </p>
           </article>
           <article id="metric-growth">
@@ -1316,18 +1328,22 @@
               the actual source used for image matching.
             </p>
             <p>
-              <b>Read:</b> <code>growth.observed_overlap</code>,
+              <b>Read:</b> <code>growth.growth_mode</code>,
+              <code>growth.observed_overlap</code>,
               <code>growth.patch_consistent</code>,
               <code>growth.admitted_points</code>, <code>map_points</code>.
             </p>
             <p>
-              <b>Gate:</b> stricter overlap with active S, sufficient
-              consistency with retained views, then confirmation by a later
-              measured frame. Only then does a pending patch become active.
+              <b>Gate:</b> normally 75% of current depth points must agree within
+              3 mm of active S; 95% of proposed new cells must not contradict
+              retained views. Optional local growth instead checks overlap in
+              each nearby region and individually vetoes conflicting cells.
+              Either path needs a later measured frame to confirm a pending patch.
             </p>
             <p>
               <b>Tune:</b> <code>growth_agreement_m</code>,
-              <code>growth_min_overlap</code>, <code>patch_consistency</code>,
+              <code>growth_min_overlap</code>, <code>local_growth_enabled</code>,
+              <code>growth_local_overlap</code>, <code>patch_consistency</code>,
               <code>patch_overlap</code>, <code>confirmations</code>.
             </p>
           </article>

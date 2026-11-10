@@ -35,3 +35,4 @@ tests/policies/flash/fixtures/gamepad_placement/*.npz filter=lfs diff=lfs merge=
 docs/proofs/**/*.mp4 !filter !diff !merge
 docs/proofs/**/*.gif !filter !diff !merge
 *.bag filter=lfs diff=lfs merge=lfs -text
+tests/policies/flash/fixtures/green_toy_motion_*.npz filter=lfs diff=lfs merge=lfs -text

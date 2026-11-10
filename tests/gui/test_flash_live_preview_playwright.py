@@ -49,6 +49,41 @@ def test_rejected_fit_is_opt_in_for_live_and_recording_replay(gui_page):
     page.uncheck("#flash-live-rejected")
     page.evaluate("drawFlashLive()")
     assert page.evaluate(pixel) == background
+    page.evaluate("""async () => {
+        flashLive.episodePlayer = null;
+        const object = flashLive.overlay.objects.object;
+        object.name = 'cube';
+        object.pose = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+        object.status = 'observed_candidate';
+        object.surface = [[0,0,1],[0.02,0,1],[0,0.02,1]];
+        flashLive.packet = {depth:new Float32Array(32*32).fill(1),depth_source:'sensor',
+            camera:{width:32,height:32,intrinsics:[[32,0,16],[0,32,16],[0,0,1]]}};
+        setFlashLiveView('3d');
+        await drawFlashLive();
+    }""")
+    assert page.locator('.rgbd-point-label[data-layer="estimate"]').inner_text() == "cube"
+    assert page.locator('.rgbd-point-label[data-layer="rejectedFit"]').is_hidden()
+    page.check("#flash-live-rejected")
+    assert page.locator('.rgbd-point-label[data-layer="rejectedFit"]').is_hidden()
+    page.evaluate(
+        "() => { flashLive.overlay.objects.object.status='lost'; flashLive.overlay.objects.object.pose=null; drawFlashLive(); }"
+    )
+    page.wait_for_function("!!document.querySelector('.rgbd-point-label[data-layer=rejectedFit]')")
+    assert page.locator('.rgbd-point-label[data-layer="rejectedFit"]').inner_text() == "cube (rejected fit)"
+    assert page.evaluate("flashObjectDisplayName('object', {name:'selected object'})") == "object_1"
+    assert page.evaluate("flashObjectDisplayName('object_3', {})") == "object_3"
+    assert (
+        page.evaluate(
+            "flashLossReason({reason_code:'innovation_conflict',reason:'Prediction protrudes into measured empty space'})"
+        )
+        == "Visible fit rejected by motion filter"
+    )
+    assert page.evaluate("""() => {
+        const object=flashLive.overlay.objects.object;
+        object.rejected_poses={fit:null,prediction:null};
+        object.diagnostics={kalman:{observation_pose:[[1,0,0,0.1],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}};
+        return flashRejectedPoses(object).fit[0][3];
+    }""") == pytest.approx(0.1)
 
 
 def test_unselected_camera_recording_displays_raw_rgb_and_depth(gui_page):
@@ -135,6 +170,8 @@ def test_unselected_model_preview_exposes_sensor_and_model_depth(gui_page):
     assert gui_page.evaluate("flashLive.packet.depth[0]") == pytest.approx(0.437, abs=1e-6)
     assert gui_page.evaluate("flashLive.packet.depthBeforeFilters[0]") == pytest.approx(0.427, abs=1e-6)
     assert "Fast-FoundationStereo" in gui_page.locator("#flash-live-depth-info").inner_text()
+    assert gui_page.locator("#flash-live-filled-label").inner_text() == "Show model-only depth"
+    assert "revision" not in gui_page.locator("#flash-live-depth-info").inner_text()
     assert (
         gui_page.locator('#flash-live-stream-mode button[data-mode="processed"]').get_attribute(
             "aria-pressed"
@@ -256,7 +293,10 @@ def test_filter_created_depth_toggle_marks_only_new_values(gui_page):
     )
     assert gui_page.evaluate("flashLive.packet.depthBeforeFilters[2*8+3]") == 0
     assert not gui_page.evaluate("document.getElementById('flash-live-filled-control').hidden")
+    assert gui_page.locator("#flash-live-filled-label").inner_text() == "Show filter-filled depth"
+    before = gui_page.locator("#flash-live-view-mode").bounding_box()
     gui_page.evaluate("document.getElementById('flash-live-filled').checked = true; drawFlashLive()")
+    assert gui_page.locator("#flash-live-view-mode").bounding_box() == before
     assert gui_page.evaluate(
         "Array.from(document.getElementById('flash-live-image').getContext('2d').getImageData(3,2,1,1).data)"
     ) == [255, 89, 191, 255]
@@ -369,10 +409,8 @@ def test_depth_and_3d_preview_keep_a_matched_frame_and_fixed_color_scale(gui_pag
     assert gui_page.evaluate(
         "flashLive.packet === null && !document.getElementById('flash-live-scene').hidden"
     ), "the RGB-D scene must work with no selected object"
-    assert (
-        "aligned to color · Depth: RealSense depth · Camera filters: spatial · revision 5"
-        in gui_page.locator("#flash-live-depth-info").inner_text()
-    )
+    assert gui_page.locator("#flash-live-depth-info").is_hidden()
+    assert gui_page.evaluate("-flashLive.viewer.view().target[2]") == pytest.approx(0.52, abs=0.06)
 
     gui_page.locator('#flash-live-view-mode button[data-mode="depth"]').click()
     gui_page.wait_for_function("flashLive.depthColorRange !== null")
@@ -381,6 +419,9 @@ def test_depth_and_3d_preview_keep_a_matched_frame_and_fixed_color_scale(gui_pag
     gui_page.wait_for_timeout(400)
     assert gui_page.evaluate("flashLive.frame.frame_id") == 1
     assert gui_page.locator("#flash-live-depth-info").is_visible()
+    assert "RealSense depth" in gui_page.locator("#flash-live-depth-info").inner_text()
+    assert "spatial filter" in gui_page.locator("#flash-live-depth-info").inner_text()
+    assert "revision" not in gui_page.locator("#flash-live-depth-info").inner_text()
 
     source["depth_frame"] = 2
     gui_page.wait_for_function("flashLive.frame?.frame_id === 2")

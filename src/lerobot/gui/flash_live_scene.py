@@ -24,6 +24,10 @@ def loss_reason(status, details):
         return "Saved surface unavailable"
     if reason == "surface_group_disagreement":
         return "Surface and tracked point group disagree"
+    if reason == "innovation_conflict":
+        return "Visible fit rejected by motion filter"
+    if reason == "fused_pose_contradicts_observation":
+        return "Motion-fused pose contradicts current depth"
     prediction = details.get("prediction_geometry")
     check = prediction or (details.get("fit") or {}).get("candidate_check") or {}
     subject = "Prediction" if prediction else "Fit"
@@ -92,7 +96,8 @@ def object_evidence(result, method):
     rejected_poses = (
         {
             "fit": fit.get("rejected_camera_from_reference")
-            or details.get("candidate_camera_from_reference"),
+            or details.get("candidate_camera_from_reference")
+            or (details.get("kalman") or {}).get("observation_pose"),
             "prediction": (
                 details.get("unpublished_camera_from_reference")
                 if (details.get("prediction_geometry") or {}).get("accepted") is False

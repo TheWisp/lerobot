@@ -46,11 +46,19 @@ class GrowingSurfaceConfig:
     # These are conservative experiment defaults, not calibrated certainty.
     growth_agreement_m: float = 0.003
     growth_min_overlap: float = 0.75
+    # The local-growth trial changes later cube fits, so leave it opt-in until
+    # patch confirmation and map influence are validated on full replays.
+    local_growth_enabled: bool = False
+    # At the edge of an existing patch, only about half a local neighborhood
+    # can be previously mapped. This threshold applies to that neighborhood.
+    growth_local_overlap: float = 0.5
     # Fraction of a proposed addition not contradicted by earlier depth/masks.
     patch_consistency: float = 0.95
     # Fraction of a pending patch measured again within growth_agreement_m.
     patch_overlap: float = 0.8
     image_weight: float = 1.0
+    group_point_evidence_weight: float = 1.0
+    group_association_min_points: int = 12
     # Geometry is the primary objective; image/group evidence breaks ties.
     # False retains the earlier weighted-sum experiment for paired comparison.
     surface_priority: bool = True
@@ -92,15 +100,24 @@ class GrowingSurfaceConfig:
         for name in ("spacing_m", "agreement_m", "growth_agreement_m"):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be finite and positive")
-        for name in ("min_overlap", "growth_min_overlap", "patch_consistency", "patch_overlap"):
+        for name in (
+            "min_overlap",
+            "growth_min_overlap",
+            "growth_local_overlap",
+            "patch_consistency",
+            "patch_overlap",
+        ):
             if not 0 < getattr(self, name) <= 1:
                 raise ValueError(f"{name} must be in (0, 1]")
         if self.growth_agreement_m > self.agreement_m or self.growth_min_overlap < self.min_overlap:
             raise ValueError(
                 "growth must require at least as much overlap within at most the tracking distance"
             )
-        if not np.isfinite(self.image_weight) or self.image_weight < 0:
-            raise ValueError("image_weight must be finite and nonnegative")
+        for name in ("image_weight", "group_point_evidence_weight"):
+            if not np.isfinite(getattr(self, name)) or getattr(self, name) < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if type(self.group_association_min_points) is not int or self.group_association_min_points < 3:
+            raise ValueError("group_association_min_points must be an integer >= 3")
         for name in ("confirmations", "max_patches", "max_pending", "points_per_patch", "max_points"):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 2:
@@ -109,7 +126,13 @@ class GrowingSurfaceConfig:
             raise ValueError("a surface needs at least three points")
         if any(
             type(getattr(self, key)) is not bool
-            for key in ("grow", "retain_unobserved_pose", "surface_priority", "partial_surface_matching")
+            for key in (
+                "grow",
+                "retain_unobserved_pose",
+                "surface_priority",
+                "partial_surface_matching",
+                "local_growth_enabled",
+            )
         ):
             raise ValueError("surface experiment switches must be booleans")
 
@@ -385,22 +408,66 @@ class SurfaceStore:
             self._rebuild()
 
     def extend(self, measured, pose, frame, *, view):
-        """An accepted tracking pose still needs stronger overlap to alter shape.
+        """Grow from well-supported parts of an accepted measured pose.
 
-        Check against the active surface *before* confirming any pending patch.
-        A weakly aligned frame can neither add nor confirm geometry. This tests
-        geometric agreement, not uniqueness of the alignment or calibrated confidence.
+        A broadly agreeing frame may propose every non-contradicted new cell.
+        Otherwise only cells next to a locally agreeing part of the current
+        measurement may enter a pending patch. Both paths use the active map
+        before confirmation, so a pending patch cannot support itself.
         """
         before = self.version
         distances = cKDTree(move(self.points, pose)).query(measured)[0]
-        overlap = float(np.mean(distances <= self.config.growth_agreement_m)) if len(distances) else 0.0
-        accepted = overlap >= self.config.growth_min_overlap
+        agreeing = distances <= self.config.growth_agreement_m
+        overlap = float(np.mean(agreeing)) if len(distances) else 0.0
+        broad_support = overlap >= self.config.growth_min_overlap
+        # A nearby agreeing observation anchors a local extension. The radius
+        # is four storage cells: far-away geometry cannot join a weak fit in
+        # one step, but can grow after a neighboring patch is confirmed.
+        radius = 4 * self.config.spacing_m
+
+        def locally_supported(points):
+            neighborhoods = cKDTree(measured).query_ball_point(points, radius)
+            return np.fromiter(
+                (
+                    len(ids) >= 3
+                    and np.count_nonzero(agreeing[ids]) >= 3
+                    and np.mean(agreeing[ids]) >= self.config.growth_local_overlap
+                    for ids in neighborhoods
+                ),
+                dtype=bool,
+                count=len(points),
+            )
+
+        def new_cells():
+            local = move(measured, np.linalg.inv(pose))
+            selected = voxel_sample(np.concatenate((self.points, local)), self.config.spacing_m)
+            return measured[selected[selected >= len(self.points)] - len(self.points)]
+
+        local_support = (
+            locally_supported(new_cells()) if not broad_support and self.config.local_growth_enabled else None
+        )
+        accepted = broad_support or (local_support is not None and bool(np.any(local_support)))
         details = {
             "alignment_accepted": accepted,
             "observed_overlap": overlap,
             "required_overlap": self.config.growth_min_overlap,
+            "required_local_overlap": self.config.growth_local_overlap,
             "agreement_m": self.config.growth_agreement_m,
-            "reason": "sufficient_growth_overlap" if accepted else "insufficient_growth_overlap",
+            "reason": (
+                "sufficient_growth_overlap"
+                if broad_support
+                else "local_growth_support"
+                if accepted
+                else "insufficient_growth_overlap"
+            ),
+            "growth_mode": "broad"
+            if broad_support
+            else "local"
+            if self.config.local_growth_enabled
+            else "off",
+            "local_supported_points": int(np.count_nonzero(local_support))
+            if local_support is not None
+            else 0,
             "new_measured_points": 0,
             "contradicted_by_retained_views": 0,
             "patch_consistent": None,
@@ -412,19 +479,43 @@ class SurfaceStore:
         # A new occupied grid cell extends the surface. A distance exclusion
         # around old samples leaves holes in adjacent cells and gives growth a
         # different density from initialization. Keep actual measured points.
-        local = move(measured, np.linalg.inv(pose))
-        selected = voxel_sample(np.concatenate((self.points, local)), self.config.spacing_m)
-        novel = measured[selected[selected >= len(self.points)] - len(self.points)]
+        novel = new_cells()
         keep = self.compatible_additions(novel, pose)
-        consistent = not len(novel) or float(np.mean(keep)) >= self.config.patch_consistency
+        if broad_support:
+            consistent = not len(novel) or float(np.mean(keep)) >= self.config.patch_consistency
+            admitted = keep if consistent else np.zeros(len(novel), dtype=bool)
+        else:
+            # A contradiction elsewhere must not veto this local patch. Its
+            # points must extend beyond the map in both 3D and the current
+            # image. A neighboring voxel on an already projected face is
+            # resampling/noise, not evidence of newly visible geometry.
+            distance_to_map = cKDTree(move(self.points, pose)).query(novel)[0]
+            admitted = keep & locally_supported(novel) & (distance_to_map >= self.config.growth_agreement_m)
+            if view is not None and len(novel):
+                old_camera = move(self.points, pose)
+                visible_old = (old_camera[:, 2] > 0) & np.isfinite(old_camera).all(axis=1)
+                visible_new = (novel[:, 2] > 0) & np.isfinite(novel).all(axis=1)
+                if np.any(visible_old):
+                    pixel_distance = np.full(len(novel), np.inf)
+                    old_pixels = project(old_camera[visible_old], view.intrinsics)
+                    new_pixels = project(novel[visible_new], view.intrinsics)
+                    pixel_distance[visible_new] = cKDTree(old_pixels).query(new_pixels)[0]
+                    one_voxel_px = (
+                        self.config.spacing_m
+                        * max(view.intrinsics[0, 0], view.intrinsics[1, 1])
+                        / np.maximum(novel[:, 2], np.finfo(float).tiny)
+                    )
+                    admitted &= visible_new & (pixel_distance > np.maximum(2.0, one_voxel_px))
+                else:
+                    admitted[:] = False
+            consistent = bool(np.any(admitted))
         details.update(
             new_measured_points=len(novel),
             contradicted_by_retained_views=int((~keep).sum()),
             patch_consistent=consistent,
-            admitted_points=int(keep.sum()) if consistent else 0,
+            admitted_points=int(admitted.sum()),
         )
-        # A mostly contradicted extension cannot contribute its unobserved tail.
-        novel = novel[keep] if consistent else novel[:0]
+        novel = novel[admitted]
         if len(novel):
             self.add(novel, pose, frame, fitted_map_version=before, view=view)
         return details
@@ -832,7 +923,10 @@ class GrowingSurfaceSession:
                 candidate,
                 np.asarray(measured["information"]),
                 np.asarray(measured["pivot_m"]),
-                contradicted=not prior_check["accepted"],
+                # A lack of overlap is not evidence that the motion prior is
+                # wrong. Reset only when current measured geometry contradicts
+                # it; the candidate has already passed both checks above.
+                contradicted=not prior_check["geometry_accepted"],
             )
             details["kalman"] = correction
             candidate = self.kalman.pose.copy()

@@ -54,6 +54,48 @@ def test_live_loss_reports_rejected_point_group_prediction():
     assert loss_reason("lost", details) == "Prediction misses the visible surface"
 
 
+def test_live_loss_reports_motion_filter_rejection_before_prediction_geometry():
+    prediction = {"scene_depth_coherent_protrusion": True, "accepted": False}
+    assert (
+        loss_reason(
+            "lost",
+            {
+                "reason": "innovation_conflict",
+                "prediction_geometry": prediction,
+                "fit": {"geometry_check": {"accepted": True}},
+            },
+        )
+        == "Visible fit rejected by motion filter"
+    )
+    assert (
+        loss_reason(
+            "lost",
+            {
+                "reason": "fused_pose_contradicts_observation",
+                "prediction_geometry": prediction,
+            },
+        )
+        == "Motion-fused pose contradicts current depth"
+    )
+
+
+def test_motion_filter_rejected_fit_is_retained_for_visual_inspection():
+    pose = np.eye(4).tolist()
+    evidence = object_evidence(
+        {
+            "group_growing": None,
+            "group_growing_status": "lost",
+            "group_growing_details": {
+                "reason": "innovation_conflict",
+                "kalman": {"observation_pose": pose},
+            },
+        },
+        "group_growing",
+    )
+    assert evidence["rejected_poses"]["fit"] == pose
+    assert evidence["reason"] == "Visible fit rejected by motion filter"
+
+
 def test_group_vetoed_candidate_remains_visible_only_as_rejected_evidence():
     pose = np.eye(4).tolist()
     result = {
@@ -110,6 +152,29 @@ class SuppliedMasks:
     def masks(self, frame):
         self.calls.append(frame.frame_id)
         return self.values[frame.frame_id]
+
+
+def test_fresh_live_and_video_defaults_reach_small_gicp_solver():
+    from benchmarks.flash_pipeline_settings import defaults as video_defaults
+    from lerobot.gui.api.flash_tracking import TrackingStart
+
+    pytest.importorskip("small_gicp")
+    settings = TrackingStart().pipeline_settings
+    assert settings == video_defaults()
+    assert settings["shared_matching"]["backend"] == "lk"
+    frames = list(sequence())[:2]
+    live = LiveSurfaceSession(settings, SuppliedMasks(frames))
+    try:
+        for current, _ in frames:
+            row, _, _ = live.step(current)
+        for result in row["objects"].values():
+            assert result["group_growing_status"] == "observed_candidate"
+            assert result["group_growing_details"]["fit"]["library"] == "small_gicp"
+    finally:
+        live.close()
+    # Explicit saved/user choices survive validation; no relabeling old runs.
+    settings["config"]["shape"]["registration"]["backend"] = "visible_icp"
+    assert TrackingStart(pipeline_settings=settings).pipeline_settings == settings
 
 
 @pytest.mark.parametrize("backend", ["lk", "ufm"])
@@ -176,12 +241,15 @@ def test_live_timing_command_loads_the_selected_image_matcher(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("backend", ["lk", "ufm"])
-@pytest.mark.parametrize("matcher", ["visible_icp"])
+@pytest.mark.parametrize("matcher", ["visible_icp", "small_gicp"])
 @pytest.mark.parametrize("split_mask_measurement", [False, True])
 def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covariance(
     tmp_path, monkeypatch, backend, matcher, split_mask_measurement
 ):
     import torch
+
+    if matcher == "small_gicp":
+        pytest.importorskip("small_gicp")
 
     # Stub just GPU neural inference; all tracking/fitting/validation is real.
     monkeypatch.setattr(torch.Tensor, "cuda", lambda self: self)
@@ -196,6 +264,9 @@ def test_live_and_recorded_inputs_have_identical_poses_surfaces_groups_and_covar
     monkeypatch.setattr("benchmarks.flash_tracker_experiment.samples", recorded_frames)
     settings = defaults()
     settings["config"]["shape"]["registration"]["backend"] = matcher
+    # This test demands bit-identical reruns. OpenMP reduction order can change
+    # sub-roundoff updates (and the convergence flag) with multiple threads.
+    settings["config"]["shape"]["registration"]["threads"] = 1
     settings["shared_matching"]["backend"] = backend
     settings["group_experiment"]["support_confirmation_s"] = 0.03
     method = "group_growing"

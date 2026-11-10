@@ -10,14 +10,15 @@ live run that produced the clip frame by frame. Settings may be overridden with
 import argparse
 import json
 import time
-import zlib
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import zstandard as zstd
 
 from lerobot.policies.flash.live_surface_session import LIVE_METHOD, LiveSurfaceSession
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
-from lerobot.policies.flash.tracking_history import decode_record, history_root, read_index
+from lerobot.policies.flash.tracking_history import decode_record, history_root, read_index, read_packet
 
 
 class RecordedMasks:
@@ -32,6 +33,22 @@ class RecordedMasks:
         return {self.role: self.current}
 
 
+def recorded_tracker_input(directory, row):
+    """Restore the exact RGB, mask, and selected depth seen by one tracker step."""
+    frame_id = row["frame"]
+    frame, masks, recorded, _ = decode_record(read_packet(directory, frame_id))
+    depth_source = row.get("processed_depth_source", row.get("tracking_depth_source", "sensor"))
+    if depth_source != "sensor":
+        path = directory / f"{frame_id:010d}.model_depth.zst"
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing {depth_source} depth for processed frame {frame_id}")
+        depth = np.frombuffer(zstd.ZstdDecompressor().decompress(path.read_bytes()), "<f4").reshape(
+            frame.depth.shape
+        )
+        frame = replace(frame, depth=depth.copy(), depth_m_per_unit=1.0, depth_before_filters=None)
+    return frame, masks, recorded
+
+
 def replay(directory, *, start=None, stop=None, overrides=(), quiet=False):
     directory = Path(directory)
     settings = json.loads((directory / "config.json").read_text())["pipeline_settings"]
@@ -44,13 +61,15 @@ def replay(directory, *, start=None, stop=None, overrides=(), quiet=False):
         node[leaf] = json.loads(value)
     index = read_index(directory)
     frames = [
-        row["frame"]
+        row
         for row in index["frames"]
-        if (directory / f"{row['frame']:010d}.bin.z").exists()
+        if row.get("objects")
         and (start is None or row["frame"] >= start)
         and (stop is None or row["frame"] <= stop)
     ]
-    role, first = next(iter(index["frames"][0]["objects"].items()))
+    if not frames:
+        raise ValueError("No recorded tracker frames in the requested range")
+    role, first = next(iter(frames[0]["objects"].items()))
     source = RecordedMasks(first["name"], role)
     kernels = compiled_kernels() if settings["config"].get("compiled_surface_fit") else None
     pool = (
@@ -62,9 +81,9 @@ def replay(directory, *, start=None, stop=None, overrides=(), quiet=False):
     rows = []
     started = time.perf_counter()
     try:
-        for frame_id in frames:
-            packet = zlib.decompress((directory / f"{frame_id:010d}.bin.z").read_bytes())
-            rgbd, masks, recorded, _ = decode_record(packet)
+        for frame_row in frames:
+            frame_id = frame_row["frame"]
+            rgbd, masks, recorded = recorded_tracker_input(directory, frame_row)
             source.current = masks[role]
             row, _, _ = live.step(rgbd)
             result = row["objects"][role]

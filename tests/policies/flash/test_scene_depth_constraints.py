@@ -157,20 +157,20 @@ def test_isolated_wrong_map_point_does_not_reject_correct_pose():
 
 
 @pytest.mark.parametrize("connected_strip", [False, True])
-def test_scattered_conflicts_do_not_hide_or_invent_a_connected_patch(connected_strip):
+def test_disconnected_and_connected_conflicts_both_reject(connected_strip):
     source, current, k = scene()
     fit, _ = check(source, current, k, np.eye(4))
     x, y = np.meshgrid(np.arange(8, 110, 12), np.arange(8, 90, 12))
     centers = np.c_[x.ravel(), y.ravel()]
-    # Many disconnected two-point patches, each smaller than a sample
-    # neighborhood. Counting their combined extent would invent a conflict.
+    # Independent measured-air conflicts remain evidence even when none of the
+    # small pairs connects to another. Connectivity must not excuse rotation.
     uv = np.concatenate((centers, centers + [0.5, 0]))
     if connected_strip:
         # One chain extends beyond a single neighborhood despite all the
         # disconnected specks. It must still trigger geometric rejection.
         uv = np.concatenate((uv, np.c_[np.arange(8, 19, 2), np.full(6, 8)]))
     points = np.c_[(uv - k[:2, 2]) / np.diag(k)[:2] * 0.4, np.full(len(uv), 0.4)]
-    assert fit._coherent_protrusion(points, np.ones(len(points))) == connected_strip
+    assert fit._coherent_protrusion(points, np.ones(len(points)))
 
 
 @pytest.mark.parametrize("background", [0.0, 0.3])

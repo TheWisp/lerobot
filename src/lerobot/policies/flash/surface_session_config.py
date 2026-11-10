@@ -20,9 +20,14 @@ def defaults():
         scene_depth_constraints=True,
         prefer_observed_overlap=True,
     )
+    config["shape"]["registration"]["backend"] = "small_gicp"
     surface = asdict(GrowingSurfaceConfig())
     surface.update(partial_surface_matching=True, fit_view_limit=1)
-    surface["uncertainty"].update(position_process_std_m_sqrt_s=0.03, reset_on_geometry_conflict=False)
+    surface["uncertainty"].update(
+        position_process_std_m_sqrt_s=0.03,
+        unmeasured_rotation_std_deg_sqrt_s=10,
+        reset_on_geometry_conflict=False,
+    )
     return {
         "config": config,
         "surface_experiment": surface,
@@ -40,12 +45,22 @@ def validate(values):
     if set(values) != set(defaults()):
         raise ValueError("Supply every pipeline section; use null to disable an optional section")
     result = {"config": asdict(VisionPipelineConfig.from_dict(values["config"]))}
+    surface_values = dict(values["surface_experiment"]) if values["surface_experiment"] is not None else None
+    group_values = dict(values["group_experiment"]) if values["group_experiment"] is not None else None
+    if group_values is not None:
+        # Recorded settings from before pose-evidence tuning moved downstream.
+        previous_weight = group_values.pop("point_evidence_weight", None)
+        if previous_weight is not None and surface_values is not None:
+            surface_values.setdefault("group_point_evidence_weight", previous_weight)
     for key, parse in (
         ("surface_experiment", lambda v: GrowingSurfaceConfig(**v)),
         ("group_experiment", GroupConfig.from_dict),
         ("shared_matching", SharedMatchingConfig.from_dict),
     ):
-        result[key] = asdict(parse(values[key])) if values[key] is not None else None
+        setting = {"surface_experiment": surface_values, "group_experiment": group_values}.get(
+            key, values[key]
+        )
+        result[key] = asdict(parse(setting)) if setting is not None else None
     if result["group_experiment"] is not None and result["surface_experiment"] is None:
         raise ValueError("Groups require surface_experiment")
     if type(values["retain_motion_reference"]) is not bool:

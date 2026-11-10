@@ -20,6 +20,11 @@ const FLASH_POSE_EXPLANATIONS = {
 const flashExperiments = { items: [], selected: null, data: null, frame: 0, request: null, listRequest: null, initialized: false };
 const flashRejectedOverlay = {key: null, packet: null, request: null, requestedKey: null, unavailable: null};
 
+function flashObjectDisplayName(role, object = {}) {
+    const name = object.name?.trim();
+    return name && name !== 'selected object' ? name : role === 'object' ? 'object_1' : role;
+}
+
 function toggleFlashExperimentRejected(enabled) {
     document.getElementById('flash-experiment-rejected').checked = enabled;
     document.getElementById('flash-scene-rejected').checked = enabled;
@@ -443,12 +448,7 @@ function drawFlashExperiment() {
             context.strokeStyle = ['#ff6969', '#6fe08a', '#75a8ff'][index];
             context.beginPath(); context.moveTo(...origin); context.lineTo(x, y); context.stroke();
         });
-        context.font = '12px sans-serif';
-        context.lineWidth = 3;
-        context.strokeStyle = '#101827';
-        context.fillStyle = '#fff';
-        context.strokeText(role, origin[0] + 5, origin[1] - 7);
-        context.fillText(role, origin[0] + 5, origin[1] - 7);
+        drawFlashPointTag(context, origin, flashObjectDisplayName(role, object), '#fff', -25);
     }
     // Matches remain visible above surface and mask overlays, including other objects.
     if (matchMode !== 'off') {
@@ -457,12 +457,13 @@ function drawFlashExperiment() {
     drawFlashGroupTracks(context, data, flashExperiments.frame, method, displayScale);
     if (document.getElementById('flash-experiment-rejected').checked) {
         if (data.schema_version >= 9) {
-            for (const object of Object.values(row.objects))
+            for (const [role, object] of Object.entries(row.objects))
                 if (object.rejected_projected?.[method])
-                    drawFlashRejectedPixels(context, object.rejected_projected[method]);
+                    drawFlashRejectedPixels(context, object.rejected_projected[method], flashObjectDisplayName(role, object));
         } else if (flashRejectedOverlay.key === `${flashExperiments.selected}:${flashExperiments.frame}:${method}`) {
-            for (const object of Object.values(flashRejectedOverlay.packet.objects))
-                drawFlashRejectedPoses(context, object, flashRejectedOverlay.packet.camera.intrinsics);
+            for (const [role, object] of Object.entries(flashRejectedOverlay.packet.objects))
+                drawFlashRejectedPoses(context, object, flashRejectedOverlay.packet.camera.intrinsics,
+                    flashObjectDisplayName(role, object));
         }
     }
     // Keep detailed evidence available on hover, without a changing paragraph
@@ -897,16 +898,19 @@ function drawFlashExperimentScene(rebuild = false) {
         const expanded = ['conditioned_growing', 'group_growing'].includes(state.packet.method) &&
             document.getElementById('flash-scene-surface').value === 'expanded';
         for (const [role, object] of Object.entries(state.packet.objects)) {
+            const name = flashObjectDisplayName(role, object);
             descriptions.push({layer: 'estimate', color: 0xffa84b, pose: object.pose,
-                points: expanded ? object.surface : object.initial_surface, axisPoints: object.axis_points});
+                points: expanded ? object.surface : object.initial_surface, axisPoints: object.axis_points,
+                label: name});
             for (const [kind, color] of [['prediction', 0x49bcff], ['fit', 0xff52d7]]) {
                 const pose = object.rejected_poses?.[kind];
                 if (pose && (kind !== 'prediction' || JSON.stringify(pose) !== JSON.stringify(object.rejected_poses.fit)))
                     descriptions.push({layer: kind === 'fit' ? 'rejectedFit' : 'rejectedPrediction',
-                        color, pose, points: object.surface_used, axes: false, opacity: 0.75, pointSize: 2.5});
+                        color, pose, points: object.surface_used, axes: false, opacity: 0.75, pointSize: 2.5,
+                        label: `${name} (rejected ${kind})`});
             }
             descriptions.push({layer: 'labelled', color: 0x34e5a1, pose: object.labelled_pose,
-                points: object.labelled_surface, axisPoints: object.axis_points});
+                points: object.labelled_surface, axisPoints: object.axis_points, label: `${name} (label)`});
         }
         const mode = flashGroupMode('flash-experiment-groups');
         const groups = flashSceneGroups(state.packet.scene_group_tracks, state.packet.objects, mode);
@@ -954,7 +958,7 @@ async function requestFlashExperimentScene() {
         const bitmap = await createImageBitmap(new Blob([buffer.slice(depthStart + packet.depth_bytes)], {type: 'image/png'}));
         if (generation !== state.generation || !state.enabled || identity !== flashExperiments.selected ||
             method !== document.getElementById('flash-experiment-method').value) { bitmap.close(); return; }
-        const module = await import('/static/rgbd_scene.js?v=8');
+        const module = await import('/static/rgbd_scene.js?v=10');
         if (generation !== state.generation || !state.enabled || identity !== flashExperiments.selected ||
             method !== document.getElementById('flash-experiment-method').value) { bitmap.close(); return; }
         if (!state.viewer) state.viewer = module.createRgbdScene(document.getElementById('flash-experiment-scene'));

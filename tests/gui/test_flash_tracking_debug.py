@@ -482,6 +482,7 @@ def test_advanced_values_reach_actual_frame_preparation_and_solver():
     values = defaults()
     values["config"]["shape"]["max_evaluations"] = 1
     values["config"]["observation"]["mask_margin_px"] = 6
+    values["surface_experiment"]["uncertainty"]["unmeasured_rotation_std_deg_sqrt_s"] = 10
     req = flash_tracking.TrackingStart(pipeline_settings=values)
     # Cross the launch JSON and actual worker constructor, not a mirror of form fields.
     loaded = json.loads(req.model_dump_json())["pipeline_settings"]
@@ -492,6 +493,11 @@ def test_advanced_values_reach_actual_frame_preparation_and_solver():
     detail0 = row0["objects"]["left"]["group_growing_details"]
     assert detail0["observation"]["clean_count"] == (56 - 12) * (45 - 12)
     assert row1["objects"]["left"]["group_growing_details"]["fit"]["evaluations"] <= 1
+    kalman = row1["objects"]["left"]["group_growing_details"]["kalman"]
+    assert kalman["motion_source"] is None
+    # The request reaches prediction, not just the serialized config.
+    dt = frames[1][0].source_time_s - frames[0][0].source_time_s
+    assert kalman["process_covariance"][0][0] == pytest.approx(np.deg2rad(10) ** 2 * dt)
 
 
 def test_history_api_survives_new_session_and_rejects_path_traversal(tmp_path):
@@ -582,14 +588,22 @@ def test_typed_pipeline_form_submits_to_real_start_schema(gui_page):
     page.wait_for_function(
         "flashLive.settings !== null && !document.getElementById('flash-live-start').disabled"
     )
+    assert page.locator("#flash-live-matcher").input_value() == "small_gicp"
+    assert page.locator("#flash-live-matching").input_value() == "lk"
     page.locator("#flash-live-settings").click()
     dialog = page.locator("#flash-live-settings-dialog")
     assert dialog.is_visible()
     assert dialog.locator("textarea").count() == 0
     dialog.get_by_label("Total fitting iteration limit", exact=True).fill("7")
     dialog.get_by_label("Depth agreement tolerance (mm)", exact=True).fill("4")
+    supports = dialog.get_by_label("Separate protrusion patches", exact=True)
+    assert supports.input_value() == "3"
+    supports.fill("4")
+    motion_noise = dialog.get_by_label("Rotation uncertainty without motion input (° / √s)", exact=True)
+    assert motion_noise.input_value() == "10"
+    motion_noise.fill("12")
     dialog.get_by_label("Use pose uncertainty", exact=True).uncheck()
-    assert not dialog.get_by_label("Iterations per resolution", exact=True).is_visible()
+    assert dialog.get_by_label("Iterations per resolution", exact=True).is_visible()
     dialog.get_by_role("button", name="Close", exact=True).click()
     assert page.locator("#flash-live-history-mb").count() == 0
     page.get_by_label("Recent history (seconds)", exact=True).fill("90")
@@ -603,9 +617,14 @@ def test_typed_pipeline_form_submits_to_real_start_schema(gui_page):
     assert submitted[-1].depth_source == "lite_any_stereo_v2_m"
     assert "history_max_mb" not in submitted[-1].model_dump()
     settings = submitted[-1].pipeline_settings
+    assert settings["config"]["shape"]["registration"]["backend"] == "small_gicp"
     assert settings["config"]["shape"]["max_evaluations"] == 7
     assert settings["config"]["shape"]["depth_tolerance_m"] == 0.004
+    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+
+    assert VisionPipelineConfig.from_dict(settings["config"]).shape.free_space_min_supports == 4
     assert settings["surface_experiment"]["uncertainty"]["enabled"] is False
+    assert settings["surface_experiment"]["uncertainty"]["unmeasured_rotation_std_deg_sqrt_s"] == 12
     page.wait_for_function(
         "flashLive.running && !document.getElementById('flash-live-depth-spatial').disabled"
     )

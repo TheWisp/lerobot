@@ -4564,3 +4564,279 @@ policy had 133.2 ms median, 163.1 ms p95 and 204.0 ms maximum frame time
 while the frame loop was running, RSS was about 4.0–4.2 GiB at sampled points.
 The dowel was unavailable or predicted on 396/599 frames after initialization,
 so this is a latency and endurance result, **not** a tracking-quality success.
+
+## 2026-11-10 — Rotation uncertainty without measured motion (opt-in trial)
+
+The green-toy recording first stays lost at frame 488 although the visible
+GICP fit passes geometry (about 1.3 mm median error). Kalman rejects a roughly
+14° rotation against a narrow stationary prediction: innovation 83.4 versus a
+12.59 limit. No usable measured group motion advanced that prediction. Missing
+motion input did not justify such certainty that the object had stayed still.
+
+The trial adds `surface_experiment.uncertainty.unmeasured_rotation_std_deg_sqrt_s`.
+When no measured motion advances the filter, rotation process noise uses the
+larger of this floor and the ordinary rate. It is selected **before fitting**,
+not increased in response to a rejected candidate. The tested floor is
+10°/√s, versus the ordinary 2°/√s; at a 0.2 s interval these add rotation
+standard deviations of 4.47° and 0.89° respectively. These are motion-model
+assumptions, not acceptable pose errors or measured sensor accuracy. Position
+noise, observation information, innovation limit, geometry rejection, solver
+budget and group updates are unchanged. Reset stays disabled. The default is
+`null`, retaining the previous rule.
+
+Both arms replay from the beginning with small_gicp, LK and the same recorded
+Fast-FoundationStereo depth and SAM masks. Counts include initialization.
+
+| Recording                       | Accepted observations, before → trial | Predicted, before → trial | Lost, before → trial | Mean tracking time, before → trial |
+| ------------------------------- | ------------------------------------- | ------------------------- | -------------------- | ---------------------------------- |
+| Green toy, 129 processed frames | 46 → 121                              | 1 → 0                     | 82 → 8               | 74.8 → 80.3 ms                     |
+| Cube, 223 processed frames      | 198 → 215                             | 8 → 1                     | 17 → 7               | 49.4 → 50.4 ms                     |
+
+The toy baseline reproduces all 129 recorded statuses. A 20°/√s exploratory
+trial also accepted 121 observations; 10 was retained as the smaller trial,
+not as an established optimum. Timings exclude depth inference and SAM.
+More accepted observations are **availability**, not ground-truth accuracy.
+The turn/end toy overlays initially looked consistent in the camera view;
+these clips have no independent pose labels. **CORRECTION after the geometry
+audit below:** the earlier visual assessment of cube frame 3011 was too lenient.
+Its final published surface occupies measured empty space, despite passing the
+existing check. The availability increase is not a validated quality gain. Larger process noise
+can admit an incorrect but geometrically plausible rotation, so this result
+does not establish a universal accuracy gain or justify removing the gate.
+
+The full inputs were the Nov 9 22:52 recent history (raw source times
+819302.494725678–819337.644931446) and
+`saved-3b9b9f3d70a74fbda3d65772f3f32b9c`. Recent history can be overwritten;
+the repository test fixture `tests/policies/flash/fixtures/green_toy_motion_20261109.npz`
+preserves lossless RGB, selected depth, masks, LK pairs, surface and posterior
+for the first rejection. Its provenance and crop are in
+`test_unmeasured_pose_motion.py`.
+
+Reproduce a complete trial with `python -m benchmarks.flash_clip_replay <clip>
+--set 'config.shape.registration.backend="small_gicp"'
+--set surface_experiment.uncertainty.unmeasured_rotation_std_deg_sqrt_s=10
+--out <output.json> --quiet`. Omit the second override for the baseline.
+
+Validation: 66 tests passed across the new motion suite, Kalman, uncertainty
+and depth-validity suites; two GUI tests passed from the typed form through
+request serialization and actual prediction. Controls include five planar
+points (depth updates without inventing yaw/sideways movement), a large wrong
+rotation, unchanged supported-group prediction, frame-rate invariance,
+occlusion, thin strips, camera motion, corrupted depth, and the recorded
+impossible mug fit. Replacing the filter with its pre-trial implementation
+makes the recorded toy test fail at the intended acceptance assertion.
+
+The wider publication/evidence-priority selection has 23 existing failures
+(8 visible_icp publication cases and 15 image/geometry-priority cases).
+Loading the pre-trial filter into the same test process reproduces exactly the
+same failing test IDs. This trial has not repaired those failures, and the
+branch is not being described as fully passing.
+
+### Follow-up: audit final published geometry before accepting this trial
+
+The user identified a visibly wrong cube pose. A replay audit recomputed the
+geometry verdict on every published non-initial pose, using that frame's
+pre-growth surface and the final post-Kalman pose: all 205 baseline and 215
+trial outputs passed the existing checker. This did **not** establish correct
+geometry. In newly accepted trial frame 3011, the checker detects 14.4%
+weighted current-view empty-space contradictions but permits the pose. The
+contradictory samples form small disconnected clusters, none wide enough for
+its connected-patch veto, and the aggregate stays below the 25% allowance.
+
+The saved surface has three points more than eight pixels outside the current
+mask, 26.3, 27.2 and 26.7 mm in front of the measured background. Those readings
+remain valid after depth cleanup and conservative neighborhood erosion. They
+are neither missing depth nor nearer occluders. Thus the current geometric
+acceptance rule has a concrete gap; a more permissive Kalman prior exposes it.
+The checker implementation itself was not changed by the Kalman trial.
+
+`tests/policies/flash/fixtures/cube_published_geometry_20261110.npz` preserves
+the final published pose, exact pre-growth surface and consistent 3004 source
+pose from the whole small_gicp replay, plus cropped lossless selected depth,
+RGB, masks and settings. `test_recorded_cube_publication_geometry.py` rebuilds
+the real observations and check. The reliable-background evidence test passes;
+the required rejection test **currently fails** with both vectorized and
+compiled checks. These are deliberate failing regression reproducers, not a
+claim that the bug is fixed. No geometry tolerance or publication policy was
+changed during this audit. The Kalman trial remains opt-in pending a decision
+on fixing this shared geometry rule.
+
+### 2026-11-10 — Reject independently supported small protrusions
+
+The recorded final cube pose at frame 3011 occupied confidently measured air
+by 26–27 mm at three rays outside the mask. The old checker found the depth
+conflicts but discarded four disconnected small patches; the weighted 14.4%
+conflict fraction then passed the 25% allowance. This is a geometry rejection
+defect, independent of the selected matcher or Kalman innovation threshold.
+The before/after full-replay trace also corrects an earlier explanation: at
+3011 the old Kalman run passed its innovation gate, then rejected its fused
+pose geometrically. The trial followed a different history and published a
+different pose through the check's blind spot. It was not the identical pose
+being blocked by the old innovation threshold.
+
+The shared checker now rejects three independent small protrusion patches by
+default (`config.shape.free_space_min_supports`), as well as the existing broad
+connected protrusion. A sample needs fully supported contradictory interpolation
+rays after conservative depth cleanup. The metric depth tolerance is unchanged.
+Nearby samples still count as one local patch, using the existing projected
+surface-spacing/boundary footprint. Thus sampling one small bad patch more
+densely does not multiply its evidence. This operates before and after Kalman;
+texture, coverage and aggregate overlap cannot outvote this veto.
+
+A first implementation counted separated depth-filter neighborhoods directly.
+That rejected the previously fixed static controller at frames 430→436:
+nineteen residual contradictions in one 6×10 px noisy corner became several
+supports. That approach was discarded. Preserving the existing local noise
+footprint keeps this controller control accepted while rejecting the cube's
+four separate patches. No retained-view exception, Kalman value, or depth-noise
+tolerance was changed to make that test pass.
+
+Recorded and rendered regressions cover the cube, three/four disconnected
+patches, sparse/dense sampling of the same rotated face, isolated map/sensor
+errors, holes, occlusion, partial interpolation next to missing depth, and
+config validation. Restoring the previous checker in an isolated process makes
+both recorded-cube variants and all eight disconnected-patch variants fail
+(10 intended assertion failures). The existing test which declared scattered
+contradictions harmless was updated to the user's clarified requirement.
+
+Full small_gicp + LK replays use the same selected depth/masks, from the first
+frame. Numbers below are available observations / predictions / lost frames,
+not accuracy scores:
+
+| Clip / rotation noise              | Before geometry fix | After geometry fix |
+| ---------------------------------- | ------------------: | -----------------: |
+| Cube, existing Kalman (223 frames) |        198 / 8 / 17 |       189 / 9 / 25 |
+| Cube, opt-in 10°/√s (223 frames)   |         215 / 1 / 7 |        217 / 3 / 3 |
+| Toy, existing Kalman (129 frames)  |         46 / 1 / 82 |        48 / 0 / 81 |
+| Toy, opt-in 10°/√s (129 frames)    |         121 / 0 / 8 |       109 / 1 / 19 |
+
+In the fixed trial replay, cube 3011 publishes a different pose with zero
+current/retained scene-depth conflicts and a 2.02 mm current-to-map median.
+Toy 488 still recovers (1.29 mm median, no scene-depth conflict), and the final
+toy frame 1042 is observed. The trial withholds more intervening toy frames,
+including retained-view conflicts. Those decisions still need visual review;
+passing the checker is not independent proof that each pose is correct.
+The Kalman trial remains opt-in. Existing saved playback was not rewritten.
+
+A fixed-input CPU microbenchmark (400 checks after warm-up) measures the cube
+check at 1.30→0.31 ms median, because rejection avoids subsequent correspondence
+work. The static-controller check is unchanged at 2.18→2.17 ms. Full tracker
+means are 51–52 ms for the cube and 75–79 ms for the toy; these exclude camera,
+depth-model and SAM inference. See [captured results](distributed-protrusions-20261110/results.json).
+
+Final focused validation: **146 passed, 17 optional-backend skips, 8 failures**.
+All eight failures are the pre-existing `visible_icp` downstream-publication
+return-to-clear-frame cases (5.83 mm displacement against a 5 mm bound), also
+reproduced before this change. No new failures in this selection. The shared
+settings form passes the new value through the real start request and
+`VisionPipelineConfig` consumer. Ruff, formatting and `git diff --check` pass.
+The stopped 9102 GUI was restarted with this geometry rule; its shared-defaults
+endpoint reports three patches and a null (disabled) missing-motion Kalman
+trial setting. The diagram's geometry metric lists the new rule and setting.
+
+### 2026-11-10 — Controller recovery with the combined Kalman and geometry rules
+
+The next green-controller live run used Fast-FoundationStereo, small_gicp,
+LK and the three-patch geometry check, but the missing-motion rotation floor
+was still null. The preserved clip is
+`saved-60474f8f3b9f4dde84e16324beda6854`. Replaying from initialization reproduces
+all 170 live statuses: 71 observed (including initialization), one predicted,
+98 lost. From frame 807 (26.91 s) to the final frame 1238 (41.29 s), every
+GICP fit passes geometry but the Kalman innovation test rejects it.
+
+At the first sustained loss, measured object LK pairs start a valid GICP fit
+(100% measured overlap, 1.19 mm median residual). There is no usable measured
+group motion for the Kalman prediction. Its rotation uncertainty is only
+1.5–1.7°; the fit turns about 10.3°, producing an innovation score 20.4 against
+12.59. Later turns compound this stale prior. This is rejection by an
+overconfident motion model, not failure to find a geometry-compatible fit.
+
+Changing only `unmeasured_rotation_std_deg_sqrt_s` to 10 yields **167–168
+observed and 2–3 lost frames** over repeated full replays. All remaining losses
+are isolated, with recovery at the next processed frame. Frame 750 conflicts
+with the retained depth view; around frames 991–1003 the final Kalman blend
+can produce several separated protrusions. These remain withheld. Parallel
+numeric fitting changes which near-threshold frame is withheld, so exact
+full-replay status counts are not used as a unit-test oracle.
+
+The video replay publishes 167 observations; every post-initialization pose
+passes the final geometry check. Its framewise current-to-map median residual
+has median 1.19 mm and maximum 1.30 mm. Representative images at the first
+loss, later turns and the final clear view fit visually. These are availability
+and consistency measurements, not independent pose accuracy: this clip has no
+ground-truth poses. The before/after video uses the same RGB/source timestamp
+in both panels and preserves source-time playback intervals. It is an offline
+replay, not a live latency measurement.
+
+The shared fresh-session recipe now enables the **10°/√s missing-motion
+rotation floor**, retaining **three independent protrusion patches** as a
+hard geometry veto. Both remain configurable. The ordinary measured-group
+process noise, depth tolerance, measurement uncertainty, innovation threshold
+and no-reset policy are unchanged. Explicit saved configurations retain their
+old values; saved playback is not rewritten. Extra motion uncertainty can
+give a plausible wrong alignment more influence, which is why geometry runs
+before and after correction. No additional solve or recovery search was added.
+
+The compact controller fixture preserves the selected metric depth, masks,
+RGB, LK pairs, map and accepted posterior at frames 213/800/807. Its regression
+runs observation preparation, small_gicp, Kalman, final geometry and publication:
+the old setting loses the frame; the new setting publishes a compatible fit.
+Removing the missing-motion noise in an isolated process makes the fresh-default
+recovery assertion fail. Restoring the old geometry checker causes 12 failures:
+two recorded bad-cube checks, eight disconnected-patch variants, the rotated
+square-face case and the configurable-support check. The existing
+visible-cube recovery assertion now passes and no longer carries an expected-
+failure marker; the separate weak-image-weight expected failure remains.
+
+Tracker-only mean processing is 57→64 ms and p99 71→122 ms in the measured pair;
+more frames now execute accepted-observation/growth bookkeeping. These numbers
+exclude camera, depth-model and SAM inference. See the
+[captured results and dropout evidence](controller-recovery-20261110/results.json).
+
+Combined focused validation: **183 passed, one existing expected failure,
+eight pre-existing failures**. The failures are the alternate `visible_icp`
+return-to-clear-frame displacement assertions (5.25–5.83 mm against 5 mm),
+not new controller or geometry failures. The fresh-default request reaches
+the actual live-session consumer. The stopped 9102 GUI was restarted; its
+shared-defaults endpoint reports small_gicp, LK, Fast-FoundationStereo,
+three protrusion supports and rotation floor 10. The rendered architecture
+metric and settings catalog describe those same defaults.
+
+### 2026-11-10 — Follow-up live controller run and checkpoint
+
+The user's next run uses the new defaults and recovers, but still has two
+roughly four-second loss intervals. The retained 60-second window contains
+313 tracked frames: 257 observed, 56 lost. Of the losses, 44 are Kalman
+innovation conflicts, ten have no geometry-compatible fitted candidate, and
+two fail geometry after fusion. These are recorded statuses, not a new replay
+or ground-truth accuracy measurement.
+
+At frames 1121–1236 all 22 withheld fits pass geometry. No usable group motion
+reaches the motion filter. Its rotational uncertainty grows from about 5° to
+20° while the fit differs from the stale prediction by roughly 51–73°.
+Frame 1236 scores 12.93 against the 12.59 innovation limit; frame 1241 recovers
+at 12.55. This confirms a remaining motion-gating delay; it does not establish
+that a physical nudge was necessary. The user reports that small movements
+helped. The other long interval also contains seven geometry-rejected fits.
+
+The recording is preserved locally as
+`controller-followup-20261110/saved-c596d12cdcd34c7e917ba036f01fa286` under the
+FLASH cache. Initialization predates the rolling window, so starting a new
+tracker at its first frame would not reproduce this live state. The
+[compact decision evidence](controller-recovery-20261110/followup.json) retains
+frame IDs and times relative to the retained window. The remaining recovery
+problem is tracked in [issue #272](https://github.com/TheWisp/lerobot/issues/272).
+The checkpoint preserves the improved defaults without further loosening
+geometry or adding another search loop.
+
+Checkpoint validation also covers playback, live display, settings, grouping
+and history: 78 checks passed in the first run and all 91 GUI checks passed
+after correcting two findings. The rejected-overlay endpoint omitted the
+status required by the shared renderer, hiding candidates in older video
+exports; the existing end-to-end browser test fails without that field and
+passes with it. The settings browser test still expected the former null
+rotation-floor default; it now checks 10 and verifies an edited value of 12
+reaches the real start schema. Ruff, formatting, changed-JavaScript syntax and
+diff whitespace checks pass. The eight previously recorded `visible_icp`
+displacement failures remain unresolved; this is a checkpoint, not a claim
+that the whole branch test suite is green.

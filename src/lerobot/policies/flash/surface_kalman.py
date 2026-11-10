@@ -131,13 +131,10 @@ class PoseKalmanFilter:
             else:
                 detail["motion_rejected"] = "unconstrained_group_motion"
         c = self.config
-        process = (
-            np.diag(
-                [np.deg2rad(c.rotation_process_std_deg_sqrt_s) ** 2] * 3
-                + [c.position_process_std_m_sqrt_s**2] * 3
-            )
-            * dt
-        )
+        rotation_std = c.rotation_process_std_deg_sqrt_s
+        if detail["motion_source"] is None and c.unmeasured_rotation_std_deg_sqrt_s is not None:
+            rotation_std = max(rotation_std, c.unmeasured_rotation_std_deg_sqrt_s)
+        process = np.diag([np.deg2rad(rotation_std) ** 2] * 3 + [c.position_process_std_m_sqrt_s**2] * 3) * dt
         self.covariance += process
         self.covariance = (self.covariance + self.covariance.T) / 2
         self.time_s = time_s

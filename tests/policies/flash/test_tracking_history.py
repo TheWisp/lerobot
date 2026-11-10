@@ -225,6 +225,11 @@ def test_model_depth_and_stereo_pair_stay_separate_from_raw_camera_record(tmp_pa
 
     saved = tmp_path / save_window(history.directory, tmp_path)
     assert (saved / "0000000010.model_depth.zst").is_file()
+    from benchmarks.flash_clip_replay import recorded_tracker_input
+
+    replay_frame, _, _ = recorded_tracker_input(saved, read_index(saved)["frames"][0])
+    np.testing.assert_allclose(replay_frame.metric_depth(), model_frame.metric_depth())
+    assert replay_frame.source_time_s == raw.source_time_s
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     root = export_episode(saved)

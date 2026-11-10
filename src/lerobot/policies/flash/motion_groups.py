@@ -1,6 +1,5 @@
-"""Scene-wide rigid motion groups, driven only by measured point identities.
+"""Scene-wide rigid motion groups from timestamped 3D point identities.
 
-No object labels, masks, surfaces, or object poses enter this state machine.
 Each frame: fit visible members, separate inconsistent measurements, discover
 new groups, merge sustained co-movement, then expose measured/predicted points.
 """
@@ -20,6 +19,7 @@ from .surface_observation import move
 @dataclass(frozen=True)
 class GroupConfig:
     min_inliers: int = 12
+    min_motion_points: int = 4
     fit_threshold_m: float = 0.005
     support_confirmation_s: float = 0.8
     split_tolerance_m: float = 0.003
@@ -30,11 +30,11 @@ class GroupConfig:
     max_points: int = 4096
     max_groups: int = 32
     motion_hypotheses: int = 48
-    point_evidence_weight: float = 1.0
 
     def __post_init__(self):
         for name, minimum in (
             ("min_inliers", 3),
+            ("min_motion_points", 3),
             ("max_points", 3),
             ("max_groups", 1),
             ("motion_hypotheses", 1),
@@ -44,6 +44,8 @@ class GroupConfig:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
         if self.max_points < self.min_inliers:
             raise ValueError("max_points must accommodate min_inliers")
+        if self.min_motion_points > self.min_inliers:
+            raise ValueError("min_motion_points cannot exceed new-group min_inliers")
         for name in ("fit_threshold_m", "split_tolerance_m", "merge_tolerance_m", "max_hidden_s"):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be finite and positive")
@@ -51,25 +53,12 @@ class GroupConfig:
             "support_confirmation_s",
             "split_confirmation_s",
             "merge_confirmation_s",
-            "point_evidence_weight",
         ):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) < 0:
                 raise ValueError(f"{name} must be finite and nonnegative")
 
     @classmethod
     def from_dict(cls, values):
-        values = dict(values)
-        # Read historical experiment settings without retaining their algorithms.
-        for key in (
-            "context_radius_m",
-            "object_max_points",
-            "object_max_frame_gap_s",
-            "object_fb_threshold_px",
-            "object_image_scale",
-            "depth_support_radius_px",
-            "min_motion_m",
-        ):
-            values.pop(key, None)
         return cls(**values)
 
 
@@ -349,7 +338,7 @@ class SceneMotionGroups:
             visible = sorted(set(group.anchors) & current.keys())
             group.supported = False
             group.inliers = set()
-            if len(visible) < self.config.min_inliers:
+            if len(visible) < self.config.min_motion_points:
                 if (
                     not group.confirmed
                     and time - group.last_supported + 1e-9 >= self.config.split_confirmation_s
@@ -359,7 +348,11 @@ class SceneMotionGroups:
             source = np.array([group.anchors[i] for i in visible])
             target = np.array([current[i] for i in visible])
             fitted = fit_point_motion(
-                source, target, self.config, robust_tolerance_m=self.config.split_tolerance_m
+                source,
+                target,
+                self.config,
+                min_points=self.config.min_motion_points,
+                robust_tolerance_m=self.config.split_tolerance_m,
             )
             if fitted is None:
                 if (
@@ -385,9 +378,10 @@ class SceneMotionGroups:
                         self._free_since[i] = since
                         self._banned_from[i] = (group.id, time + self.config.merge_confirmation_s)
 
-        # A fragment smaller than the minimum can never measure a rigid group.
+        # Existing groups need enough members to measure motion; only birth
+        # requires the larger new-group consensus above.
         self._groups = {
-            gid: g for gid, g in self._groups.items() if len(g.anchors) >= self.config.min_inliers
+            gid: g for gid, g in self._groups.items() if len(g.anchors) >= self.config.min_motion_points
         }
         # New IDs first get a chance to join a nearby, measured group. A point
         # found free for one frame does not immediately found a new body.

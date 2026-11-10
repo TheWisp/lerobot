@@ -35,6 +35,9 @@ class ShapeConfig:
     depth_tolerance_m: float = 0.005
     surface_spacing_m: float = 0.003
     mask_boundary_tolerance_px: float = 2.0
+    # Separate reliable protrusion patches needed for rejection even when each
+    # patch is small. A broad connected protrusion already rejects on its own.
+    free_space_min_supports: int = 3
     # Legacy name: enables a soft cost for uncovered current outline. Missing
     # coverage is not a contradiction: measured RGB-D surfaces are partial.
     # This experiment remains opt-in because a strong cost can bias a partial fit.
@@ -62,6 +65,9 @@ class ShapeConfig:
         value = self.max_evaluations
         if not isinstance(value, Integral) or isinstance(value, bool) or value < 1:
             raise ValueError("max_evaluations must be an integer >= 1")
+        value = self.free_space_min_supports
+        if not isinstance(value, Integral) or isinstance(value, bool) or value < 1:
+            raise ValueError("free_space_min_supports must be an integer >= 1")
 
 
 @dataclass(frozen=True)
@@ -702,16 +708,18 @@ class WholeSurfaceFit:
         }
 
     def _coherent_protrusion(self, predicted, contradicted):
-        """Find a connected patch protruding into measured empty space.
+        """Reject a broad protrusion or several independent small patches.
 
-        A single depth disagreement can be a bad map point or sensor reading.
-        A patch wider than one surface-sample neighborhood is pose evidence.
-        This also applies inside the mask: a surface floating in front of the
-        measured object is impossible too. Depth already uses the conservative
-        neighborhood minimum, so holes and closer occluders cannot reject it.
+        The depth minimum already withholds holes and protects nearer occluders.
+        Require the full interpolation footprint to contradict the sample, so
+        a sliver of background beside an unknown/occluded ray is not a veto.
+        Nearby contradictions can share one erroneous reading or map patch.
+        Their connection is used to avoid counting that evidence repeatedly,
+        not to discard several independent patches of measured empty space.
         """
-        indices = np.flatnonzero(contradicted > 0)
-        if len(indices) < 2:
+        required = self.config.free_space_min_supports
+        indices = np.flatnonzero(contradicted >= 1.0 - 1e-6)
+        if not len(indices):
             return False
         uv = project(predicted[indices], self.k)
         h, w = self.outside_mask.shape
@@ -719,23 +727,21 @@ class WholeSurfaceFit:
         valid &= (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)
         uv = uv[valid]
         depth = predicted[indices[valid], 2]
-        if len(uv) < 2:
+        if not len(uv):
             return False
-        # One projected surface-sample neighborhood sets both connectivity
-        # and the minimum span. Round to image pixels so float32 depth rounding
-        # cannot disconnect adjacent samples. No extra threshold is introduced.
+        # Preserve the existing local noise footprint. Actual point count does
+        # not set its scale: adding samples to one small patch cannot turn that
+        # patch into several independent contradictions.
         neighborhood = max(
             self.config.mask_boundary_tolerance_px,
             np.ceil(self.k[0, 0] * self.config.surface_spacing_m / np.median(depth)),
         )
         pairs = cKDTree(uv).query_pairs(neighborhood, output_type="ndarray")
-        if not len(pairs):
-            return False
         edges = np.concatenate((pairs, pairs[:, ::-1]))
         graph = csr_matrix((np.ones(len(edges)), (edges[:, 0], edges[:, 1])), shape=(len(uv), len(uv)))
         count, labels = connected_components(graph, directed=False)
-        # Reduce each component in one array pass. Scanning all pixels once
-        # per component made scattered depth disagreements quadratic in count.
+        if count >= required:
+            return True
         low = np.full((count, 2), np.inf)
         high = np.full((count, 2), -np.inf)
         np.minimum.at(low, labels, uv)

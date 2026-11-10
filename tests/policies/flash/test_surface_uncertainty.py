@@ -140,6 +140,21 @@ def test_settings_reference_covers_the_actual_configuration_catalog():
     assert rows == [[row["path"], json.dumps(row["default"]), row["description"]] for row in catalog()]
 
 
+def test_recorded_group_evidence_weight_moves_to_object_estimator():
+    old = defaults()
+    old["surface_experiment"].pop("group_point_evidence_weight")
+    old["group_experiment"]["point_evidence_weight"] = 0.4
+    restored = validate(old)
+    assert restored["surface_experiment"]["group_point_evidence_weight"] == 0.4
+    assert "point_evidence_weight" not in restored["group_experiment"]
+
+
+def test_object_group_association_minimum_is_validated_separately():
+    assert GrowingSurfaceConfig(group_association_min_points=4).group_association_min_points == 4
+    with pytest.raises(ValueError):
+        GrowingSurfaceConfig(group_association_min_points=2)
+
+
 @pytest.mark.parametrize(
     "values",
     [

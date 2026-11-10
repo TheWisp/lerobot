@@ -240,13 +240,33 @@ async function loadFlashPreviewDepth(frame) {
 const flashDepthPalette=DepthChip.PALETTE.map(hex=>
     [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)));
 function flashDepthSource(packet) {
-    const filters=Object.entries(packet.depth_processing||{}).filter(([,on])=>on).map(([name])=>name.replace('_',' '));
-    const active=packet.depth_processing==null?'unknown (older recording)':filters.join(', ')||'off';
-    const source=({lingbot:'LingBot-Depth-v0.5',foundation_stereo:'Fast-FoundationStereo',
+    return ({lingbot:'LingBot-Depth-v0.5',foundation_stereo:'Fast-FoundationStereo',
         lite_any_stereo_v2_s:'Lite Any Stereo V2-S',lite_any_stereo_v2_m:'Lite Any Stereo V2-M',
         lite_any_stereo_v2_l:'Lite Any Stereo V2-L',lite_any_stereo_v2:'Lite Any Stereo V2-H'})[packet.depth_source]||'RealSense depth';
-    return `aligned to color · Depth: ${source} · Camera filters: ${active}`+
-        `${packet.depth_filter_revision!=null?` · revision ${packet.depth_filter_revision}`:''}`;
+}
+function flashLossReason(object) {
+    // The code is durable evidence; older recordings may have stored a generic
+    // prediction warning even when the visible fit passed and fusion rejected it.
+    return ({innovation_conflict:'Visible fit rejected by motion filter',
+        fused_pose_contradicts_observation:'Motion-fused pose contradicts current depth'})[object.reason_code]
+        || object.reason;
+}
+function flashDepthPackets(state) {
+    const captured=state.episodePlayer ? state.previewDepth : state.packet||state.previewDepth;
+    // A live model packet carries selected depth as its primary map and the
+    // sensor map as the comparison; history keeps the two maps separately.
+    const sensor=captured?.depth_source!=='sensor' && captured?.depthBeforeFilters && !captured?.modelDepth
+        ? {...captured, depth:captured.depthBeforeFilters, modelDepth:captured.depth,
+           depthBeforeFilters:null, depth_source:'sensor', tracking_depth_source:captured.depth_source}
+        : captured;
+    const displayed=state.streamMode==='processed' && sensor?.modelDepth
+        ? {...sensor, depth:sensor.modelDepth, depthBeforeFilters:sensor.depth,
+           depth_source:sensor.processed_depth_source||sensor.tracking_depth_source} : sensor;
+    return {captured,displayed};
+}
+function flashAddedDepthKind(packet) {
+    if(!packet?.depthBeforeFilters)return null;
+    return packet.depth_source==='sensor'?'filter-filled':'model-only';
 }
 function drawFlashDepth(ctx, packet, canvas) {
     const depth=packet.depth, width=packet.camera.width, height=packet.camera.height;
@@ -276,13 +296,17 @@ function drawFlashDepth(ctx, packet, canvas) {
         pixels[j+3]=255;
     }
     canvas.width=width;canvas.height=height;ctx.putImageData(image,0,0);
-    flashLive.depthSummary=`${near.toFixed(3)} m near → ${far.toFixed(3)} m far · `+
-        `${(100*holes/depth.length).toFixed(1)}% holes · ${flashDepthSource(packet)}`+
-        (highlight?' · pink = filter-created depth':'');
+    const filters=Object.entries(packet.depth_processing||{}).filter(([,on])=>on)
+        .map(([name])=>name.replace('_',' '));
+    const added=flashAddedDepthKind(packet);
+    flashLive.depthSummary=`${flashDepthSource(packet)} · ${near.toFixed(2)}–${far.toFixed(2)} m · `+
+        `${(100*holes/depth.length).toFixed(1)}% no depth`+
+        (filters.length?` · ${filters.join(', ')} filter${filters.length===1?'':'s'}`:'')+
+        (highlight?` · pink: ${added} depth`:'');
     liveElement('depth-info').textContent=flashLive.depthSummary;
 }
 function inspectFlashLiveDepth(event) {
-    const packet=flashLive.packet||flashLive.previewDepth;
+    const packet=flashDepthPackets(flashLive).displayed;
     if(flashLive.view!=='depth'||!packet)return;
     const canvas=event.currentTarget, rect=canvas.getBoundingClientRect();
     const scale=Math.min(rect.width/canvas.width,rect.height/canvas.height);
@@ -305,18 +329,33 @@ function projectLive(points, pose, k) {
     });
 }
 function flashRejectedPoses(object) {
-    if (object.rejected_poses) return object.rejected_poses;
-    // Recordings made before the explicit display field still retain the
-    // attempted transforms in their saved diagnostics.
     const details = object.diagnostics || {};
-    return {fit: details.fit?.rejected_camera_from_reference || details.candidate_camera_from_reference || null,
-        prediction: details.prediction_geometry?.accepted === false
-            ? details.unpublished_camera_from_reference || null : null};
+    const stored = object.rejected_poses || {};
+    // A successful update can retain attempted poses in diagnostics. They are
+    // not rejected poses for this frame, and must not appear beside its output.
+    if(object.status !== 'lost') return {fit:null, prediction:null};
+    // Even a recent recording can lack the rejected fit when geometry passed
+    // but the motion filter rejected it; that pose is in the filter evidence.
+    return {fit: stored.fit || details.fit?.rejected_camera_from_reference ||
+            details.candidate_camera_from_reference || details.kalman?.observation_pose || null,
+        prediction: stored.prediction || (details.prediction_geometry?.accepted === false
+            ? details.unpublished_camera_from_reference || null : null)};
 }
-function drawFlashRejectedPixels(ctx, poses) {
-    for (const [kind, color, caption] of [
-        ['prediction', '#49bcff', 'Rejected prediction'],
-        ['fit', '#ff52d7', 'Rejected fit'],
+function drawFlashPointTag(ctx, anchor, label, color, offsetY=0) {
+    if(!anchor)return;
+    ctx.save();ctx.font='12px sans-serif';
+    const width=ctx.measureText(label).width+10, height=19;
+    const x=Math.max(2,Math.min(ctx.canvas.width-width-2,anchor[0]+6));
+    const y=Math.max(2,Math.min(ctx.canvas.height-height-2,anchor[1]+offsetY));
+    ctx.fillStyle='#101923e8';ctx.fillRect(x,y,width,height);
+    ctx.strokeStyle=color;ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,width-1,height-1);
+    ctx.fillStyle=color;ctx.fillText(label,x+5,y+13);
+    ctx.restore();
+}
+function drawFlashRejectedPixels(ctx, poses, name='object') {
+    for (const [kind, color] of [
+        ['prediction', '#49bcff'],
+        ['fit', '#ff52d7'],
     ]) {
         const pixels = poses[kind];
         if (!pixels || (kind === 'prediction' && JSON.stringify(pixels) === JSON.stringify(poses.fit))) continue;
@@ -333,22 +372,18 @@ function drawFlashRejectedPixels(ctx, poses) {
                 ctx.beginPath(); ctx.moveTo(...axes[0]); ctx.lineTo(...end); ctx.stroke();
             }
             ctx.setLineDash([]);
-            ctx.font = '12px sans-serif';
-            const labelX = axes[0][0] + 5;
-            const labelY = axes[0][1] + (kind === 'fit' ? -8 : 13);
-            ctx.lineWidth = 3; ctx.strokeStyle = '#101827';
-            ctx.strokeText(caption, labelX, labelY);
-            ctx.fillStyle = color; ctx.fillText(caption, labelX, labelY);
+            drawFlashPointTag(ctx,axes[0],`${name} (rejected ${kind})`,color,
+                kind==='fit'?-27:24);
         }
     }
 }
-function drawFlashRejectedPoses(ctx, object, intrinsics) {
+function drawFlashRejectedPoses(ctx, object, intrinsics, name='object') {
     const surface = object.surface_used || object.surface || [];
     if (!surface.length) return;
     const poses = flashRejectedPoses(object), projected = {};
     for (const kind of ['fit', 'prediction']) if (poses[kind])
         projected[kind] = projectLive([...(object.axis_points || []), ...surface], poses[kind], intrinsics);
-    drawFlashRejectedPixels(ctx, projected);
+    drawFlashRejectedPixels(ctx, projected, name);
 }
 function drawFlashMeasuredMasks(ctx, packet, width, height) {
     const masks=packet?.masks_rle;
@@ -380,30 +415,20 @@ async function drawFlashLive() {
     liveElement('groups').title = 'Connected measured points; group predictions remain in the recording.';
     // Saved episodes decode RGB and depth separately. An older live packet
     // must never override the depth for the episode frame on screen.
-    const capturedDepthPacket=state.episodePlayer ? state.previewDepth : packet||state.previewDepth;
-    // Live tracking packets carry the selected model depth as their primary
-    // depth and the aligned sensor map as the preceding measurement. History
-    // packets already carry these as separate sensor/model fields.
-    const rawDepthPacket=capturedDepthPacket?.depth_source!=='sensor' &&
-        capturedDepthPacket?.depthBeforeFilters && !capturedDepthPacket?.modelDepth
-        ? {...capturedDepthPacket, depth:capturedDepthPacket.depthBeforeFilters,
-           modelDepth:capturedDepthPacket.depth, depthBeforeFilters:null,
-           depth_source:'sensor', tracking_depth_source:capturedDepthPacket.depth_source}
-        : capturedDepthPacket;
-    const depthPacket=state.streamMode==='processed' && rawDepthPacket?.modelDepth
-        ? {...rawDepthPacket, depth:rawDepthPacket.modelDepth, depthBeforeFilters:rawDepthPacket.depth,
-           depth_source:rawDepthPacket.processed_depth_source||rawDepthPacket.tracking_depth_source} : rawDepthPacket;
-    liveElement('filled').disabled=!depthPacket?.depthBeforeFilters;
-    liveElement('filled-control').title=depthPacket?.depthBeforeFilters
-        ? 'Pink points had no aligned sensor depth before filtering or model prediction.'
-        : 'Pre-filter depth is unavailable for this frame (or camera filters are off).';
+    const {captured:capturedDepthPacket,displayed:depthPacket}=flashDepthPackets(state);
+    const added=flashAddedDepthKind(depthPacket);
+    liveElement('filled').disabled=!added;
+    liveElement('filled-label').textContent=added==='model-only'?'Show model-only depth':
+        added==='filter-filled'?'Show filter-filled depth':'Show added depth';
+    liveElement('filled-control').title=added==='model-only'
+        ? 'Pink pixels have model depth where the RealSense sensor measured none. Camera hole filling can be off.'
+        : added==='filter-filled'
+            ? 'Pink pixels have filtered sensor depth where the unfiltered sensor measured none.'
+            : 'No model-only or filter-filled depth is available on this frame.';
     const three=state.view==='3d' && !!depthPacket;
     liveElement('image').hidden=state.view==='3d'; liveElement('scene').hidden=!three;
     if(state.view==='3d' && !three)return;
-    liveElement('depth-info').hidden=state.view==='2d'||!depthPacket;
-    liveElement('depth-info').classList.toggle('flash-live-depth-info--scene',state.view==='3d');
-    if(three)liveElement('depth-info').textContent=`Camera points: ${flashDepthSource(depthPacket)} · zero depth omitted`+
-        (liveElement('filled').checked && depthPacket.depthBeforeFilters?' · pink = inferred depth where the sensor had a hole':'');
+    liveElement('depth-info').hidden=state.view!=='depth'||!depthPacket;
     if(state.view==='depth'){
         const canvas=liveElement('image'),ctx=canvas.getContext('2d');
         if(depthPacket)drawFlashDepth(ctx,depthPacket,canvas);
@@ -411,18 +436,21 @@ async function drawFlashLive() {
         return;
     }
     if(three) {
-        const module=await import('/static/rgbd_scene.js?v=9');
+        const module=await import('/static/rgbd_scene.js?v=10');
         if(!state.visible || (state.episodePlayer?state.previewDepth:state.packet||state.previewDepth)!==capturedDepthPacket) return;
         state.viewer ||= module.createRgbdScene(liveElement('scene'));
         const descriptions=[];
-        for(const obj of Object.values(overlay?.objects||{})) {
-            descriptions.push({layer:'estimate', points:obj.surface, pose:obj.pose, axisPoints:obj.axis_points, color:0xffa343});
+        for(const [role,obj] of Object.entries(overlay?.objects||{})) {
+            const name=flashObjectDisplayName(role,obj);
+            descriptions.push({layer:'estimate', points:obj.surface, pose:obj.pose, axisPoints:obj.axis_points,
+                color:0xffa343,label:name});
             const rejected=flashRejectedPoses(obj);
             if(liveElement('rejected').checked) for(const [kind, color] of [['prediction', 0x49bcff], ['fit', 0xff52d7]]) {
                 const pose=rejected[kind];
                 if(pose && (kind!=='prediction' || JSON.stringify(pose)!==JSON.stringify(rejected.fit)))
                     descriptions.push({layer:kind==='fit'?'rejectedFit':'rejectedPrediction',
-                        points:obj.surface_used||[],pose,color,opacity:0.75,axes:false,pointSize:2.5});
+                        points:obj.surface_used||[],pose,color,opacity:0.75,axes:false,pointSize:2.5,
+                        label:`${name} (rejected ${kind})`});
             }
         }
         const displayGroups=overlay?flashSceneGroups(overlay.scene_group_tracks, overlay.objects, flashGroupMode('flash-live-groups')):[];
@@ -445,7 +473,8 @@ async function drawFlashLive() {
     ctx.drawImage(image,0,0);
     if(state.streamMode==='processed')drawFlashMeasuredMasks(ctx,packet,canvas.width,canvas.height);
     if(!overlay) return;
-    for(const obj of Object.values(overlay.objects)) {
+    for(const [role,obj] of Object.entries(overlay.objects)) {
+        const name=flashObjectDisplayName(role,obj);
         if(liveElement('mask').checked) {
             ctx.strokeStyle='#65dcba'; ctx.lineWidth=2;
             for(const contour of obj.contours || []) {ctx.beginPath();contour.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.stroke();}
@@ -458,9 +487,10 @@ async function drawFlashLive() {
                 if(!axes[0] || !axes[i+1])return;
                 ctx.strokeStyle=color;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(...axes[0]);ctx.lineTo(...axes[i+1]);ctx.stroke();
             });
+            drawFlashPointTag(ctx,axes[0],name,'#ffa343',-23);
         }
         if(liveElement('rejected').checked)
-            drawFlashRejectedPoses(ctx,obj,overlay.camera.intrinsics);
+            drawFlashRejectedPoses(ctx,obj,overlay.camera.intrinsics,name);
     }
     for(const group of shownGroups) {
         const pixels=group.pixels || group.display_pixels || [];
@@ -560,7 +590,7 @@ function rememberFlashOverlay(packet, recording) {
         scene_group_tracks:packet.scene_group_tracks||[]};
     flashLive.overlayRecording=recording;
     liveElement('objects').textContent=Object.values(flashLive.overlay.objects).map(o=>
-        `${o.name}: ${o.status}${o.reason ? ` — ${o.reason}` : ''}`).join(' · ');
+        `${o.name}: ${o.status}${flashLossReason(o) ? ` — ${flashLossReason(o)}` : ''}`).join(' · ');
 }
 async function displayFlashLivePacket(buffer, generation, request, replay=false, asOf=null) {
     const n=new DataView(buffer).getUint32(0,true);
@@ -721,7 +751,7 @@ async function openFlashEpisode(recording) {
     flashLive.episodeImage=document.createElement('canvas');
     flashLive.episodeImage.width=width;flashLive.episodeImage.height=height;
     const tile=document.createElement('canvas');
-    const player=window.ChunkPlayer.create({datasetId:dataset.id,fps:dataset.fps,
+    const player=window.ChunkPlayer.create({datasetId:dataset.id,fps:dataset.fps,profile:'native',
         length:flashLive.episodeRows.length,cameras:['observation.images.camera'],
         tiles:()=>tile,
         onPaint:frame=>{if(flashLive.episodePlayer!==player)return;

@@ -1,0 +1,97 @@
+{
+  "revision": "89d92d4cb plus working-tree changes",
+  "geometry_sha256": "bd23c7f2ae4da7c19111e63a082d183ca98854f2d483eaf0d77631a6ea2797ed",
+  "matcher": "small_gicp",
+  "image_matching": "LK",
+  "inputs": "Recorded selected Fast-FoundationStereo depth and SAM masks; each replay starts at initialization. Depth/SAM inference excluded from tracker timing.",
+  "free_space_min_supports": 3,
+  "replays": {
+    "cube_null": {
+      "clip": "saved-3b9b9f3d70a74fbda3d65772f3f32b9c",
+      "frames": 223,
+      "observed": 189,
+      "recorded_observed": 102,
+      "predicted": 9,
+      "lost": 25,
+      "status_matches_recorded": 78,
+      "processing_ms_mean": 50.94273907347528,
+      "processing_ms_p99": 59.78096591308713,
+      "wall_s": 16.01826395408716,
+      "overrides": [
+        "config.shape.registration.backend=\"small_gicp\"",
+        "surface_experiment.uncertainty.unmeasured_rotation_std_deg_sqrt_s=null"
+      ]
+    },
+    "cube_10": {
+      "clip": "saved-3b9b9f3d70a74fbda3d65772f3f32b9c",
+      "frames": 223,
+      "observed": 217,
+      "recorded_observed": 102,
+      "predicted": 3,
+      "lost": 3,
+      "status_matches_recorded": 100,
+      "processing_ms_mean": 51.69137322757343,
+      "processing_ms_p99": 216.3237859751098,
+      "wall_s": 15.981093620997854,
+      "overrides": [
+        "config.shape.registration.backend=\"small_gicp\"",
+        "surface_experiment.uncertainty.unmeasured_rotation_std_deg_sqrt_s=10"
+      ]
+    },
+    "toy_null": {
+      "clip": "recent",
+      "frames": 129,
+      "observed": 48,
+      "recorded_observed": 46,
+      "predicted": 0,
+      "lost": 81,
+      "status_matches_recorded": 123,
+      "processing_ms_mean": 74.83015576641024,
+      "processing_ms_p99": 236.27082991879433,
+      "wall_s": 13.211373058031313,
+      "overrides": [
+        "config.shape.registration.backend=\"small_gicp\"",
+        "surface_experiment.uncertainty.unmeasured_rotation_std_deg_sqrt_s=null"
+      ]
+    },
+    "toy_10": {
+      "clip": "recent",
+      "frames": 129,
+      "observed": 109,
+      "recorded_observed": 46,
+      "predicted": 1,
+      "lost": 19,
+      "status_matches_recorded": 64,
+      "processing_ms_mean": 78.94137259590794,
+      "processing_ms_p99": 242.20325891394168,
+      "wall_s": 13.780248514958657,
+      "overrides": [
+        "config.shape.registration.backend=\"small_gicp\"",
+        "surface_experiment.uncertainty.unmeasured_rotation_std_deg_sqrt_s=10"
+      ]
+    }
+  },
+  "fixed_input_check_timing": {
+    "cube_before": {
+      "median_ms": 1.3020419864915311,
+      "p95_ms": 1.386441860813647,
+      "accepted": true
+    },
+    "cube_after": {
+      "median_ms": 0.30788895674049854,
+      "p95_ms": 0.3380732960067686,
+      "accepted": false
+    },
+    "static_controller_before": {
+      "median_ms": 2.177504007704556,
+      "p95_ms": 2.27440157905221,
+      "accepted": true
+    },
+    "static_controller_after": {
+      "median_ms": 2.173826505895704,
+      "p95_ms": 2.1949845366179943,
+      "accepted": true
+    }
+  },
+  "limits": "Availability is not pose accuracy. More toy frames are withheld; no claim that every newly rejected or accepted pose is correct. Kalman trial remains opt-in."
+}

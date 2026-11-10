@@ -1370,7 +1370,7 @@ def test_scene_browser_orbits_resets_and_switches_recorded_method(gui_page, tmp_
 @pytest.mark.requires_playwright
 def test_shared_rgbd_shader_preserves_rgb_depth_alignment_and_missing_depth(gui_page):
     result = gui_page.evaluate("""async () => {
-        const {createRgbdScene} = await import('/static/rgbd_scene.js?v=8');
+        const {createRgbdScene} = await import('/static/rgbd_scene.js?v=10');
         const canvas=document.createElement('canvas');
         canvas.style.cssText='position:fixed;left:0;top:0;width:320px;height:240px';
         document.body.append(canvas);
@@ -1402,7 +1402,44 @@ def test_shared_rgbd_shader_preserves_rgb_depth_alignment_and_missing_depth(gui_
     assert max(result["missing"][:3]) < 80
     assert result["scaleBefore"] > 0 and result["scaleAfter"] > 0
     assert result["scaleBefore"] != result["scaleAfter"]
-    assert "1 mm" in result["label"] and result["removed"]
+    assert result["label"] in {"5 cm", "1 cm", "1 mm"} and result["removed"]
+
+
+@pytest.mark.requires_playwright
+def test_rgbd_scene_labels_and_orbits_at_observed_depth(gui_page):
+    result = gui_page.evaluate("""async () => {
+        const {createRgbdScene} = await import('/static/rgbd_scene.js?v=10');
+        const host=document.createElement('div');
+        host.style.cssText='position:fixed;left:0;top:0;width:320px;height:240px';
+        const canvas=document.createElement('canvas');
+        canvas.style.cssText='width:100%;height:100%';
+        host.append(canvas);document.body.append(host);
+        const viewer=createRgbdScene(canvas), depth=new Float32Array(32*24).fill(0.45);
+        const rgb=new Uint8Array(32*24*4).fill(255);
+        const frame={width:32,height:24,intrinsics:[[30,0,16],[0,30,12],[0,0,1]]};
+        viewer.update(depth,rgb,frame,[]);
+        const target=viewer.view().target[2];
+        const pose=[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+        const points=[[0,0,0.45],[0.01,0,0.45]];
+        viewer.update(depth,rgb,frame,[
+            {layer:'estimate',color:0xffa84b,pose,points,label:'cube'},
+            {layer:'rejectedFit',color:0xff52d7,pose,points,label:'cube (rejected fit)'}]);
+        viewer.setOptions({estimate:true,rejectedFit:true});
+        const labels=Array.from(host.querySelectorAll('.rgbd-point-label'));
+        const initial=labels.map(el=>({text:el.textContent,hidden:el.hidden,color:el.style.borderColor}));
+        viewer.setOptions({rejectedFit:false});
+        const hidden=labels.map(el=>el.hidden);
+        viewer.dispose();
+        const removed=host.querySelectorAll('.rgbd-point-label').length===0;
+        host.remove();
+        return {target,initial,hidden,removed};
+    }""")
+    assert result["target"] == pytest.approx(-0.45)
+    assert [label["text"] for label in result["initial"]] == ["cube", "cube (rejected fit)"]
+    assert all(not label["hidden"] for label in result["initial"])
+    assert result["initial"][0]["color"] != result["initial"][1]["color"]
+    assert result["hidden"] == [False, True]
+    assert result["removed"]
 
 
 @pytest.mark.requires_playwright
