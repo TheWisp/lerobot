@@ -73,7 +73,9 @@ def test_recorded_stuck_controller_reaches_kalman_and_recovers_with_unchanged_pi
         # returned no geometry-compatible candidate and never reached correction.
         assert diagnostics["kalman"].get("observation_pose") is not None
         if index == 0:
-            assert diagnostics["kalman"]["reason"] == "innovation_conflict"
+            assert diagnostics["kalman"]["filter_reason"] == "corrected"
+            assert diagnostics["kalman"]["reason"] == "fused_pose_contradicts_observation"
+            assert result["camera_from_reference"] is None
             assert diagnostics["fit_seed_source"] == "previous_pose"
         pose = result["camera_from_reference"]
         if pose is None:

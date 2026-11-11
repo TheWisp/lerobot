@@ -1288,8 +1288,8 @@
           <article id="metric-kalman">
             <h3>Kalman · prediction and correction</h3>
             <p>
-              <b>Read:</b> <code>kalman.innovation_squared</code> versus
-              <code>kalman.innovation_limit</code>, and the pose covariance.
+              <b>Read:</b> pose covariance and <code>kalman.innovation_squared</code>
+              (disagreement relative to combined uncertainty).
             </p>
             <p>
               <b>Predict:</b> move the previous pose with measured group motion
@@ -1301,24 +1301,23 @@
               With measured motion, the ordinary process noise applies.
             </p>
             <p>
-              <b>Correct:</b> compare fitted and predicted poses using their
-              combined uncertainty. Reject excessive disagreement. Otherwise
-              combine them, giving more weight to the more certain estimate in
-              each direction, then recheck geometry.
+              <b>Correct:</b> combine fitted and predicted poses, giving more
+              weight to the more certain estimate in each direction, then
+              recheck geometry. Large disagreement alone does not veto the fit;
+              the innovation score is recorded for diagnosis.
             </p>
             <p>
               <b>Limits:</b> uncertainty is a joint 6D covariance, not one
               confidence percentage. Observation uncertainty currently comes
               from depth-surface constraints; it does not yet include the
-              outline and texture constraints. Fresh-session defaults keep the
-              disagreement check even if the prediction fails geometry.
+              outline and texture constraints. Large disagreement alone does
+              not increase the posterior covariance or reject the current fit.
             </p>
             <p>
-              <b>Tune:</b> process noise, measurement noise, and
-              <code>compatibility_probability</code>; these are assumptions, not
-              measured correctness.
+              <b>Tune:</b> process noise and measurement noise; these are
+              assumptions, not measured correctness.
               The missing-motion uncertainty floor changes the prediction's
-              covariance, never the geometry checks or the innovation limit.
+              covariance, never the geometry checks.
             </p>
           </article>
           <article id="metric-growth">

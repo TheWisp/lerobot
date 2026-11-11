@@ -71,23 +71,16 @@ def controller_checkpoint(noise):
     return session, target, float(data["target_time"])
 
 
-@pytest.mark.parametrize("noise, recovers", [(None, False), (10, True)])
-def test_controller_turn_publishes_only_a_geometry_compatible_correction(noise, recovers):
+@pytest.mark.parametrize("noise", [None, 10])
+def test_controller_turn_publishes_only_a_geometry_compatible_correction(noise):
     session, prepared, time_s = controller_checkpoint(noise)
     geometry = session.prepare_geometry(prepared)
-    old_map = session.store.points.copy()
     result = session.update(prepared, time_s, geometry=geometry)
     diagnostics = result["diagnostics"]
     kalman = diagnostics["kalman"]
     assert diagnostics["fit_seed_source"] == "object_matches"
     assert kalman["motion_source"] is None
-    assert kalman["accepted"] is recovers
-    if not recovers:
-        assert result["status"] == "lost"
-        assert kalman["reason"] == "innovation_conflict"
-        assert session.accepted_frame == 800
-        np.testing.assert_array_equal(session.store.points, old_map)
-        return
+    assert kalman["accepted"]
     assert kalman["reason"] == "corrected"  # No reset, bypass or second solve.
     assert result["status"] == "observed_candidate"
     assert session.accepted_frame == 807

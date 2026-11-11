@@ -31,17 +31,24 @@ MODES = ("current_reset", "strict", "strict_broader_motion")
 
 
 class StrictPoseKalmanFilter(PoseKalmanFilter):
-    """Historical comparison oracle for the saved no-reset configuration.
+    """Historical innovation-veto oracle, used only by comparison benchmarks.
 
-    Kept for equivalence tests and earlier control scripts. New experiments
-    use PoseKalmanFilter with reset_on_geometry_conflict=False so their saved
-    settings describe the policy actually executed.
+    Production always fuses measurements with information. Recreate the removed
+    gate here so archived comparisons remain reproducible without a runtime option.
     """
 
     def correct(self, observation_pose, information, observation_pivot, *, contradicted=False):
+        before = self.snapshot()
         result = super().correct(observation_pose, information, observation_pivot, contradicted=False)
-        # The session's later geometry check can overwrite `reason`; preserve
-        # the filter decision separately so rejection is not called fusion.
+        if result["innovation_squared"] > result["innovation_limit"]:
+            self.restore(before)
+            for key in ("gain", "correction", "previous_pose", "previous_covariance"):
+                result.pop(key, None)
+            result.update(
+                accepted=False,
+                reason="innovation_conflict",
+                posterior_covariance=self.covariance.tolist(),
+            )
         result["filter_reason"] = result["reason"]
         result["prediction_failed_geometry"] = bool(contradicted)
         result["prior_rejected_by_depth_mask"] = bool(contradicted)

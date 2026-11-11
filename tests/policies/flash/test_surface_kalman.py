@@ -1,7 +1,5 @@
 """Analytical controls plus real surface-session consumption of a temporal EKF."""
 
-from dataclasses import replace
-
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
@@ -17,41 +15,42 @@ from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
 from tests.policies.flash.test_experimental_surface_session import points, prepared_frames, transform
 
 
-@pytest.mark.parametrize("contradicted", [False, True])
-@pytest.mark.parametrize("distance", [0.001, 0.1])
-@pytest.mark.parametrize("information_scale", [0.0, 1e4, 1e6])
-def test_saved_no_reset_setting_matches_the_tested_filter(contradicted, distance, information_scale):
-    from benchmarks.flash_kalman_recovery_control import StrictPoseKalmanFilter
-
-    old = StrictPoseKalmanFilter(np.eye(4), np.zeros(3), 0.0, config())
-    new = PoseKalmanFilter(np.eye(4), np.zeros(3), 0.0, config(reset_on_geometry_conflict=False))
-    for time_s in (0.1, 0.2):
-        for f in (old, new):
-            f.predict(time_s, np.eye(4), np.eye(4))
-        measured = transform(z=distance)
-        a = old.correct(measured, np.eye(6) * information_scale, measured[:3, 3], contradicted=contradicted)
-        b = new.correct(measured, np.eye(6) * information_scale, measured[:3, 3], contradicted=contradicted)
-        assert a == b
-        np.testing.assert_array_equal(old.pose, new.pose)
-        np.testing.assert_array_equal(old.covariance, new.covariance)
-
-
-def test_no_reset_setting_rejects_the_jump_even_when_old_prediction_fails_geometry():
-    f = PoseKalmanFilter(np.eye(4), np.zeros(3), 0.0, config(reset_on_geometry_conflict=False))
-    before = f.snapshot()
-    rejected = f.correct(transform(z=0.1), np.eye(6) * 1e6, np.array([0, 0, 0.1]), contradicted=True)
-    assert not rejected["accepted"] and rejected["filter_reason"] == "innovation_conflict"
-    np.testing.assert_array_equal(f.pose, before["pose"])
-    np.testing.assert_array_equal(f.covariance, before["covariance"])
-    # This configuration must still allow ordinary measured corrections.
-    accepted = f.correct(transform(z=0.001), np.eye(6) * 1e6, np.array([0, 0, 0.001]), contradicted=True)
-    assert accepted["accepted"] and f.pose[2, 3] > 0
-    with pytest.raises(ValueError, match="booleans"):
-        replace(config(), reset_on_geometry_conflict="false")
-
-
 def config(**kwargs):
     return PoseUncertaintyConfig(enabled=True, mode="kalman", **kwargs)
+
+
+@pytest.mark.parametrize("measurement_std", [0.002, 0.5])
+def test_large_disagreement_still_weights_strong_and_weak_measurements(measurement_std):
+    f = PoseKalmanFilter(
+        np.eye(4),
+        np.zeros(3),
+        0.0,
+        config(initial_position_std_m=0.01, reset_on_geometry_conflict=False),
+    )
+    info = np.zeros((6, 6))
+    info[5, 5] = 1 / measurement_std**2
+    result = f.correct(transform(x=0.2, z=0.1), info, np.array([0.2, 0, 0.1]))
+    assert result["accepted"] and result["reason"] == "corrected"
+    gain = 0.01**2 / (0.01**2 + measurement_std**2)
+    assert f.pose[2, 3] == pytest.approx(gain * 0.1)
+    assert f.pose[0, 3] == 0  # No information in this direction.
+    assert f.covariance[5, 5] == pytest.approx((1 - gain) * 0.01**2)
+    if measurement_std == 0.002:
+        assert result["innovation_squared"] > result["innovation_limit"]
+
+
+def test_correction_requires_measurement_information():
+    f = PoseKalmanFilter(
+        np.eye(4),
+        np.zeros(3),
+        0.0,
+        config(reset_on_geometry_conflict=False),
+    )
+    before = f.snapshot()
+    result = f.correct(transform(x=0.2), np.zeros((6, 6)), np.zeros(3))
+    assert not result["accepted"] and result["reason"] == "no_observation_information"
+    np.testing.assert_array_equal(f.pose, before["pose"])
+    np.testing.assert_array_equal(f.covariance, before["covariance"])
 
 
 @pytest.mark.parametrize("prior_std,measurement_std,expected_mm", [(0.002, 0.004, 0.8), (0.004, 0.002, 3.2)])
@@ -173,18 +172,18 @@ def test_process_noise_depends_on_elapsed_time_not_frame_count():
     np.testing.assert_allclose(a.covariance, b.covariance)
 
 
-def test_incompatible_measurement_is_not_fused_but_proven_motion_can_reset():
-    f = PoseKalmanFilter(np.eye(4), np.zeros(3), 0.0, config())
-    info = np.eye(6) * 1e6
-    before = f.covariance.copy()
+def test_legacy_reset_is_separate_from_normal_covariance_weighted_correction():
     measurement = transform(z=0.1)
-    rejected = f.correct(measurement, info, np.array([0.0, 0.0, 0.1]))
-    assert not rejected["accepted"]
-    np.testing.assert_array_equal(f.pose, np.eye(4))
-    np.testing.assert_array_equal(f.covariance, before)
-    accepted = f.correct(measurement, info, np.array([0.0, 0.0, 0.1]), contradicted=True)
-    assert accepted["accepted"]
-    np.testing.assert_allclose(f.pose, measurement)
+    for reset in (False, True):
+        f = PoseKalmanFilter(np.eye(4), np.zeros(3), 0.0, config(reset_on_geometry_conflict=reset))
+        result = f.correct(measurement, np.eye(6) * 1e6, measurement[:3, 3], contradicted=True)
+        assert result["accepted"]
+        if reset:
+            np.testing.assert_allclose(f.pose, measurement)
+        else:
+            gain = 0.005**2 / (0.005**2 + 0.001**2)
+            assert f.pose[2, 3] == pytest.approx(gain * 0.1)
+            assert result["reason"] == "corrected"
 
 
 def test_actual_session_hidden_motion_camera_change_and_reappearance(monkeypatch):

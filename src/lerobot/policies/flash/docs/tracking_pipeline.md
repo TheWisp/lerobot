@@ -407,22 +407,24 @@ the prior fails geometry. Measured group motion retains the ordinary process
 noise. Fresh shared sessions use 10°/√s; explicit `null` in recorded settings
 preserves the ordinary setting. This models
 unobserved movement, not observation confidence: a weak surface still supplies
-weak information, and innovation rejection and final geometry checks still run.
+weak information, and final geometry checks still run.
 The floor represents a motion assumption, not calibrated sensor uncertainty.
 Increasing it lets observations correct more readily but also gives a plausible
 wrong alignment more influence. Reliable empty-space rejection therefore applies
 to both the fitted and fused pose; neither can be published solely because the
-innovation test passed.
+innovation score was small.
 
-The correction uses inverse covariance as directional weight. Its compatibility
-test uses the sum of prediction and observation covariance. If current depth and
-mask clearly contradict the prediction, the compatibility option
-`reset_on_geometry_conflict` can restart at a valid observed fit. Fresh shared
-sessions disable this option and retain the normal innovation test. The final
-fused pose is checked against depth and mask again. When no fitted pose or
-independent prediction passes the applicable geometry checks, the output is
-lost rather than presenting a contradicted pose as valid. Predictions and
-rejected corrections never add surface measurements.
+The correction uses inverse covariance as directional weight. A large difference
+between the prediction and a geometry-valid fit does not veto the measurement.
+The innovation score records disagreement relative to their combined uncertainty;
+it is diagnostic, not a publication decision. Large disagreement does not
+automatically increase posterior covariance.
+
+The final fused pose is checked against depth and mask again. When no fitted
+pose or independent prediction passes the applicable geometry checks, the output
+is lost. Predictions and rejected corrections never add surface measurements.
+Fresh shared sessions keep the prior for weighted correction; the legacy
+`reset_on_geometry_conflict` option is disabled.
 
 **Limitations:** the information matrix describes depth-normal constraints only.
 Outline/image constraints used by the fitter are not yet represented, so the filter

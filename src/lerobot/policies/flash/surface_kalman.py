@@ -162,8 +162,8 @@ class PoseKalmanFilter:
         """Information-form EKF update; zero measurement information means no correction.
 
         A contradicted motion relationship starts a new broad prior at the visible
-        estimate. Otherwise the innovation test uses BOTH prior and observation
-        covariance in the observation's constrained directions.
+        estimate. Otherwise the prior and observation are combined by their
+        information. Innovation is diagnostic only; geometry validates the result.
         """
         prior_pose, prior_covariance = self.pose.copy(), self.covariance.copy()
         # Convert observed information to the filter's fixed object point.
@@ -199,13 +199,6 @@ class PoseKalmanFilter:
                 **detail,
                 "accepted": False,
                 "reason": "no_observation_information",
-                "posterior_covariance": self.covariance.tolist(),
-            }
-        if score > threshold and not contradicted:
-            return {
-                **detail,
-                "accepted": False,
-                "reason": "innovation_conflict",
                 "posterior_covariance": self.covariance.tolist(),
             }
         if contradicted:

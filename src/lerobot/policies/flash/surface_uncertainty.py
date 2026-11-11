@@ -30,10 +30,10 @@ class PoseUncertaintyConfig:
     position_process_std_m_sqrt_s: float = 0.002
     rotation_process_std_deg_sqrt_s: float = 2.0
     # Optional process-noise floor when no measured motion advanced the filter.
-    # Chosen before fitting; never adjusted to make a candidate pass the gate.
+    # Chosen before fitting; independent of the fitted candidate.
     unmeasured_rotation_std_deg_sqrt_s: float | None = None
-    # Legacy reset is retained for old recordings. False always uses the
-    # innovation test, including when the prediction conflicts with geometry.
+    # Legacy reset is retained for old recordings. False retains the prior
+    # for ordinary covariance-weighted correction, even if geometry conflicts.
     reset_on_geometry_conflict: bool = True
     # Standard deviation of independent normal-direction error per measurement.
     independent_error_m: float = 0.001
