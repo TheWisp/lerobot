@@ -36,3 +36,5 @@ docs/proofs/**/*.mp4 !filter !diff !merge
 docs/proofs/**/*.gif !filter !diff !merge
 *.bag filter=lfs diff=lfs merge=lfs -text
 tests/policies/flash/fixtures/green_toy_motion_*.npz filter=lfs diff=lfs merge=lfs -text
+# Full-frame recorded checkpoint for initial-pose visibility recovery.
+tests/policies/flash/fixtures/controller_visibility_recovery_*.npz filter=lfs diff=lfs merge=lfs -text

@@ -220,22 +220,8 @@ class LibraryMatcher:
             if limit <= 0:
                 break
             attempted_levels += 1
-            if hasattr(fitter, "_projection_evidence"):
-                points = np.asarray(source.points() if c.backend == "small_gicp" else source.points)[:, :3]
-                predicted = move(points + source_center, pose)
-                visible = fitter._projection_evidence(predicted)[0]
-                contradicted = fitter._scene_depth_evidence(predicted)[2]
-                selected = np.flatnonzero(np.maximum(visible, contradicted) > 0)
-                if len(selected) < 6:
-                    continue
-                if c.backend == "small_gicp":
-                    source, _ = self.library.preprocess_points(
-                        points[selected], downsampling_resolution=voxel, num_threads=c.threads
-                    )
-                    if source.size() < 6:
-                        continue
-                else:
-                    source = source.select_by_index(selected.tolist())
+            # A wrong initial pose must not remove surface points needed for
+            # recovery. Geometry checks still decide which candidate may publish.
             local_pose = pose.copy()
             local_pose[:3, 3] += local_pose[:3, :3] @ source_center - target_center
             # Point-to-plane has unobservable tangent directions on a plane.

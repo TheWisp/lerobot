@@ -768,6 +768,9 @@
             <code>O[t]</code> decide whether the resulting pose is allowed.
             Fresh sessions use small_gicp with shared LK image matching;
             saved runs retain their recorded settings.
+            Library matchers use the prepared stored surface without removing
+            points based on visibility at the starting pose. Geometry checks
+            apply to candidate poses and again after Kalman fusion.
           </span>
         </div>
       </section>
