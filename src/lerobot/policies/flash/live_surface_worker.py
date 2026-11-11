@@ -68,7 +68,7 @@ def run(directory: Path, config: dict):
     frozen = None
     displayed_frame = None
     preview_frames = deque(maxlen=8)
-    model_preview_frames = deque(maxlen=32)
+    processed_frames = deque(maxlen=32)
     preview_lock = Lock()
     command_id = None
     last_id = -1
@@ -333,7 +333,7 @@ def run(directory: Path, config: dict):
                             frame_id = command.get("frame_id")
                             if depth_stream is not None:
                                 displayed = next(
-                                    (f for f, _ in reversed(model_preview_frames) if f.frame_id == frame_id),
+                                    (f for f, _ in reversed(processed_frames) if f.frame_id == frame_id),
                                     None,
                                 )
                             elif displayed is None or displayed.frame_id != frame_id:
@@ -360,7 +360,7 @@ def run(directory: Path, config: dict):
                             selected_depth_ms = next(
                                 (
                                     ms
-                                    for f, ms in reversed(model_preview_frames)
+                                    for f, ms in reversed(processed_frames)
                                     if f.frame_id == selected.frame_id
                                 ),
                                 latest_depth_ms,
@@ -392,7 +392,8 @@ def run(directory: Path, config: dict):
                     else:
                         raise ValueError("Unsupported control for this inspector")
                 except Exception as exc:
-                    paused = True
+                    # Invalid clicks must not stop an existing session. Once
+                    # replacement starts, the select path pauses explicitly.
                     state("error", message=str(exc), depth_processing=camera.depth_processing)
                     traceback.print_exc()
             if paused:
@@ -414,7 +415,7 @@ def run(directory: Path, config: dict):
                         temporary = directory / "scene.tmp"
                         temporary.write_bytes(packet)
                         temporary.replace(directory / "scene.bin")
-                        model_preview_frames.append((preview_frame, depth_ms))
+                        processed_frames.append((preview_frame, depth_ms))
                         last_model_preview_id = preview_frame.frame_id
                         state(
                             "preview_model",
@@ -499,6 +500,10 @@ def run(directory: Path, config: dict):
                 )
                 last_id = frame.frame_id
                 displayed_frame = frame
+                if depth_stream is not None:
+                    # A pick can refer to any recently displayed processed
+                    # image, including tracking output, not just model preview.
+                    processed_frames.append((frame, depth_ms))
             except Exception as exc:
                 paused = True
                 state("error", message=str(exc))
