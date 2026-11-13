@@ -1,0 +1,62 @@
+{
+  "laval-clock-interaction-hard": {
+    "case": {
+      "id": "laval-clock-interaction-hard",
+      "display_name": "Laval clock \u2014 nominal 30 fps",
+      "kind": "recorded_rgbd",
+      "domain": "Laval 6DOF tracking",
+      "artifact_root": "~/.cache/flash-labeled-laval",
+      "expected_frames": 203,
+      "roles": [
+        "clock"
+      ],
+      "tags": [
+        "rigid",
+        "hand-occlusion",
+        "front-back",
+        "nominal-time"
+      ],
+      "mask_evidence_dir": "~/.cache/huggingface/lerobot/demos/flash_laval_clock_labeled/flash/v1/observation-evidence/episode_000000",
+      "time_provenance": "Source lacks timestamps; nominal 30 fps index time. Do not use for physical speed measurement.",
+      "rgb_extension": "png",
+      "evaluation": {
+        "clock": {
+          "format": "poses_npy",
+          "path": "/home/feit/.cache/flash-labeled-laval/sample/clock_interaction_hard/poses.npy",
+          "camera_from_label_camera": [
+            [
+              1,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              -1,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              -1,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              1
+            ]
+          ],
+          "description": "Laval supplied object poses; OpenGL camera to RGB-D camera"
+        }
+      },
+      "evaluation_surfaces": {
+        "clock": {
+          "points_m": "/home/feit/.cache/flash-tracker-restart/matcher-rewrite-20261106/surface-metrics/laval-clock-interaction-hard-model-m.npy"
+        }
+      }
+    }
+  }
+}
