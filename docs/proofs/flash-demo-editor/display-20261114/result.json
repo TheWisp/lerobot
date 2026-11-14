@@ -1,0 +1,62 @@
+{
+  "scope": "Demo display and resolution investigation; no robot movement or tracker algorithm changes",
+  "demo_root": "/home/feit/.cache/flash-demo-editor-preview/config/flash/editor/recordings/39eef9776a7442e1bb96e9cbf4a979b0",
+  "display_result": "46e117cb68644b9e970882830a573171",
+  "robot_profile_rgb": [
+    848,
+    480,
+    30
+  ],
+  "standalone_live_default_rgb": [
+    1280,
+    720,
+    30
+  ],
+  "sensor_depth_and_stereo": [
+    848,
+    480,
+    30
+  ],
+  "camera_resolution_changed": false,
+  "combined_tests_passed": 45,
+  "additional_model_depth_test_passed": 1,
+  "flicker_mutation": "clear canvas then asynchronously redraw: browser test fails; restored path passes",
+  "robot_execution": "Teleop recorded; real camera with simulated motor target test completed earlier; autonomous execution of this task has not been verified",
+  "open_execution_issues": [
+    "Pickup needs fixed pre-grasp reference so following held object does not cancel lift",
+    "Dense placement includes frames without directly visible ring poses"
+  ],
+  "regeneration_complete": 1227,
+  "regenerated_status_counts": {
+    "gamepad": {
+      "initialized": 1,
+      "observed": 1226
+    },
+    "ring": {
+      "initialized": 1,
+      "observed": 1169,
+      "predicted": 43,
+      "lost": 14
+    }
+  },
+  "note": "Availability counts are not ground-truth accuracy. Reruns can vary in tracker results; no algorithm changes were made.",
+  "browser_review": {
+    "host": "http://127.0.0.1:9103/#/flash/editor",
+    "viewed_frames": [
+      0,
+      540
+    ],
+    "depth_label": "Fast-FoundationStereo",
+    "tested_controls": [
+      "2D",
+      "3D",
+      "Depth",
+      "Outline",
+      "Surface",
+      "Pose",
+      "Rejected poses"
+    ],
+    "asset_versions_updated": true,
+    "annotations_retained": 342
+  }
+}

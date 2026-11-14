@@ -24,6 +24,7 @@
       _openDatasetThenMaybe(params.path, Number(params.episode_id));
     } else if (view === "flash") {
       if (params?.source === "live") window.showFlashLive?.();
+      else if (params?.source === "editor") window.showFlashEditor?.();
       else window.showFlashExamples?.();
     }
   });

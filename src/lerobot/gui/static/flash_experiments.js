@@ -1043,6 +1043,9 @@ async function showFlashPipelineSettings() {
 
 // Both sources use one shared tracker; changing the source changes acquisition only.
 function setFlashSource(live) {
+    history.replaceState(null, '', live ? '#/flash/live' : '#/flash/examples');
+    if (typeof hideFlashEditor === 'function') hideFlashEditor();
+    document.getElementById('flash-source-editor').setAttribute('aria-pressed', 'false');
     document.getElementById('flash-source-examples').setAttribute('aria-pressed', String(!live));
     document.getElementById('flash-source-live').setAttribute('aria-pressed', String(live));
     document.getElementById('flash-examples-workspace').hidden = live;

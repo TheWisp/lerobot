@@ -1,0 +1,21 @@
+{
+  "demo": "Gamepad onto green ring",
+  "valid_frames": [
+    420,
+    780
+  ],
+  "valid_time_s": [
+    14,
+    26
+  ],
+  "original_rows": 1227,
+  "keyframes": 342,
+  "checks": {
+    "focused_gui_tests": "3 passed",
+    "final_span_test": "1 passed",
+    "mutation": "restore full playback range: rendered frame 8 outside expected 2..7, test fails"
+  },
+  "prepare_result": "Keyframe 601: object_2 has no accepted visible pose",
+  "robot_moved": false,
+  "execution_semantics_changed": false
+}

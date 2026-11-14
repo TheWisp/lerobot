@@ -10,7 +10,9 @@ from .cartesian_ik import make_so107_arm_kinematics
 from .joint_alignment import LEFT_ARM_ALIGNMENT, RIGHT_ARM_ALIGNMENT, JointAlignment
 
 
-def make_calibrated_so107_kinematics(calibration: Mapping, *, arm: str):
+def make_calibrated_so107_kinematics(
+    calibration: Mapping, *, arm: str, joint_limits_deg: dict[str, tuple[float, float]] | None = None
+):
     """Use the same joint-zero and anchor-to-tool transform as the recorded demo.
 
     Calibration is explicit rig data, never inferred from a task or object. A
@@ -40,4 +42,4 @@ def make_calibrated_so107_kinematics(calibration: Mapping, *, arm: str):
     }
     tip = np.eye(4)
     tip[:3, 3] = offset
-    return make_so107_arm_kinematics(corrected, tip_offset=tip)
+    return make_so107_arm_kinematics(corrected, tip_offset=tip, joint_limits_deg=joint_limits_deg)

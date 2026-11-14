@@ -1,0 +1,192 @@
+{
+  "date": "2026-11-14",
+  "base_commit": "48fbc4aa37b3448e3b81bad1772448c36457a6ae",
+  "scope": "Editor wiring with real camera and simulated motor I/O; not a physical task demonstration.",
+  "setup": {
+    "robot": "white_left",
+    "teleoperator": "blue_left",
+    "camera": "overhead",
+    "serial": "152222071508",
+    "size": [
+      848,
+      480
+    ],
+    "camera_fps": 30,
+    "depth": "Fast-FoundationStereo",
+    "image_matching": "LK",
+    "surface_matcher": "small_gicp"
+  },
+  "simulation": {
+    "mode": "simulation",
+    "state": "complete",
+    "keyframe": 3,
+    "total": 3,
+    "commands": 17,
+    "tool": [
+      [
+        -0.03369062690517478,
+        0.04646324281857679,
+        -0.998351695909572,
+        -0.01989434184945315
+      ],
+      [
+        -0.7498655644725882,
+        0.659217191018901,
+        0.05598508983074656,
+        -0.23115260194963191
+      ],
+      [
+        0.6607318494494896,
+        0.7505157307691374,
+        0.012631745371283892,
+        0.0743527157227332
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "target": [
+      [
+        -0.03871993352458533,
+        0.0491599401216705,
+        -0.9980401129388958,
+        -0.022029206255161554
+      ],
+      [
+        -0.754467733098588,
+        0.6534534885053379,
+        0.061457123861108916,
+        -0.23241320022187711
+      ],
+      [
+        0.6551940219972446,
+        0.7553686773009827,
+        0.011787912946524313,
+        0.07555197999449831
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "updated_s": 1231915.184174997,
+    "evidence": {
+      "reference": "object_3",
+      "status": "observed_candidate",
+      "has_pose": true,
+      "source_age_ms": 462.3133090790361,
+      "availability_age_ms": 189.65867394581437
+    },
+    "running": true,
+    "pid": 3041916,
+    "returncode": null
+  },
+  "stop": {
+    "mode": "simulation",
+    "state": "complete",
+    "keyframe": 3,
+    "total": 3,
+    "commands": 17,
+    "tool": [
+      [
+        -0.03369062690517478,
+        0.04646324281857679,
+        -0.998351695909572,
+        -0.01989434184945315
+      ],
+      [
+        -0.7498655644725882,
+        0.659217191018901,
+        0.05598508983074656,
+        -0.23115260194963191
+      ],
+      [
+        0.6607318494494896,
+        0.7505157307691374,
+        0.012631745371283892,
+        0.0743527157227332
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "target": [
+      [
+        -0.03871993352458533,
+        0.0491599401216705,
+        -0.9980401129388958,
+        -0.022029206255161554
+      ],
+      [
+        -0.754467733098588,
+        0.6534534885053379,
+        0.061457123861108916,
+        -0.23241320022187711
+      ],
+      [
+        0.6551940219972446,
+        0.7553686773009827,
+        0.011787912946524313,
+        0.07555197999449831
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "updated_s": 1231915.184174997,
+    "evidence": {
+      "reference": "object_3",
+      "status": "observed_candidate",
+      "has_pose": true,
+      "source_age_ms": 462.3133090790361,
+      "availability_age_ms": 189.65867394581437
+    },
+    "running": false,
+    "pid": 3041916,
+    "returncode": 0
+  },
+  "simulation_inputs": {
+    "source": "/home/feit/.cache/flash-demo-editor-preview/stereo-smoke-20261114-165406",
+    "robot_states_and_actions": "Synthetic; actual measured robot FK/IK used without connecting motors",
+    "object_references": [
+      "green game controller",
+      "wooden dowel",
+      "green ring"
+    ],
+    "artifact_directory": "/home/feit/.cache/flash-demo-editor-preview/execution-smoke-20261114-172735"
+  },
+  "tests": {
+    "passed": 134,
+    "log": "targeted-tests.log",
+    "scope": "Editor browser/API, recording and playback, demo tracking/execution, shared live session and worker, robot geometry/FK/IK, stereo/image writer and depth layout",
+    "mutation_checks": [
+      "Removing duplicate-capture guard fails repeated camera timestamp regression",
+      "Connecting motors in simulation fails motor-isolation regression"
+    ],
+    "full_repository_suite_run": false
+  },
+  "iteration": {
+    "initial_simulated_start": "Rest pose near calibrated elbow limit correctly held unreachable IK; limits unchanged. Interior simulated start completed.",
+    "gripper_completion": "Recorded measured aperture determines completion; recorded action still commands the gripper. Contact detection not inferred."
+  },
+  "not_verified": [
+    "Physical teleoperation recording with the selected leader/follower",
+    "Current camera-to-base mounting accuracy",
+    "Physical grasp/contact and robot task outcome",
+    "Relocalization after arbitrary object displacement outside shared local tracker convergence"
+  ],
+  "hosted_url": "http://127.0.0.1:9103/#/flash/editor",
+  "architecture_url": "http://127.0.0.1:9103/static/flash_architecture.html#demo-execution",
+  "isolation": "Tracker worktree and port 9102 untouched; only editor section of shared local TODO updated."
+}

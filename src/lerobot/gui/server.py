@@ -34,6 +34,7 @@ from lerobot.gui.api import (
     chunk_playback,
     datasets,
     edits,
+    flash_editor,
     flash_experiments,
     flash_tracking,
     live_video,
@@ -359,6 +360,7 @@ app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
 app.include_router(flash_tracking.router)
+app.include_router(flash_editor.router)
 app.include_router(flash_experiments.router)
 app.include_router(live_video.router)
 app.include_router(models.router)

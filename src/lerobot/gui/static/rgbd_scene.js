@@ -248,6 +248,7 @@ export function createRgbdScene(canvas) {
                 surface = new THREE.Points(geometry, new THREE.PointsMaterial({...appearance,
                     size: description.pointSize ?? 2.0, sizeAttenuation: false}));
             }
+            surface.visible = description.surface !== false;
             object.add(surface);
             geometry.computeBoundingSphere();
             if (description.axes !== false && description.axisPoints) {

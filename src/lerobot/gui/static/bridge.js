@@ -78,7 +78,7 @@
     if (view === "run" && params.run_id != null) {
       return `#/run/${encodeURIComponent(params.run_id)}`;
     }
-    if (view === "flash") return params.source === "live" ? "#/flash/live" : "#/flash/examples";
+    if (view === "flash") return `#/flash/${["live", "editor"].includes(params.source) ? params.source : "examples"}`;
     if (view === "home") return "#/home";
     if (view === "model") return "#/model";
     if (view === "robot") return "#/robot";
@@ -117,7 +117,7 @@
       return { view: "run", params: { run_id: decodeURIComponent(parts[1]) } };
     }
     if (head === "flash") {
-      return { view: "flash", params: { source: parts[1] === "live" ? "live" : "examples" } };
+      return { view: "flash", params: { source: ["live", "editor"].includes(parts[1]) ? parts[1] : "examples" } };
     }
     return null;
   }

@@ -1,0 +1,38 @@
+{
+  "recording": "/home/feit/.cache/flash-demo-editor-preview/config/flash/editor/recordings/39eef9776a7442e1bb96e9cbf4a979b0",
+  "name": "Gamepad onto green ring",
+  "revision": 3,
+  "total_frames": 1227,
+  "keyframes": 342,
+  "ranges": [
+    {
+      "start": 420,
+      "end": 550,
+      "reference": "object_1",
+      "phase": "pre-grasp through post-grasp lift"
+    },
+    {
+      "start": 570,
+      "end": 780,
+      "reference": "object_2",
+      "phase": "placement hover through post-placement"
+    }
+  ],
+  "tracking": {
+    "gamepad": {
+      "initialized": 1,
+      "observed_candidate": 1226
+    },
+    "ring": {
+      "initialized": 1,
+      "observed_candidate": 1165,
+      "predicted": 41,
+      "lost": 20
+    }
+  },
+  "robot_apply_tested": false,
+  "pending": [
+    "Review pre-grasp anchor semantics to preserve lift",
+    "Resolve ring reference during occluded placement samples; do not skip keyframes"
+  ]
+}

@@ -127,7 +127,8 @@ from lerobot.datasets import (
     create_initial_features,
     safe_stop_image_writer,
 )
-from lerobot.datasets.camera_calibration import attach_camera_intrinsics
+from lerobot.datasets.camera_calibration import attach_camera_intrinsics, attach_robot_geometry
+from lerobot.datasets.stereo_recording import add_stereo_features, attach_stereo_calibration, capture_stereo
 from lerobot.policies import (
     ActionInterpolator,
     PreTrainedPolicy,
@@ -160,6 +161,7 @@ from lerobot.robots import (  # noqa: F401
     openarm_follower,
     reachy2,
     rebot_b601_follower,
+    so107_follower_gravity,
     so107_follower_predictive,
     so_follower,
     so_follower_predictive,
@@ -549,6 +551,12 @@ def record_loop(
         # motor sync_read).
         with latency_session.span("get_observation"):
             obs = robot.get_observation()
+            stereo_images, stereo_timing = (
+                capture_stereo(robot) if dataset is not None or intervention_dataset is not None else ({}, {})
+            )
+            # Refresh existing RGB-D observations, without publishing the two
+            # recording-only IR channels through policy/UI observation processors.
+            obs.update({key: value for key, value in stereo_images.items() if key in obs})
 
         # Per-camera staleness/period — read latest_timestamp from each
         # camera right after get_observation. No-op when session is disabled.
@@ -561,7 +569,10 @@ def record_loop(
         if policy is not None or dataset is not None or intervention_dataset is not None:
             # Use main dataset features (intervention_dataset has the same features)
             features = dataset.features if dataset is not None else intervention_dataset.features
-            observation_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
+            observation_frame = build_dataset_frame(
+                features, {**obs_processed, **stereo_images}, prefix=OBS_STR
+            )
+            observation_frame.update(stereo_timing)
 
         # The action-selection block below has many branches (policy with /
         # without interpolation, intervention, teleop-only, dual teleop, no-op).
@@ -999,6 +1010,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         ),
     )
 
+    add_stereo_features(dataset_features, robot)
     dataset = None
     intervention_dataset = None
     listener = None
@@ -1121,12 +1133,16 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 interpolator = ActionInterpolator(multiplier=cfg.interpolation_multiplier)
                 logging.info(f"Action interpolation enabled: {cfg.interpolation_multiplier}x control rate")
 
+        for ds in (dataset, intervention_dataset):
+            if ds is not None:
+                attach_robot_geometry(ds.meta, robot)
         robot.connect()
         # A camera knows its calibration only once connected, and the dataset
         # already exists by now, so the intrinsics are merged into its
         # metadata here rather than into the initial features.
         for ds in (dataset, intervention_dataset):
             if ds is not None:
+                attach_stereo_calibration(ds.meta, robot)
                 attach_camera_intrinsics(
                     ds.meta,
                     getattr(robot, "cameras", {}),

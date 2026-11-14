@@ -65,6 +65,41 @@ class SO107FollowerGravity(SO107Follower):
                     self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
                     self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
+    def cartesian_model(self):
+        from lerobot.robots.cartesian_model import CartesianModel
+        from lerobot.robots.kinematics import SelectedJointKinematics
+        from lerobot.robots.so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
+        from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+        if self.geometry is None:
+            raise ValueError("Cartesian execution needs measured robot geometry")
+        names = MOTOR_NAMES[:-1]
+        lower, upper = [], []
+        for name in names:
+            cal = self.calibration[name]
+            half_span = (cal.range_max - cal.range_min) * 360 / 4095 / 2
+            limits = self.config.joint_limits_deg.get(name, {})
+            lower.append(max(-half_span, limits.get("min", -half_span)))
+            upper.append(min(half_span, limits.get("max", half_span)))
+        return CartesianModel(
+            SelectedJointKinematics(
+                make_calibrated_so107_kinematics(
+                    self.geometry.to_dict(),
+                    arm=self.config.arm,
+                    joint_limits_deg=dict(zip(names, zip(lower, upper, strict=True), strict=True)),
+                ),
+                MOTOR_NAMES,
+                names,
+                {"gripper": 0.0},
+            ),
+            tuple(f"{name}.pos" for name in names),
+            tuple(self.units_per_motor_degree(name) for name in names),
+            "gripper.pos",
+            tuple(lower),
+            tuple(upper),
+            model_id=f"so107:{self.config.arm}:measured-tool",
+        )
+
     def units_per_motor_degree(self, motor: str) -> float:
         """Action units per motor degree: 1 in degrees mode, calibration-range based otherwise."""
         if self.config.use_degrees:

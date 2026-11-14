@@ -48,7 +48,7 @@ def _freeze_startup_heap():
     gc.freeze()
 
 
-def run(directory: Path, config: dict):
+def run(directory: Path, config: dict, *, session_factory=None, on_observation=None, stop_event=None):
     import pyrealsense2 as rs
 
     from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
@@ -61,7 +61,9 @@ def run(directory: Path, config: dict):
     )
     from lerobot.overlays.adapters import Sam3TrackByDetectionAdapter
 
-    stop, sam_active, latest, commands = Event(), Event(), LatestRGBDFrameStore(), Queue(maxsize=8)
+    session_factory = session_factory or LiveSurfaceSession
+    stop = stop_event if stop_event is not None else Event()
+    sam_active, latest, commands = Event(), LatestRGBDFrameStore(), Queue(maxsize=8)
     camera = capture = live = adapter = pool = history = group_overlay = depth_stream = None
     model = None
     model_loaded = False
@@ -75,6 +77,7 @@ def run(directory: Path, config: dict):
     last_model_preview_id = -1
     sequence = 0
     paused = True
+    initial_selection = config.get("initial_selection")
     errors = []
     camera_streams = None
     stereo_geometry = None
@@ -295,6 +298,11 @@ def run(directory: Path, config: dict):
         pool = SearchPool(vision.shape.batch_query_workers) if vision.reuse_surface_search else None
         state("preview", depth_processing=camera.depth_processing, camera_streams=streams)
         while not stop.is_set():
+            if initial_selection is not None:
+                available = depth_stream.snapshot()[0] if depth_stream else latest.snapshot()
+                if available is not None:
+                    commands.put_nowait(initial_selection)
+                    initial_selection = None
             selected = None
             selected_depth_ms = 0.0
             if depth_stream is not None and depth_stream.error is not None:
@@ -385,7 +393,7 @@ def run(directory: Path, config: dict):
                             sequence,
                         )
                         source.detection_correction = vision.detection_correction.control(offline=False)
-                        live = LiveSurfaceSession(settings, source, model, kernels, pool)
+                        live = session_factory(settings, source, model, kernels, pool)
                         sam_active.set()
                         group_overlay = SceneGroupOverlay()
                         frozen, last_id, paused = None, -1, False
@@ -460,6 +468,8 @@ def run(directory: Path, config: dict):
                 temporary.replace(directory / "scene.bin")
                 state("processed", frame_id=frame.frame_id, depth_source=depth_source_name)
                 row, matches, masks = live.step(frame, measured_masks=measured_masks)
+                if on_observation is not None:
+                    on_observation(frame, row)
                 render_started = time.perf_counter()
                 packet = live_scene_packet(
                     frame,

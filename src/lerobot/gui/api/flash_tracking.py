@@ -184,6 +184,12 @@ async def cameras() -> dict:
 
 @router.post("/start")
 async def start(req: TrackingStart) -> dict:
+    return await start_worker(req)
+
+
+async def start_worker(
+    req: TrackingStart, *, module="lerobot.policies.flash.live_surface_worker", extra=None
+):
     from . import run
 
     await _check_registration_backend(req.pipeline_settings["config"]["shape"]["registration"]["backend"])
@@ -205,7 +211,7 @@ async def start(req: TrackingStart) -> dict:
             recent.mkdir(parents=True)
             (recent / "config.json").write_text(req.model_dump_json())
             (directory / "config.json").write_text(
-                json.dumps({**req.model_dump(), "history_directory": str(recent)})
+                json.dumps({**req.model_dump(), "history_directory": str(recent), **(extra or {})})
             )
             return directory
 
@@ -216,7 +222,7 @@ async def start(req: TrackingStart) -> dict:
 
         await asyncio.get_running_loop().run_in_executor(_io, release_preview_cameras)
         await run._launch_subprocess(
-            [_python(), "-u", "-m", "lerobot.policies.flash.live_surface_worker", str(_directory)],
+            [_python(), "-u", "-m", module, str(_directory)],
             command="flash_surface_live",
             config=req.model_dump(),
         )

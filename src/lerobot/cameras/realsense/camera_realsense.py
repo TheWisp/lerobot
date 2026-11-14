@@ -1232,6 +1232,73 @@ class RealSenseCamera(Camera):
             raise RuntimeError(f"{self} has not captured any aligned frames yet.")
         return color_frame, depth_frame
 
+    # The explicit IR stream profile in _configure_rs_pipeline_config.
+    infrared_shape = (480, 848, 1)
+
+    @check_if_not_connected
+    def read_latest_stereo(self, max_age_ms: int = 500):
+        """Peek RGB, aligned sensor depth, both IR images, time and sequence atomically.
+
+        No hardware read or event consumption. Arrays are owned by the capture
+        thread and are never modified after publication. The timestamp is the
+        host monotonic time when the synchronized frameset became available.
+        """
+        if not self.config.enable_infrared or not self.use_depth or not self.use_rgb:
+            raise RuntimeError("Stereo recording requires RGB, depth and both infrared streams")
+        if self.post_grab_processor is not None:
+            raise RuntimeError("Stereo recording requires raw camera frames, without a post-grab processor")
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
+        with self.frame_lock:
+            color = self.latest_color_frame
+            depth = self.latest_depth_frame
+            infrared = self.latest_infrared_pair
+            stamp = self.latest_timestamp
+            sequence = self.latest_frame_sequence
+        if color is None or depth is None or infrared is None or stamp is None:
+            raise RuntimeError(f"{self} has not captured a complete stereo frameset yet")
+        if (time.perf_counter() - stamp) * 1000 > max_age_ms:
+            raise TimeoutError(f"{self} latest stereo frameset is older than {max_age_ms} ms")
+        return color, depth, *infrared, stamp, sequence
+
+    @check_if_not_connected
+    def stereo_calibration(self) -> dict:
+        """Device calibration for regenerating color-aligned depth offline."""
+        profile = self.rs_profile
+        if profile is None:
+            raise DeviceNotConnectedError(f"{self} has no active stream profile.")
+        if self.rotation is not None or self.color_mode != ColorMode.RGB:
+            raise ValueError("Stereo recording currently requires unrotated RGB images")
+        left = profile.get_stream(rs.stream.infrared, 1).as_video_stream_profile()
+        right = profile.get_stream(rs.stream.infrared, 2).as_video_stream_profile()
+        color = profile.get_stream(rs.stream.color)
+
+        def intrinsics(profile):
+            i = profile.get_intrinsics()
+            return CameraIntrinsics(
+                i.width, i.height, i.fx, i.fy, i.ppx, i.ppy, str(i.model), tuple(i.coeffs)
+            ).to_dict()
+
+        def transform(target):
+            extrinsics = left.get_extrinsics_to(target)
+            matrix = np.eye(4)
+            matrix[:3, :3] = np.asarray(extrinsics.rotation).reshape(3, 3, order="F")
+            matrix[:3, 3] = extrinsics.translation
+            return matrix.tolist()
+
+        scale = profile.get_device().first_depth_sensor().get_depth_scale()
+        if not np.isclose(scale, 0.001):
+            raise ValueError("Stereo recording requires millimetre sensor depth units")
+        return {
+            "left_intrinsics": intrinsics(left),
+            "right_intrinsics": intrinsics(right),
+            "color_from_left": transform(color),
+            "right_from_left": transform(right),
+            "baseline_m": abs(left.get_extrinsics_to(right).translation[0]),
+            "depth_m_per_unit": scale,
+            "timestamp_clock": "host monotonic, frameset arrival (before alignment/filtering)",
+        }
+
     def disconnect(self) -> None:
         """
         Disconnects from the camera, stops the pipeline, and cleans up resources.

@@ -56,6 +56,7 @@ class PinkKinematics:
         converge_threshold: float = 1e-4,
         dt: float = 1.0 / 30,
         solver: str = "proxqp",
+        joint_limits_deg: dict[str, tuple[float, float]] | None = None,
     ):
         """
         Args:
@@ -68,6 +69,8 @@ class PinkKinematics:
             converge_threshold: Stop iterating when velocity norm * dt < this (radians).
             dt: Integration timestep for pink (affects how aggressive each iteration is).
             solver: QP solver name (proxqp, quadprog, daqp, ...).
+            joint_limits_deg: Optional narrower planning limits, by URDF joint name.
+                These constrain IK; FK still describes the measured joint values.
         """
         if not _pin_pink_available:
             raise ImportError(
@@ -102,6 +105,22 @@ class PinkKinematics:
 
         mesh_dir = os.path.dirname(urdf_path)
         self.robot = RobotWrapper.BuildFromURDF(urdf_path, [mesh_dir])
+        self._fk_q_lo = self.robot.model.lowerPositionLimit.copy()
+        self._fk_q_hi = self.robot.model.upperPositionLimit.copy()
+        for name, bounds in (joint_limits_deg or {}).items():
+            model = self.robot.model
+            if not model.existJointName(name):
+                raise ValueError(f"Unknown joint limit: {name}")
+            joint = model.joints[model.getJointId(name)]
+            limits = np.deg2rad(bounds)
+            if joint.nq != 1 or limits.shape != (2,) or not np.isfinite(limits).all():
+                raise ValueError(f"Invalid joint limits: {name}")
+            index = joint.idx_q
+            lower = max(model.lowerPositionLimit[index], limits[0])
+            upper = min(model.upperPositionLimit[index], limits[1])
+            if lower >= upper:
+                raise ValueError(f"Empty joint limits: {name}")
+            model.lowerPositionLimit[index], model.upperPositionLimit[index] = lower, upper
         # Seed values can land microscopically past URDF joint limits due to
         # floating-point error in our deg->rad conversion; pink's solve_ik
         # strictly validates seeds, so we clamp with a small safety inset.
@@ -120,7 +139,13 @@ class PinkKinematics:
 
     def forward_kinematics(self, joint_pos_deg: np.ndarray) -> np.ndarray:
         """Return 4x4 SE(3) world->EE transform for given joint positions (degrees)."""
-        q = self._clamp_q(np.deg2rad(joint_pos_deg[: len(self.joint_names)]))
+        # Planning constraints must not change the measured pose. In particular,
+        # a measured position outside a software limit is still that position.
+        q = np.clip(
+            np.deg2rad(joint_pos_deg[: len(self.joint_names)]),
+            self._fk_q_lo + self._eps,
+            self._fk_q_hi - self._eps,
+        )
         pin.forwardKinematics(self.robot.model, self.robot.data, q)
         pin.updateFramePlacements(self.robot.model, self.robot.data)
         fid = self.robot.model.getFrameId(self.target_frame_name)

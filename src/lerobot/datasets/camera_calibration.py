@@ -35,6 +35,32 @@ CAMERA_INFO_KEY = "camera"
 OPTICAL_FRAME = "optical: x right, y down, z forward"
 
 
+def attach_robot_geometry(meta: Any, robot: Any) -> None:
+    """Snapshot the measurements, not their machine-local file path.
+
+    Never silently replace the geometry of an existing recording on resume.
+    """
+    if robot.geometry is None:
+        if meta.info.get("robot_geometry"):
+            raise ValueError("This dataset requires its recorded robot geometry")
+        return
+    geometry = robot.geometry.to_dict()
+    if meta.info.robot_geometry is not None and meta.info.robot_geometry != geometry:
+        raise ValueError("Robot geometry differs from the recorded dataset")
+    for name, camera in getattr(robot, "cameras", {}).items():
+        if name in geometry["cameras"]:
+            robot.geometry.camera_pose(name, camera.config)
+    meta.info.robot_geometry = geometry
+    try:
+        cartesian = robot.cartesian_model().description()
+    except NotImplementedError:
+        cartesian = None
+    if meta.info.robot_cartesian is not None and meta.info.robot_cartesian != cartesian:
+        raise ValueError("Robot Cartesian units differ from the recorded dataset")
+    meta.info.robot_cartesian = cartesian
+    write_info(meta.info, meta.root)
+
+
 def camera_info_block(cam: Any, intrinsics: Any = None) -> dict[str, Any] | None:
     """The block for one camera object, or ``None`` when it has no intrinsics.
     ``intrinsics`` selects another of the camera's calibrations, the right

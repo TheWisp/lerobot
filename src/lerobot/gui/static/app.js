@@ -1656,6 +1656,7 @@ function switchTab(tabName) {
     // hook at the end of this function needs to know which tab we are leaving.
     const previousTab = document.querySelector('.tab.active')?.dataset.tab || null;
     if (tabName !== 'flash') document.getElementById('flash-experiment-video')?.pause();
+    if (tabName !== 'flash' && typeof hideFlashEditor === 'function') hideFlashEditor();
     if (previousTab === 'flash' && tabName !== 'flash' && typeof hideFlashLive === 'function' && flashLive.visible) {
         void hideFlashLive(false);
     }
@@ -1676,7 +1677,8 @@ function switchTab(tabName) {
         runTabInit();
     }
     const flashInit = tabName === 'flash' && typeof showFlashExperiments === 'function'
-        ? showFlashExperiments() : null;
+        ? (document.getElementById('flash-source-editor')?.getAttribute('aria-pressed') === 'true'
+            ? showFlashEditor() : showFlashExperiments()) : null;
     // Notify model tab
     if (tabName === 'model' && typeof modelTabInit === 'function') {
         modelTabInit();

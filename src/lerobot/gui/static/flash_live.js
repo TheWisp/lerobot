@@ -11,6 +11,7 @@ async function liveRequest(path, body) {
     return response.json();
 }
 async function showFlashLive() {
+    if (typeof detachFlashEditorPreview === 'function') detachFlashEditorPreview();
     if (flashLive.visible) return;
     const generation = ++flashLive.generation;
     try {
@@ -268,9 +269,10 @@ function flashAddedDepthKind(packet) {
     if(!packet?.depthBeforeFilters)return null;
     return packet.depth_source==='sensor'?'filter-filled':'model-only';
 }
-function drawFlashDepth(ctx, packet, canvas) {
+function drawFlashDepth(ctx, packet, canvas, controls={}) {
+    const state=controls.state||flashLive, info=controls.info||liveElement('depth-info');
     const depth=packet.depth, width=packet.camera.width, height=packet.camera.height;
-    const before=packet.depthBeforeFilters, highlight=liveElement('filled').checked && !!before;
+    const before=packet.depthBeforeFilters, highlight=(controls.highlight??liveElement('filled').checked) && !!before;
     if(depth.length!==width*height)throw new Error('Depth and image sizes differ');
     const sample=[];
     for(let y=0;y<height;y+=8)for(let x=0;x<width;x+=8){
@@ -279,10 +281,10 @@ function drawFlashDepth(ctx, packet, canvas) {
     sample.sort((a,b)=>a-b);
     // One color scale per viewing session. Recomputing percentiles every frame
     // makes static depths flash different colors as the camera's valid pixels vary.
-    if(!flashLive.depthColorRange && sample.length)
-        flashLive.depthColorRange={near:sample[Math.floor((sample.length-1)*0.01)],
+    if(!state.depthColorRange && sample.length)
+        state.depthColorRange={near:sample[Math.floor((sample.length-1)*0.01)],
             far:sample[Math.floor((sample.length-1)*0.99)]};
-    const {near,far}=flashLive.depthColorRange||{near:0,far:1};
+    const {near,far}=state.depthColorRange||{near:0,far:1};
     const span=Math.max(0.001,far-near), image=ctx.createImageData(width,height), pixels=image.data;
     let holes=0;
     for(let i=0;i<depth.length;i++){
@@ -299,11 +301,11 @@ function drawFlashDepth(ctx, packet, canvas) {
     const filters=Object.entries(packet.depth_processing||{}).filter(([,on])=>on)
         .map(([name])=>name.replace('_',' '));
     const added=flashAddedDepthKind(packet);
-    flashLive.depthSummary=`${flashDepthSource(packet)} · ${near.toFixed(2)}–${far.toFixed(2)} m · `+
+    state.depthSummary=`${flashDepthSource(packet)} · ${near.toFixed(2)}–${far.toFixed(2)} m · `+
         `${(100*holes/depth.length).toFixed(1)}% no depth`+
         (filters.length?` · ${filters.join(', ')} filter${filters.length===1?'':'s'}`:'')+
         (highlight?` · pink: ${added} depth`:'');
-    liveElement('depth-info').textContent=flashLive.depthSummary;
+    info.textContent=state.depthSummary;
 }
 function inspectFlashLiveDepth(event) {
     const packet=flashDepthPackets(flashLive).displayed;
@@ -385,6 +387,18 @@ function drawFlashRejectedPoses(ctx, object, intrinsics, name='object') {
         projected[kind] = projectLive([...(object.axis_points || []), ...surface], poses[kind], intrinsics);
     drawFlashRejectedPixels(ctx, projected, name);
 }
+function drawFlashObjectPose(ctx,obj,intrinsics,name,{surface=true,pose=true,color='#ffa343'}={}){
+    if(!obj.pose)return;
+    if(surface){ctx.fillStyle=color;for(const p of projectLive(obj.surface||[],obj.pose,intrinsics))if(p)ctx.fillRect(p[0]-1,p[1]-1,2,2);}
+    if(pose){
+        const axes=projectLive(obj.axis_points||[],obj.pose,intrinsics);
+        ['#ff6969','#6fe08a','#75a8ff'].forEach((color,i)=>{
+            if(!axes[0]||!axes[i+1])return;
+            ctx.strokeStyle=color;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(...axes[0]);ctx.lineTo(...axes[i+1]);ctx.stroke();
+        });
+        drawFlashPointTag(ctx,axes[0],name,color,-23);
+    }
+}
 function drawFlashMeasuredMasks(ctx, packet, width, height) {
     const masks=packet?.masks_rle;
     if(!masks || !liveElement('mask').checked)return;
@@ -436,7 +450,7 @@ async function drawFlashLive() {
         return;
     }
     if(three) {
-        const module=await import('/static/rgbd_scene.js?v=10');
+        const module=await import('/static/rgbd_scene.js?v=11');
         if(!state.visible || (state.episodePlayer?state.previewDepth:state.packet||state.previewDepth)!==capturedDepthPacket) return;
         state.viewer ||= module.createRgbdScene(liveElement('scene'));
         const descriptions=[];
@@ -480,14 +494,7 @@ async function drawFlashLive() {
             for(const contour of obj.contours || []) {ctx.beginPath();contour.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.stroke();}
         }
         if(liveElement('surface').checked && obj.pose) {
-            ctx.fillStyle='#ffa343';
-            for(const p of projectLive(obj.surface,obj.pose,overlay.camera.intrinsics)) if(p) ctx.fillRect(p[0]-1,p[1]-1,2,2);
-            const axes=projectLive(obj.axis_points,obj.pose,overlay.camera.intrinsics);
-            ['#ff6969','#6fe08a','#75a8ff'].forEach((color,i)=>{
-                if(!axes[0] || !axes[i+1])return;
-                ctx.strokeStyle=color;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(...axes[0]);ctx.lineTo(...axes[i+1]);ctx.stroke();
-            });
-            drawFlashPointTag(ctx,axes[0],name,'#ffa343',-23);
+            drawFlashObjectPose(ctx,obj,overlay.camera.intrinsics,name);
         }
         if(liveElement('rejected').checked)
             drawFlashRejectedPoses(ctx,obj,overlay.camera.intrinsics,name);

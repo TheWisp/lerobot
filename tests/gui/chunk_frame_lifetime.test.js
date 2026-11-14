@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const source = process.argv[2] || path.join(__dirname, '../../src/lerobot/gui/static/chunk_player.js');
 
-async function exercise(copyFails = false) {
+async function exercise(copyFails = false, delayedEvidence = false) {
   let now = 0, raf = [], nativeLive = 0, nativePeak = 0, bitmapLive = 0;
   const painted = [];
   class Bitmap {
@@ -61,10 +61,29 @@ async function exercise(copyFails = false) {
     fetch: async () => ({ok: true, headers: {get: () => null}, arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.length)}),
   };
   vm.createContext(ctx); vm.runInContext(fs.readFileSync(source, 'utf8'), ctx);
-  const player = ctx.window.ChunkPlayer.create({datasetId: 'test', fps: 30, length: 60, cameras: ['cam'], tiles: () => canvas, onPaint: frame => painted.push(frame)});
+  let releaseEvidence;
+  const evidence = new Promise(resolve => { releaseEvidence = resolve; });
+  const player = ctx.window.ChunkPlayer.create({datasetId: 'test', fps: 30, length: 60, cameras: ['cam'], tiles: () => canvas,
+    loadFrameData: delayedEvidence ? (start, count, signal, episode) => {
+      assert.equal(start, 0); assert.equal(count, 60); assert.equal(episode, 0);
+      return evidence;
+    } : undefined,
+    onPaint: (frame, episode, data) => {
+      if (delayedEvidence) {
+        assert.ok(data, 'never publish an RGB frame before its evidence is ready');
+        assert.equal(data.sourceFrame, frame, 'the displayed picture and its evidence agree');
+      }
+      painted.push(frame);
+    }});
   try {
     player.open(0);
     for (let i = 0; i < 10; i++) await new Promise(setImmediate);
+    if (delayedEvidence) {
+      now += 34; const callbacks = raf; raf = []; callbacks.forEach(f => f());
+      assert.equal(painted.length, 0, 'RGB must wait for matching evidence even if video arrives first');
+      releaseEvidence(Array.from({length: 60}, (_, sourceFrame) => ({sourceFrame})));
+      for (let i = 0; i < 10; i++) await new Promise(setImmediate);
+    }
     assert.equal(nativeLive, 0, 'decoder output frames are released, including copy failures');
     if (copyFails) {
       assert.equal(bitmapLive, 0);
@@ -87,5 +106,6 @@ async function exercise(copyFails = false) {
 (async () => {
   await exercise();
   await exercise(true);
+  await exercise(false, true);
   console.log('chunk_frame_lifetime: ok');
 })().catch(error => { console.error(error); process.exitCode = 1; });

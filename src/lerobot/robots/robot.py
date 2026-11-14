@@ -24,6 +24,7 @@ from lerobot.types import ActionChunk, RobotAction, RobotObservation
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
 from .config import RobotConfig
+from .geometry import RobotGeometry
 
 
 # TODO(aliberts): action/obs typing such as Generic[ObsType, ActType] similar to gym.Env ?
@@ -53,6 +54,12 @@ class Robot(abc.ABC):
     def __init__(self, config: RobotConfig):
         self.robot_type = self.name
         self.id = config.id
+        self.geometry = RobotGeometry.load(config.geometry_path, robot_id=config.id)
+        if self.geometry is not None:
+            measured = self.geometry.to_dict()["cameras"]
+            for name, camera_config in getattr(config, "cameras", {}).items():
+                if name in measured:
+                    self.geometry.camera_pose(name, camera_config)
         self.calibration_dir = (
             config.calibration_dir if config.calibration_dir else HF_LEROBOT_CALIBRATION / ROBOTS / self.name
         )
@@ -64,6 +71,10 @@ class Robot(abc.ABC):
 
     def __str__(self) -> str:
         return f"{self.id} {self.__class__.__name__}"
+
+    def cartesian_model(self):
+        """Return calibrated FK/IK without connecting, when this robot supports it."""
+        raise NotImplementedError(f"{self.robot_type} does not expose calibrated Cartesian execution")
 
     def __enter__(self):
         """

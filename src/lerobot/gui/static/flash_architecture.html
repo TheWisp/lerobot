@@ -641,9 +641,15 @@
       <div class="eyebrow">FLASH · current code path</div>
       <h1>How FLASH tracks one object</h1>
       <p class="lead">
-        The live camera and recorded videos use the same tracking code. For each
+        Live camera, video experiments, and demo-editor object extraction use the same tracking code. For each
         object, it combines what the camera sees now with motion clues and the
         surface remembered from earlier frames.
+      </p>
+      <p class="lead">
+        <strong>Demo recording:</strong> one robot-owned camera saves synchronized RGB,
+        sensor depth and left/right IR to a LeRobot episode, together with capture times,
+        stereo calibration and robot geometry. Demo processing regenerates the selected
+        depth model from these saved inputs before running this same tracking pipeline.
       </p>
       <div class="context">
         <span class="pill"
@@ -651,6 +657,8 @@
         ><span class="pill"
           ><strong>Video examples:</strong> same core, comparison variants
           available</span
+        ><span class="pill"
+          ><strong>Demo editor:</strong> recorded RGB-D + named/clicked objects → same core</span
         ><span class="pill"
           ><strong>Result:</strong> observed, predicted, or lost</span
         >
@@ -1394,6 +1402,64 @@
             </p>
           </article>
         </div>
+      </section>
+      <section class="panel" id="demo-execution">
+        <h2>Demo editor → robot action</h2>
+        <p>The editor uses the tracking result above. Robot-specific kinematics stay on the robot.</p>
+        <p>Mark start/end retains every recorded frame in that inclusive interval.
+          Consecutive keyframes with the same reference form one range.
+          Each retains its measured joints and gripper command, expressed relative
+          to the selected object's pose at the start of that range.
+          The valid demo spans the first through last keyframe, including the gaps
+          between intervals. Playback defaults to that span; Full recording exposes
+          the original footage for editing. Execution visits only the marked keyframes.</p>
+        <p>Demo inspection: recorded RGB + the same frame's processed depth, masks,
+          pose and accumulated surface → shared 2D / 3D / Depth views.
+          Playback buffers these together; it never draws another frame's pose on the current image.</p>
+        <svg viewBox="0 0 1080 310" role="img" aria-label="Demo keyframes and current tracked poses produce a robot tool target, then bounded joint actions" style="width:100%;height:auto">
+          <defs><marker id="demo-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#88a6bb"/></marker></defs>
+          <g fill="none" stroke="#88a6bb" stroke-width="2" marker-end="url(#demo-arrow)">
+            <path d="M260 65 H330"/><path d="M260 210 H300 V110 H330"/>
+            <path d="M600 85 H660"/><path d="M860 85 H910"/>
+            <path d="M760 125 V205"/>
+          </g>
+          <g fill="#172a38" stroke="#58778c">
+            <rect x="10" y="20" width="250" height="100" rx="10"/>
+            <rect x="10" y="165" width="250" height="110" rx="10"/>
+            <rect x="330" y="20" width="270" height="120" rx="10"/>
+            <rect x="660" y="35" width="200" height="90" rx="10"/>
+            <rect x="910" y="35" width="160" height="90" rx="10"/>
+            <rect x="650" y="205" width="230" height="65" rx="10"/>
+          </g>
+          <g fill="#e5edf4" font-size="16" text-anchor="middle">
+            <text x="135" y="46">Edited demo keyframe</text>
+            <text x="135" y="73" font-size="14">Measured joints → calibrated tool pose</text>
+            <text x="135" y="98" font-size="14">Relative to range entry + gripper</text>
+            <text x="135" y="192">Current shared tracker</text>
+            <text x="135" y="219" font-size="14">Primed with demo reference image/depth</text>
+            <text x="135" y="245" font-size="14">Same object coordinates · current pose</text>
+            <text x="465" y="48">Acquire reference at range entry</text>
+            <text x="465" y="78" font-size="14">Keep reference × each local tool pose</text>
+            <text x="465" y="106" font-size="14">World → saved robot-base target</text>
+            <text x="760" y="64">One motor step · 30 Hz</text>
+            <text x="760" y="94" font-size="14">Robot FK / IK + joint speed bound</text>
+            <text x="990" y="65">Joint action</text>
+            <text x="990" y="95" font-size="14">Robot or simulation</text>
+            <text x="765" y="231">Wait · no new action</text>
+            <text x="765" y="253" font-size="13">Missing entry pose, IK or clock failure</text>
+          </g>
+        </svg>
+        <p>Each object range waits for a published pose (observed or predicted) from
+          a frame no older than 0.5 s. That reference is fixed until the range ends,
+          so moving the held object does not cancel the demonstrated lift, and
+          occlusion during placement does not stop the range. A gap or change of
+          reference starts a new range and requires new evidence. World means the
+          robot base and does not require a tracked pose. References are not chased
+          if they move during a range.</p>
+        <p>
+          Motion uses at most 5 cm/s, 30°/s and 30 joint-degrees/s. The recorded gripper
+          command applies at the keyframe (within 3 mm / 3°). Stop cancels execution;
+          a test run never connects robot motors.</p>
       </section>
       <section class="panel" id="frame-evidence">
         <h2>5. Inspect the same result from either source</h2>

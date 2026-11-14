@@ -26,9 +26,9 @@ ROBOT_TYPE = "so107_follower_gravity"
 @dataclass
 class SO107FollowerGravityRobotConfig(RobotConfig, SOFollowerConfig):
     """The SO-107 follower held on its commanded pose against gravity, for control that commands joints from the
-    calibrated kinematics without watching the fingertip. The Show-and-Servo act engine accepts only this type.
+    calibrated kinematics without watching the fingertip.
 
-    Its own robot type so that nothing records, replays or trains on it by mistake: the plain ``so107_follower``
+    Its own robot type preserves the actuator behavior in recordings and replay: the plain ``so107_follower``
     writes LeRobot's P 16 with no feed-forward, and the two settle differently under load. Holding a 60 mm circle at
     constant height, P 16 fell 33 mm on average and stalled its lift; P 32 with this feed-forward held -0.1 mm mean,
     3.9 mm max (``so107_description/docs/gravity_sag.md``).

@@ -126,6 +126,9 @@ def isolate_gui_config_files(tmp_path, monkeypatch) -> None:
     # developer's machine they already exist and nothing appeared to happen.
     monkeypatch.setattr(robot_api, "ROBOT_PROFILES_DIR", tmp_path / "robots")
     monkeypatch.setattr(robot_api, "TELEOP_PROFILES_DIR", tmp_path / "teleops")
+    from lerobot.gui.api import flash_editor
+
+    monkeypatch.setattr(flash_editor, "EDITOR_DIR", tmp_path / "flash-editor")
 
 
 @pytest.fixture(autouse=True, scope="session")
