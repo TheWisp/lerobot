@@ -36,7 +36,10 @@ repos:
         args: ['--maxkb=1024']
         # Vendored third-party browser libs (three.js, urdf-loader) ship as
         # single large bundles — see static/vendor/PROVENANCE.md.
-        exclude: ^src/lerobot/gui/static/vendor/
+        # Three recorded RGB-D regression inputs retain exact color/depth for
+        # real small_gicp and boundary validation (1.6, 1.6 and 4.4 MiB).
+        exclude: >-
+          ^(src/lerobot/gui/static/vendor/|tests/policies/flash/fixtures/(ring_empty_refresh_20261114|dowel_empty_refresh_20261114|green_toy_boundary_20261113)\.npz$)
       - id: debug-statements
       - id: check-merge-conflict
       - id: check-case-conflict

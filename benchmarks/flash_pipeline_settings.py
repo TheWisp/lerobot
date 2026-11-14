@@ -40,6 +40,8 @@ OPTION_HELP = {
     "min_detector_score": "Minimum score for a fresh text detection to repair the mask.",
     "min_tracker_score": "Tracker-score threshold used by detector correction.",
     "min_mask_overlap": "Required overlap when associating detection with tracked mask.",
+    "outer_mask_margin_px": "Withhold unreliable depth just outside the mask, in pixels; preserve the outline.",
+    "refresh_observed_surface": "After acceptance, replace observed overlap, retire contradictions, and preserve hidden shape. Only latest reliably refreshed samples provide stored-point vetoes.",
     "mask_margin_px": "Exclude this many pixels inside mask boundaries from measured geometry.",
     "depth_span_m": "Reject neighbourhoods whose depth range exceeds this value, metres.",
     "depth_neighborhood_px": "Depth-validity neighbourhood width, pixels.",
@@ -208,7 +210,7 @@ def reference_markdown():
     lines = [
         "# FLASH experiment pipeline settings",
         "",
-        "Open **Run → FLASH → Pipeline settings** beside the selected video. Fresh live sessions use **LK + surface fit + groups + growing surface + Kalman**. Recorded experiments retain their saved settings; use the same complete configuration for a fair live/replay comparison. The JSON contains settings for the next rerun. Retired SciPy settings migrate to the new surface fitter; saved playback keeps its original matcher label. **Rerun this scene with these settings** validates and runs it. Playback itself never recomputes poses.",
+        "Open **FLASH → Video examples** or **Live camera**, then **Advanced pipeline settings**. Fresh sessions use **LK + small_gicp + groups + refreshed growing surface + Kalman**. Recorded experiments retain their saved settings; use the same complete configuration for a fair live/replay comparison. The JSON contains settings for the next rerun. Retired SciPy settings migrate to the new surface fitter; saved playback keeps its original matcher label. **Rerun this scene with these settings** validates and runs it. Playback itself never recomputes poses.",
         "",
         "This is the restart experiment pipeline. It does not configure robot control. Saved-mask benchmarks reuse segmentation, so SAM/detection options are listed but not executed. Shared matching replaces the legacy object-crop matcher. Live-only scheduling options have no effect in the sequential benchmark.",
         "",

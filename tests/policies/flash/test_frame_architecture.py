@@ -1,6 +1,7 @@
 """Exercise the diagram through actual RGB-D fitting, filtering and map growth."""
 
 import numpy as np
+import pytest
 
 from lerobot.policies.flash.experimental_surface_session import (
     GrowingSurfaceConfig,
@@ -15,8 +16,10 @@ from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
 
-def test_confirmed_growth_is_used_after_occlusion_without_changing_object_coordinates(monkeypatch):
+@pytest.mark.parametrize("refresh", [False, True])
+def test_confirmed_growth_is_used_after_occlusion_without_changing_object_coordinates(monkeypatch, refresh):
     settings = defaults()
+    settings["surface_experiment"]["refresh_observed_surface"] = refresh
     shape = VisionPipelineConfig.from_dict(settings["config"]).shape
     track = GrowingSurfaceSession(shape, GrowingSurfaceConfig(**settings["surface_experiment"]))
     intrinsics = np.array([[800.0, 0, 70], [0, 800.0, 50], [0, 0, 1]])
@@ -52,14 +55,22 @@ def test_confirmed_growth_is_used_after_occlusion_without_changing_object_coordi
     first = track.update(observation(1), 0.1)
     assert first["status"] == "observed_candidate"
     assert first["diagnostics"]["growth"]["admitted_points"] > 0
-    np.testing.assert_array_equal(track.store.points, initial)  # Addition is still pending.
+    # Refresh can change accepted overlap immediately; the novel patch still
+    # cannot participate until a later independent observation confirms it.
+    assert not track.store.patches[1].active
+    assert [p.frame for p in track.store.patches.values() if p.active] == [0]
+    before_confirmation = track.store.points.copy()
+    if not refresh:
+        np.testing.assert_array_equal(before_confirmation, initial)
 
     confirmed = track.update(observation(2), 0.2)
     assert confirmed["status"] == "observed_candidate"
     grown = track.store.points.copy()
     assert len(grown) > len(initial)
-    for fitted in fitted_surfaces:
-        np.testing.assert_array_equal(fitted, initial)  # Confirmation happens after fitting.
+    assert len(fitted_surfaces) == 2
+    np.testing.assert_array_equal(fitted_surfaces[0], initial)
+    np.testing.assert_array_equal(fitted_surfaces[1], before_confirmation)
+    assert track.store.patches[1].active  # Confirmation happens after fitting.
 
     support = np.array([[x, y, z] for x in (-0.1, 0.1) for y in (-0.06, 0.06) for z in (0.6, 0.7)])
     pose = np.eye(4)

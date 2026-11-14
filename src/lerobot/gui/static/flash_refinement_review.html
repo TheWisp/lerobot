@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FLASH surface refinement review</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#111a2d;color:#e9f1ff;font:14px system-ui,sans-serif}
+header{padding:12px 18px;border-bottom:1px solid #304463;display:flex;gap:18px;align-items:baseline;flex-wrap:wrap}
+h1{font-size:18px;margin:0}a{color:#8ecbff}main{max-width:1500px;margin:auto;padding:16px}
+.toolbar,.metrics,.controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:8px 0}
+button{background:#263d5d;color:#e9f1ff;border:1px solid #52749b;border-radius:4px;padding:7px 12px;cursor:pointer}
+button[aria-pressed=true]{background:#1674ad;border-color:#69c9ff}button:hover{border-color:#b3dbff}
+label{display:inline-flex;gap:5px;align-items:center;white-space:nowrap}input[type=range]{width:100%;margin:3px 0 8px}
+.stage{position:relative;background:#0c131b;aspect-ratio:16/9;overflow:hidden;border:1px solid #31435c}
+.stage canvas{display:block;width:100%;height:100%}.stage canvas[hidden]{display:none}
+.rgbd-metric-ruler{position:absolute;left:20px;bottom:18px;background:#101923bb;padding:5px 9px;border-radius:4px}
+.rgbd-metric-bar{display:block;border-bottom:2px solid white}.rgbd-point-label{position:absolute;top:0;left:0;background:#101923dd;border:1px solid;padding:3px 5px;pointer-events:none}
+.legend{display:flex;gap:16px;flex-wrap:wrap}.chip{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px}
+.metric{background:#1b2a42;border:1px solid #304463;border-radius:5px;padding:7px 10px}
+.timeline{height:12px;position:relative;background:#1e3048;border-radius:3px}.tick{position:absolute;top:0;width:2px;height:12px;background:#6ad7ef}.tick.added{background:#f7a63d;height:16px;top:-2px}
+.hint{color:#a9bcd2}.bad{color:#ff8fa9}.good{color:#89e7ad}
+</style>
+</head>
+<body>
+<header><h1 id="heading">Green toy · surface refinement trial</h1><span class="hint">Interactive replay of the recorded RGB-D, pose, and saved surface before/after each processed frame</span><a href="/#/run/flash">FLASH</a></header>
+<main>
+<div class="toolbar"><button id="play">Play</button><button id="first-loss">Second-loss recovery #2882</button><button id="view2d" aria-pressed="true">2D</button><button id="view3d" aria-pressed="false">3D</button><button id="focus">Focus surface</button><button id="reset">Reset 3D camera</button><strong id="clock">Loading…</strong></div>
+<input id="seek" type="range" min="0" max="0" value="0" aria-label="Replay frame"><div id="ticks" class="timeline" aria-label="Cyan marks refinement; orange marks growth"></div>
+<div class="controls">
+<label><input id="context" type="checkbox" checked>Camera depth (3D)</label>
+<label><input id="before" type="checkbox" checked><span style="color:#55d9ef">Surface before</span></label>
+<label><input id="after" type="checkbox" checked><span style="color:#ffa33f">Surface after</span></label>
+<label><input id="axes" type="checkbox" checked>Pose axes</label>
+<label><input id="mask" type="checkbox" checked>Observed mask outline (2D)</label>
+<label><input id="rejected" type="checkbox">Rejected fit</label>
+<label><input id="conflicts" type="checkbox" checked><span style="color:#ff526e">Depth contradictions</span></label>
+</div>
+<div class="stage"><canvas id="canvas2d"></canvas><canvas id="canvas3d" hidden></canvas></div>
+<div class="metrics"><span id="status" class="metric"></span><span id="growth" class="metric"></span><span id="map" class="metric"></span><span id="depth" class="metric"></span><span id="conflict-metric" class="metric bad" hidden></span></div>
+<p class="hint">Cyan and orange are the stored local surface before and after this frame's update, placed at the frame's accepted pose. On lost frames, the map is shown at the last accepted pose. New pending points are proposals awaiting a later confirmation; Map shows the confirmed surface count. Counts come from the algorithm's growth audit. The map is resampled, so its total point count can fall even when new points were admitted. 3D uses the exact selected depth for this processed frame; zero depth remains a hole. Pose axes use one fixed frame from initialization; they are not recalculated as the surface changes. No ground-truth pose is available for this live clip.</p>
+</main>
+<script type="importmap">{"imports":{"three":"/static/vendor/three.module.js"}}</script>
+<script type="module">
+import {createRgbdScene} from '/static/rgbd_scene.js?v=10';
+const trial=new URLSearchParams(location.search).get('trial');
+const base=trial==='latest-reliable'?'/static/flash_latest_reliable_review_data/'
+    :trial==='postaccept'?'/static/flash_postaccept_refinement_review_data/'
+    :trial==='retired'?'/static/flash_retirement_review_data/'
+    :trial==='original'?'/static/flash_refinement_review_data/'
+    :'/static/flash_final_refinement_review_data/';
+const $=id=>document.getElementById(id);
+const state={index:null,frame:-1,packet:null,bitmap:null,viewer:null,mode:'2d',playing:false,anchor:0,baseTime:0,request:null};
+const ident=[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+function time(i){return state.index.frames[i].t}
+function frameAt(t){let lo=0,hi=state.index.frames.length-1;while(lo<hi){const mid=Math.ceil((lo+hi)/2);if(time(mid)<=t)lo=mid;else hi=mid-1}return lo}
+function stop(){state.playing=false;$('play').textContent='Play'}
+function animate(now){if(!state.playing)return;const t=state.baseTime+(now-state.anchor)/1000;const last=state.index.frames.length-1;if(t>=time(last)){show(last);stop();return}show(frameAt(t));requestAnimationFrame(animate)}
+function setMode(mode){state.mode=mode;$('view2d').setAttribute('aria-pressed',String(mode==='2d'));$('view3d').setAttribute('aria-pressed',String(mode==='3d'));$('canvas2d').hidden=mode!=='2d';$('canvas3d').hidden=mode!=='3d';if(mode==='3d'){if(!state.viewer)state.viewer=createRgbdScene($('canvas3d'));render3d()}else render2d()}
+function project(point,pose,k){const x=pose[0][0]*point[0]+pose[0][1]*point[1]+pose[0][2]*point[2]+pose[0][3],y=pose[1][0]*point[0]+pose[1][1]*point[1]+pose[1][2]*point[2]+pose[1][3],z=pose[2][0]*point[0]+pose[2][1]*point[1]+pose[2][2]*point[2]+pose[2][3];return z>0?[k[0][0]*x/z+k[0][2],k[1][1]*y/z+k[1][2]]:null}
+function render2d(){const p=state.packet,b=state.bitmap;if(!p||!b||state.mode!=='2d')return;const c=$('canvas2d');c.width=b.width;c.height=b.height;const g=c.getContext('2d');g.drawImage(b,0,0);if($('mask').checked){g.strokeStyle='#92f274';g.lineWidth=2;for(const contour of p.mask_contours){if(!contour.length)continue;g.beginPath();g.moveTo(...contour[0]);for(const point of contour.slice(1))g.lineTo(...point);g.closePath();g.stroke()}}
+const pose=p.display_pose;if(pose){function plot(points,color,step=1){g.fillStyle=color;for(let i=0;i<points.length;i+=step){const q=project(points[i],pose,p.camera.intrinsics);if(q)g.fillRect(q[0]-1,q[1]-1,2,2)}}
+if($('before').checked)plot(p.before,'#44d9f0',Math.max(1,Math.floor(p.before.length/2500)));if($('after').checked)plot(p.after,'#ffa33f',Math.max(1,Math.floor(p.after.length/2500)));}
+if($('axes').checked&&p.display_pose&&p.axes?.length===4){const uv=p.axes.map(point=>project(point,p.display_pose,p.camera.intrinsics));if(uv[0]){g.lineWidth=3;g.font='bold 14px system-ui';for(let i=1;i<4;i++){if(!uv[i])continue;g.strokeStyle=g.fillStyle=['','#ff5555','#55ee77','#5599ff'][i];g.beginPath();g.moveTo(...uv[0]);g.lineTo(...uv[i]);g.stroke();g.fillText('XYZ'[i-1],uv[i][0]+4,uv[i][1]-4)}}}
+if($('rejected').checked&&p.rejected_pose){g.fillStyle='#ff62ce';for(const point of p.before){const q=project(point,p.rejected_pose,p.camera.intrinsics);if(q)g.fillRect(q[0]-1,q[1]-1,2,2)}}
+if($('conflicts').checked&&p.conflicts){g.font='bold 13px system-ui';g.lineWidth=3;for(let i=0;i<p.conflicts.pixels.length;i++){const [x,y]=p.conflicts.pixels[i];g.beginPath();g.arc(x,y,10,0,2*Math.PI);g.strokeStyle='#ff526e';g.stroke();g.fillStyle='#ff526e';g.fillRect(x-2,y-2,4,4);g.fillText(String(i+1),x+12,y-10)}}}
+function render3d(){const p=state.packet;if(!p||state.mode!=='3d'||!state.viewer)return;const layers=[];if(p.display_pose){layers.push({layer:'before',color:0x55d9ef,pose:p.display_pose,points:p.before,axes:false,label:'surface before'});layers.push({layer:'after',color:0xffa33f,pose:p.display_pose,points:p.after,axes:false,label:p.pose?'green toy':'green toy (last accepted pose)'});}if(p.display_pose&&p.axes?.length===4)layers.push({layer:'poseAxes',color:0xffffff,pose:p.display_pose,points:[p.axes[0]],opacity:0,axisPoints:p.axes});if(p.rejected_pose)layers.push({layer:'rejected',color:0xff62ce,pose:p.rejected_pose,points:p.before,axes:false,label:'rejected fit'});if(p.conflicts){const points=[];const links=[];for(let i=0;i<p.conflicts.pixels.length;i++){points.push(p.conflicts.map_camera_points[i],p.conflicts.measured_camera_points[i]);links.push([2*i,2*i+1])}layers.push({layer:'conflicts',color:0xff526e,pose:ident,points,links,axes:false,label:'map to measured depth'});}state.viewer.update(p.depth,state.bitmap,p.camera,layers);state.viewer.setOptions({scene:$('context').checked,before:$('before').checked,after:$('after').checked,rejected:$('rejected').checked,conflicts:$('conflicts').checked,poseAxes:$('axes').checked,axes:$('axes').checked})}
+function render(){const p=state.packet;if(!p)return;$('clock').textContent=`${p.time_s.toFixed(2)} s · frame ${state.frame+1}/${state.index.frames.length} · camera #${p.frame}`;$('status').textContent=`Pose: ${p.status}${p.pose?'':' · last accepted map shown for reference only'}${p.reason?' · '+p.reason:''}`;$('status').className='metric '+(p.pose?'good':'bad');const g=p.growth||{};$('growth').textContent=`New pending +${g.admitted_points||0} · refined ${g.refined_points||0}${g.refined_points?` · mean shift ${Number(g.refinement_mean_shift_mm||0).toFixed(2)} mm`:''}`;$('map').textContent=`Map ${p.map_points_before} → ${p.map_points_after} points · removed ${g.retired_points||0}`;$('depth').textContent=`Depth: ${p.depth_source}`;$('conflict-metric').hidden=!p.conflicts;if(p.conflicts){const gaps=p.conflicts.depth_gap_mm.map(x=>Math.round(x));$('conflict-metric').textContent=`${gaps.length} stored-map points predict object ${Math.min(...gaps)}–${Math.max(...gaps)} mm in front of measured background`}$('seek').value=String(state.frame);state.mode==='3d'?render3d():render2d()}
+async function show(i){if(!state.index||i===state.frame)return;state.frame=i;$('seek').value=String(i);state.request?.abort();const controller=new AbortController();state.request=controller;try{const res=await fetch(base+String(i).padStart(4,'0')+'.bin.gz',{signal:controller.signal});if(!res.ok)throw new Error(`Frame ${i+1}: HTTP ${res.status}`);const buffer=await new Response(res.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();const len=new DataView(buffer).getUint32(0,true);const p=JSON.parse(new TextDecoder().decode(new Uint8Array(buffer,4,len)));if(p.review_frame!==i)throw new Error('Frame identity mismatch');const start=4+len;p.depth=new Float32Array(buffer.slice(start,start+p.depth_bytes));const bitmap=await createImageBitmap(new Blob([buffer.slice(start+p.depth_bytes)],{type:'image/jpeg'}));if(controller!==state.request){bitmap.close();return}state.bitmap?.close();state.bitmap=bitmap;state.packet=p;render()}catch(e){if(e.name!=='AbortError'){$('status').textContent=e.message;$('status').className='metric bad'}}}
+$('play').onclick=()=>{if(state.playing){stop();return}if(state.frame>=state.index.frames.length-1)show(0);state.baseTime=time(Math.max(0,state.frame));state.anchor=performance.now();state.playing=true;$('play').textContent='Pause';requestAnimationFrame(animate)};
+$('seek').oninput=()=>{stop();show(Number($('seek').value))};$('first-loss').onclick=()=>{stop();const i=state.index.frames.findIndex(f=>f.frame===2882);if(i>=0)show(i)};$('view2d').onclick=()=>setMode('2d');$('view3d').onclick=()=>setMode('3d');$('focus').onclick=()=>state.viewer?.focus();$('reset').onclick=()=>state.viewer?.reset();for(const id of ['context','before','after','mask','rejected','conflicts','axes'])$(id).onchange=render;
+try{const r=await fetch(base+'index.json');if(!r.ok)throw new Error(`Cannot load review: HTTP ${r.status}`);state.index=await r.json();$('heading').textContent=state.index.name;document.title=state.index.name;$('seek').max=String(state.index.frames.length-1);const duration=time(state.index.frames.length-1);for(const f of state.index.frames){if(!f.refined&&!f.added)continue;const tick=document.createElement('i');tick.className='tick'+(f.added?' added':'');tick.style.left=`${100*f.t/duration}%`;tick.title=`${f.t.toFixed(2)} s · +${f.added} added, ${f.refined} refined`;$('ticks').append(tick)}const requested=Number(new URLSearchParams(location.search).get('frame'));const initial=state.index.frames.findIndex(f=>f.frame===requested);await show(initial<0?0:initial)}catch(e){$('status').textContent=e.message;$('status').className='metric bad'}
+</script>
+</body></html>

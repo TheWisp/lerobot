@@ -158,6 +158,44 @@ def project(points: np.ndarray, k: np.ndarray) -> np.ndarray:
     return points[:, :2] / points[:, 2, None] @ k[:2, :2].T + k[:2, 2]
 
 
+def scene_depth_evidence(predicted, intrinsics, scene_nearest_depth, tolerance_m):
+    """Per-point free-space evidence shared by pose checking and map cleanup.
+
+    A point is fully contradicted only when all four interpolation corners have
+    reliable depth farther than the predicted surface by the pose tolerance.
+    Missing depth and a nearer occluder provide no such evidence.
+    """
+    uv = project(predicted, intrinsics)
+    h, w = scene_nearest_depth.shape
+    valid = (
+        np.isfinite(uv).all(1)
+        & (predicted[:, 2] > 0)
+        & (uv[:, 0] >= 0)
+        & (uv[:, 0] <= w - 1)
+        & (uv[:, 1] >= 0)
+        & (uv[:, 1] <= h - 1)
+    )
+    x, y = np.nan_to_num(uv[:, 0]).clip(0, w - 1), np.nan_to_num(uv[:, 1]).clip(0, h - 1)
+    x0, y0 = x.astype(int), y.astype(int)
+    x1, y1 = np.minimum(x0 + 1, w - 1), np.minimum(y0 + 1, h - 1)
+    fx, fy = x - x0, y - y0
+    weights = np.column_stack(((1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy))
+    near = np.column_stack(
+        (
+            scene_nearest_depth[y0, x0],
+            scene_nearest_depth[y0, x1],
+            scene_nearest_depth[y1, x0],
+            scene_nearest_depth[y1, x1],
+        )
+    )
+    known = (near > 0) & valid[:, None]
+    gap = near - predicted[:, 2, None]
+    exposed = np.sum(weights * known * np.clip((gap + tolerance_m) / tolerance_m, 0, 1), axis=1)
+    contradicted = np.sum(weights * known * (gap > tolerance_m), axis=1)
+    free = np.sqrt(np.sum(weights * known * np.maximum(gap - tolerance_m, 0) ** 2, axis=1))
+    return free, exposed, contradicted
+
+
 def pca_candidates(source: np.ndarray, target: np.ndarray, *, all_axis_orders=False) -> list[np.ndarray]:
     """Generic coarse initializations; never used as a pose or axis measurement."""
     source_center, target_center = source.mean(0), target.mean(0)
@@ -637,32 +675,12 @@ class WholeSurfaceFit:
         weight. Hidden/unknown samples contribute to neither denominator nor
         numerator. Interpolation combines evidence, never depth across a cliff.
         """
-        uv = project(predicted, self.k)
         if self.fit_kernels is not None:
+            uv = project(predicted, self.k)
             return self.fit_kernels[3](predicted, uv, self.scene_nearest_depth, self.config.depth_tolerance_m)
-        h, w = self.scene_nearest_depth.shape
-        valid = (
-            np.isfinite(uv).all(1)
-            & (predicted[:, 2] > 0)
-            & (uv[:, 0] >= 0)
-            & (uv[:, 0] <= w - 1)
-            & (uv[:, 1] >= 0)
-            & (uv[:, 1] <= h - 1)
+        return scene_depth_evidence(
+            predicted, self.k, self.scene_nearest_depth, self.config.depth_tolerance_m
         )
-        x, y = np.nan_to_num(uv[:, 0]).clip(0, w - 1), np.nan_to_num(uv[:, 1]).clip(0, h - 1)
-        x0, y0 = x.astype(int), y.astype(int)
-        x1, y1 = np.minimum(x0 + 1, w - 1), np.minimum(y0 + 1, h - 1)
-        fx, fy = x - x0, y - y0
-        weights = np.column_stack(((1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy))
-        depth = self.scene_nearest_depth
-        near = np.column_stack((depth[y0, x0], depth[y0, x1], depth[y1, x0], depth[y1, x1]))
-        known = (near > 0) & valid[:, None]
-        gap = near - predicted[:, 2, None]
-        tolerance = self.config.depth_tolerance_m
-        exposed = np.sum(weights * known * np.clip((gap + tolerance) / tolerance, 0, 1), axis=1)
-        contradicted = np.sum(weights * known * (gap > tolerance), axis=1)
-        free = np.sqrt(np.sum(weights * known * np.maximum(gap - tolerance, 0) ** 2, axis=1))
-        return free, exposed, contradicted
 
     def scene_depth_check(self, pose):
         # A solver's subsampling budget must not hide a contradictory patch.
@@ -682,7 +700,13 @@ class WholeSurfaceFit:
                 # farther in a single frame). Current surface beyond the saved
                 # surface, and the current image's own air, keep the full veto.
                 contradicted = np.flatnonzero(bad)
-                distance = self.reference_tree.query(move(fit.reference[contradicted], inverse))[0]
+                current_local = move(fit.reference[contradicted], inverse)
+                distance = self.reference_tree.query(current_local)[0]
+                # The newest accepted view may still be pending confirmation
+                # and absent from the map. It is nevertheless an actual
+                # measured surface, so its own noisy depth cannot veto a
+                # current sample that agrees with those measured points.
+                distance = np.minimum(distance, fit.target_tree.query(predicted[contradicted])[0])
                 bad = bad.copy()
                 bad[contradicted[distance <= self.config.depth_tolerance_m]] = 0.0
             count = float(exposed.sum())

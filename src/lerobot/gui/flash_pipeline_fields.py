@@ -25,6 +25,13 @@ def pipeline_fields():
                     {"min": 0, "step": 1},
                 ),
                 (
+                    "config.observation.outer_mask_margin_px",
+                    "Ignore depth outside outline (pixels)",
+                    "int",
+                    "Withhold uncertain depth just outside the mask; the outline still contributes to fitting.",
+                    {"min": 0, "step": 1},
+                ),
+                (
                     "config.observation.depth_span_m",
                     "Allowed local depth jump (mm)",
                     "float",
@@ -262,6 +269,13 @@ def pipeline_fields():
                     "float",
                     "New measurements must agree with existing surface within this distance.",
                     {"min": 0.1, "step": 0.5, "scale": 1000},
+                ),
+                (
+                    "surface_experiment.refresh_observed_surface",
+                    "Refresh observed surface",
+                    "bool",
+                    "After acceptance, replace measured overlap and remove contradictions. Preserve hidden surface; only latest reliable measurements can veto the next pose.",
+                    {},
                 ),
                 (
                     "surface_experiment.max_points",

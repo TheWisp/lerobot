@@ -329,6 +329,38 @@ letting that patch influence fitting**. Otherwise, a badly placed patch could
 make the next fit look good simply because it matches its own wrong placement.
 This check reduces one source of circular evidence; it does not prove correctness.
 
+Fresh sessions use `refresh_observed_surface=true`. After the pose passes
+geometry and Kalman, replace the overlapping visible region with actual clean
+current measurements in fixed object coordinates. This does not require the
+stricter new-growth overlap check. Association uses one storage-cell projected
+footprint; the pose-depth tolerance distinguishes overlap from nearer occlusion.
+There is no averaging or 3 mm nearest-neighbour cutoff on replacement.
+
+Then retire individual active or pending points that reliable current depth and
+mask cannot support at that pose. This includes a point ahead of measured depth
+or at a confidently non-object pixel at the same depth. Missing depth, uncertain
+boundaries, offscreen points and nearer occluders cannot retire it. Hidden
+surface remains in the fitting map; pending additions are cleaned before they
+can be confirmed.
+
+The single fit always uses the whole unchanged confirmed map. Positive overlap
+also uses that whole map. Negative geometry evidence uses only coordinates
+refreshed from the latest accepted reliable observation and that observation's
+retained view. Eligibility is fixed before the candidate is seen. Old points
+that were hidden or uncertain can help the fit, but cannot regain a veto merely
+because the candidate places them in visible space. Zero eligible old samples
+means no stored-point veto, not a blanket rejection; positive overlap remains
+required. Candidate and Kalman-adjusted poses both pass these checks before any
+surface mutation. Rejected poses do not refresh, remove or add points.
+
+`surface_refresh.py` implements this for the shared live and replay session.
+It leaves the coordinate origin, original patch measurements and retained depth
+images unchanged. Surface refresh does not substitute object LK motion into
+Kalman's prediction. The earlier averaging and LK-prediction experiment has
+been removed; `refresh_observed_surface=false` retains the append-only control.
+Retained working patches and the combined fitting map each obey `max_points`;
+original raw patches retain their separate `points_per_patch` limit.
+
 Tracking and surface growth have separate thresholds. Tracking requires 25% of
 the observed points within 5 mm of the stored surface. Default growth requires
 75% within 3 mm **before either adding a patch or confirming an earlier pending

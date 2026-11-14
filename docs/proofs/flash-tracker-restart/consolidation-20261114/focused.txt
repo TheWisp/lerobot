@@ -1,0 +1,69 @@
+
+Testing with DEVICE='cuda'
+........................................................................ [ 27%]
+........................................................................ [ 55%]
+........................................................................ [ 82%]
+.............................................                            [100%]
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+tests/gui/test_flash_tracking_debug.py::test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_processed_image
+  /home/feit/agent-work/flash-tracker-research/src/lerobot/gui/server.py:81: DeprecationWarning:
+          on_event is deprecated, use lifespan event handlers instead.
+
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+    @app.on_event("startup")
+
+tests/gui/test_flash_tracking_debug.py::test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_processed_image
+tests/gui/test_flash_tracking_debug.py::test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_processed_image
+  /home/feit/miniforge3/envs/lerobot/lib/python3.12/site-packages/fastapi/applications.py:4598: DeprecationWarning:
+          on_event is deprecated, use lifespan event handlers instead.
+
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+tests/gui/test_flash_tracking_debug.py::test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_processed_image
+  /home/feit/agent-work/flash-tracker-research/src/lerobot/gui/server.py:256: DeprecationWarning:
+          on_event is deprecated, use lifespan event handlers instead.
+
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+    @app.on_event("shutdown")
+
+tests/gui/test_flash_tracking_debug.py::test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_processed_image
+  /home/feit/miniforge3/envs/lerobot/lib/python3.12/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+    warnings.warn(  # deprecated in 14.0 - 2024-11-09
+
+tests/gui/test_flash_tracking_debug.py::test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_processed_image
+  /home/feit/miniforge3/envs/lerobot/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+    from websockets.server import WebSocketServerProtocol
+
+tests/gui/test_flash_tracking_debug.py::test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_processed_image
+tests/gui/test_flash_tracking_debug.py::test_flash_has_its_own_tab_with_video_and_live_subtabs
+tests/gui/test_flash_tracking_debug.py::test_source_navigation_stops_camera_before_returning_to_examples
+tests/gui/test_flash_tracking_debug.py::test_typed_pipeline_form_submits_to_real_start_schema
+tests/gui/test_flash_tracking_debug.py::test_history_scrub_save_and_reload_use_retained_evidence
+tests/gui/test_flash_tracking_debug.py::test_history_scrub_save_and_reload_use_retained_evidence
+  /home/feit/miniforge3/envs/lerobot/lib/python3.12/site-packages/websockets/legacy/server.py:1178: DeprecationWarning: remove second argument of ws_handler
+    warnings.warn("remove second argument of ws_handler", DeprecationWarning)
+
+tests/gui/test_flash_tracking_debug.py::test_history_scrub_save_and_reload_use_retained_evidence
+  /home/feit/agent-work/flash-tracker-research/src/lerobot/datasets/dataset_tools.py:4505: DeprecationWarning: Accessing DatasetInfo with dict-style syntax info['codebase_version'] is deprecated. Use attribute access info.codebase_version instead.
+    elif not info["codebase_version"].startswith("v3"):
+
+tests/gui/test_flash_tracking_debug.py: 36 warnings
+  /home/feit/agent-work/flash-tracker-research/src/lerobot/datasets/dataset_tools.py:155: DeprecationWarning: Conversion of an array with ndim > 0 to a scalar is deprecated, and will error in future. Ensure you extract a single element from your array before performing this operation. (Deprecated NumPy 1.25.)
+    [np.asarray(item, dtype=np.float64).reshape(-1) for item in value]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+261 passed, 51 warnings in 23.85s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

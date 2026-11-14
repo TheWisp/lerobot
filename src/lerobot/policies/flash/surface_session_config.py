@@ -13,7 +13,13 @@ def defaults():
     # Stored playback retains its original metadata. Reruns normalize retired
     # solver settings to the maintained surface fitter via VisionPipelineConfig.
     config = asdict(VisionPipelineConfig())
-    config["observation"].update(component_gap_m=None, depth_outlier_sigma=3, filtered_depth_for_fitting=True)
+    config["observation"].update(
+        component_gap_m=None,
+        depth_outlier_sigma=3,
+        filtered_depth_for_fitting=True,
+        mask_margin_px=4,
+        outer_mask_margin_px=2,
+    )
     config["shape"].update(
         require_full_mask_coverage=True,
         mask_coverage_weight=0.5,
@@ -22,7 +28,7 @@ def defaults():
     )
     config["shape"]["registration"]["backend"] = "small_gicp"
     surface = asdict(GrowingSurfaceConfig())
-    surface.update(partial_surface_matching=True, fit_view_limit=1)
+    surface.update(partial_surface_matching=True, fit_view_limit=1, refresh_observed_surface=True)
     surface["uncertainty"].update(
         position_process_std_m_sqrt_s=0.03,
         unmeasured_rotation_std_deg_sqrt_s=10,
@@ -47,6 +53,12 @@ def validate(values):
     result = {"config": asdict(VisionPipelineConfig.from_dict(values["config"]))}
     surface_values = dict(values["surface_experiment"]) if values["surface_experiment"] is not None else None
     group_values = dict(values["group_experiment"]) if values["group_experiment"] is not None else None
+    # Live settings saved during the discarded averaging trial included its
+    # disabled switch. Remove that no-op without retaining another policy.
+    # An enabled experiment must be chosen again explicitly, not silently
+    # replayed with different semantics.
+    if surface_values is not None and surface_values.pop("refinement_max_weight", 0) != 0:
+        raise ValueError("The averaging experiment was removed; choose refresh_observed_surface instead")
     if group_values is not None:
         # Recorded settings from before pose-evidence tuning moved downstream.
         previous_weight = group_values.pop("point_evidence_weight", None)

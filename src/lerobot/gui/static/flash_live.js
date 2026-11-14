@@ -121,7 +121,7 @@ async function controlFlashLive(action, point) {
     try {
         if(point && (flashLive.historyActive || flashLive.frame?.frame_id == null))
             throw new Error('Pick an object in the live camera image');
-        const command = {id: crypto.randomUUID(), action, prompt:liveElement('name').value,
+        const command = {id: crypto.randomUUID(), action, prompt:point ? '' : liveElement('name').value,
             ...(point ? {point, frame_id:flashLive.frame.frame_id} : {})};
         await liveRequest('control', command);
         liveElement('status').textContent = action === 'clear' ? 'Clearing object…' : 'Selecting object…';

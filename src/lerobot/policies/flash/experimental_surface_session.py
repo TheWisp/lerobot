@@ -46,6 +46,9 @@ class GrowingSurfaceConfig:
     # These are conservative experiment defaults, not calibrated certainty.
     growth_agreement_m: float = 0.003
     growth_min_overlap: float = 0.75
+    # Fresh-session defaults enable replacement; stored comparison recipes can
+    # retain the old map policy. This does not change Kalman's motion source.
+    refresh_observed_surface: bool = False
     # The local-growth trial changes later cube fits, so leave it opt-in until
     # patch confirmation and map influence are validated on full replays.
     local_growth_enabled: bool = False
@@ -132,6 +135,7 @@ class GrowingSurfaceConfig:
                 "surface_priority",
                 "partial_surface_matching",
                 "local_growth_enabled",
+                "refresh_observed_surface",
             )
         ):
             raise ValueError("surface experiment switches must be booleans")
@@ -251,7 +255,8 @@ class SurfaceView:
             scene_depth.copy() if retain_measurement else None,
         )
 
-    def contradicts(self, camera_points):
+    def contradicts(self, camera_points, *, tolerance_m=None):
+        tolerance = self.tolerance_m if tolerance_m is None else tolerance_m
         uv = project(camera_points, self.intrinsics)
         h, w = self.nearest_depth.shape
         valid = (
@@ -268,8 +273,7 @@ class SurfaceView:
         depth = self.nearest_depth[xy[:, 1], xy[:, 0]]
         z = camera_points[indices, 2]
         result[indices] = (depth > 0) & (
-            (z < depth - self.tolerance_m)
-            | (self.outside_mask[xy[:, 1], xy[:, 0]] & (z <= depth + self.tolerance_m))
+            (z < depth - tolerance) | (self.outside_mask[xy[:, 1], xy[:, 0]] & (z <= depth + tolerance))
         )
         return result
 
@@ -289,7 +293,7 @@ class SurfacePatch:
 
 
 class SurfaceStore:
-    """Bounded raw patches; exclude/reposition rebuilds rather than averages away history.
+    """Bounded raw patches retain the original measurement and its placement.
 
     A caller may persist evicted patches externally. RAM-only undo is limited to
     retained patches; excluded IDs never silently affect the combined surface.
@@ -407,8 +411,16 @@ class SurfaceStore:
             self._bound()
             self._rebuild()
 
-    def extend(self, measured, pose, frame, *, view):
-        """Grow from well-supported parts of an accepted measured pose.
+    def _refresh(self, measured, pose, frame, view, tolerance_m):
+        """Append-only control; the refreshing store updates accepted overlap."""
+        return np.zeros(len(measured), dtype=bool), {
+            "refined_points": 0,
+            "refinement_mean_shift_mm": 0.0,
+            "retired_points": 0,
+        }
+
+    def extend(self, measured, pose, frame, *, view, geometry_tolerance_m=None):
+        """Refine existing geometry and grow an accepted measured surface.
 
         A broadly agreeing frame may propose every non-contradicted new cell.
         Otherwise only cells next to a locally agreeing part of the current
@@ -416,6 +428,7 @@ class SurfaceStore:
         before confirmation, so a pending patch cannot support itself.
         """
         before = self.version
+        refined_observations = np.zeros(len(measured), dtype=bool)
         distances = cKDTree(move(self.points, pose)).query(measured)[0]
         agreeing = distances <= self.config.growth_agreement_m
         overlap = float(np.mean(agreeing)) if len(distances) else 0.0
@@ -441,7 +454,8 @@ class SurfaceStore:
         def new_cells():
             local = move(measured, np.linalg.inv(pose))
             selected = voxel_sample(np.concatenate((self.points, local)), self.config.spacing_m)
-            return measured[selected[selected >= len(self.points)] - len(self.points)]
+            ids = selected[selected >= len(self.points)] - len(self.points)
+            return measured[ids[~refined_observations[ids]]]
 
         local_support = (
             locally_supported(new_cells()) if not broad_support and self.config.local_growth_enabled else None
@@ -472,7 +486,16 @@ class SurfaceStore:
             "contradicted_by_retained_views": 0,
             "patch_consistent": None,
             "admitted_points": 0,
+            "refined_points": 0,
+            "refinement_mean_shift_mm": 0.0,
         }
+        # Updating supported cells and retiring contradicted old cells are
+        # independent of the stricter requirement for growing new geometry.
+        tolerance = (
+            view.tolerance_m if geometry_tolerance_m is None and view is not None else geometry_tolerance_m
+        )
+        refined_observations, refinement = self._refresh(measured, pose, frame, view, tolerance)
+        details.update(refinement)
         if not accepted:
             return details
         self.confirm(measured, pose, frame)
@@ -568,6 +591,9 @@ class ImageConditionedFit(WholeSurfaceFit):
         return bool(len(self.image_reference) and self.image_weight) or any(
             len(p.reference) and p.weight for p in self.point_evidence
         )
+
+    def check_pose(self, pose, **kwargs):
+        return self.geometry.check_pose(pose, **kwargs)
 
     def _image_residual(self, pose):
         blocks = []
@@ -688,7 +714,12 @@ class GrowingSurfaceSession:
             depth_tolerance_m=min(shape_config.depth_tolerance_m, self.config.growth_agreement_m),
         )
         self.fit_kernels, self.search_pool = fit_kernels, search_pool
-        self.store = SurfaceStore(self.config)
+        if self.config.refresh_observed_surface:
+            from .surface_refresh import RefreshingSurfaceStore
+
+            self.store = RefreshingSurfaceStore(self.config)
+        else:
+            self.store = SurfaceStore(self.config)
         self.pose = None
         self.reference = None
         self.reference_frame = None
@@ -710,7 +741,15 @@ class GrowingSurfaceSession:
             return None
         if self._prepared_reference is None or self._prepared_reference.points is not self.store.points:
             self._prepared_reference = PreparedReferenceSurface.build(self.store.points, self.shape_config)
-        return WholeSurfaceFit(
+        fit_type, extra = WholeSurfaceFit, {}
+        if self.config.refresh_observed_surface:
+            from .surface_refresh import LatestObservationFit
+
+            fit_type = LatestObservationFit
+            extra["accepted_view"] = SurfaceFitView(
+                self.accepted_observation, self.accepted_intrinsics, self.accepted_pose
+            )
+        return fit_type(
             self.store.points,
             prepared["current"],
             prepared["intrinsics"],
@@ -720,6 +759,7 @@ class GrowingSurfaceSession:
             search_pool=self.search_pool,
             reference_views=self._fit_views(),
             appearance_views=self._appearance_views(),
+            **extra,
         )
 
     def update(
@@ -816,6 +856,7 @@ class GrowingSurfaceSession:
             if step is not None
             else (hint.camera_from_reference if hint is not None else self.pose)
         )
+        details["fit_surface_source"] = "accumulated"
         details["hint_source"] = hint.source if hint else None
         details["fit_seed_source"] = (
             "object_matches" if step is not None else "group" if hint is not None else "previous_pose"
@@ -827,7 +868,7 @@ class GrowingSurfaceSession:
             a = move(a[keep], np.linalg.inv(self.accepted_pose))
             b = b[keep]
         fitter = ImageConditionedFit(
-            self.store.points,
+            geometry.reference,
             current,
             prepared["intrinsics"],
             self.shape_config,
@@ -998,6 +1039,7 @@ class GrowingSurfaceSession:
                     self.growth_shape_config,
                     retain_measurement=self.config.partial_surface_matching,
                 ),
+                geometry_tolerance_m=self.shape_config.depth_tolerance_m,
             )
         # Deliberately named candidate: overlap alone is not calibrated reliability.
         return self._result("observed_candidate", time_s, details)

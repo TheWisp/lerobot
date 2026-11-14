@@ -231,6 +231,7 @@ def test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_process
     import numpy as np
 
     from lerobot.gui.flash_live_scene import encode_rgbd_scene
+    from lerobot.policies.flash.live_surface_io import new_selection
     from lerobot.policies.flash.perception import RGBDFrame
     from lerobot.policies.flash.surface_registration import MATCHERS
     from lerobot.policies.flash.surface_session_config import defaults
@@ -256,9 +257,18 @@ def test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_process
         lambda r: r.fulfill(json={"settings": defaults(), "matchers": MATCHERS, "fields": pipeline_fields()}),
     )
     controls = []
+    selections = []
 
     def control(route):
-        controls.append(route.request.post_data_json)
+        request = flash_tracking.TrackingControl(**route.request.post_data_json)
+        controls.append(request.model_dump(exclude_none=True))
+        source, _ = new_selection(
+            SimpleNamespace(set_control=lambda _: None, reset=lambda: None),
+            request.prompt.strip() or "selected object",
+            request.point,
+            0,
+        )
+        selections.append(source)
         route.fulfill(json={"id": "ok"})
 
     page.route("**/api/run/flash/tracking/control", control)
@@ -284,6 +294,18 @@ def test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_process
     page.locator("#flash-live-name").fill("red object")
     page.get_by_role("button", name="Track by name", exact=True).click()
     assert controls[-1]["prompt"] == "red object" and "point" not in controls[-1]
+    assert selections[-1].prompts == {"object": "red object"}
+    # A later click selects its own instance, even while the text field still
+    # contains the previous text prompt. Exercise the worker's real consumer.
+    for _ in range(2):
+        page.locator("#flash-live-pick").click()
+        page.locator("#flash-live-image").click()
+        page.wait_for_timeout(100)
+        assert controls[-1]["prompt"] == ""
+        assert controls[-1]["frame_id"] == 42
+        assert selections[-1].prompts == {"object": "selected object"}
+        assert selections[-1].seed_points_by_role["object"] == pytest.approx([50, 25], abs=1)
+    assert page.locator("#flash-live-name").input_value() == "red object"
     frame = RGBDFrame(
         43,
         rgb,
@@ -498,6 +520,44 @@ def test_advanced_values_reach_actual_frame_preparation_and_solver():
     # The request reaches prediction, not just the serialized config.
     dt = frames[1][0].source_time_s - frames[0][0].source_time_s
     assert kalman["process_covariance"][0][0] == pytest.approx(np.deg2rad(10) ** 2 * dt)
+
+
+@pytest.mark.parametrize("refresh", [False, True])
+def test_surface_refresh_setting_reaches_live_map_update(refresh):
+    from dataclasses import replace
+
+    from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
+    from lerobot.policies.flash.surface_session_config import defaults
+    from tests.policies.flash.test_live_surface_session import SuppliedMasks, sequence
+
+    values = defaults()
+    values["surface_experiment"]["refresh_observed_surface"] = refresh
+    request = flash_tracking.TrackingStart(pipeline_settings=values)
+    loaded = json.loads(request.model_dump_json())["pipeline_settings"]
+    first, masks = next(sequence())
+    # A densely sampled planar surface fits within the unchanged growth gate.
+    # The generic fixture has 10 mm pixel spacing, wider than its 3 mm gate.
+    intrinsics = first.intrinsics.copy()
+    intrinsics[0, 0] = intrinsics[1, 1] = 1000.0
+    first = replace(first, intrinsics=intrinsics)
+    following = replace(
+        first,
+        frame_id=first.frame_id + 1,
+        source_time_s=first.source_time_s + 0.1,
+        available_time_s=first.available_time_s + 0.1,
+    )
+    frames = [(first, masks), (following, masks)]
+    with LiveSurfaceSession(loaded, SuppliedMasks(frames)).engine as engine:
+        engine.step(*frames[0])
+        row, _ = engine.step(*frames[1])
+    growth = row["objects"]["left"]["group_growing_details"]["growth"]
+    assert bool(growth["refined_points"]) == refresh
+    if refresh:
+        assert growth["update_mode"] == "replace"
+        assert (
+            row["objects"]["left"]["group_growing_details"]["kalman"]["motion_source"]
+            != "object_image_matches"
+        )
 
 
 def test_history_api_survives_new_session_and_rejects_path_traversal(tmp_path):

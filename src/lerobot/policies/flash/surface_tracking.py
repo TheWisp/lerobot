@@ -241,6 +241,12 @@ class SurfaceTrackingSession:
         # The same unknown pixels apply to matching and rejection. The full
         # mask remains available; reliable background still constrains the pose.
         current["depth"] = reliable_observation_depth(current)
+        outer = self.observation_config.outer_mask_margin_px
+        if outer:
+            distance = cv2.distanceTransform((~mask).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+            unknown = (~mask) & (distance <= outer)
+            current["obs"]["depth_reliable"] = current["obs"]["depth_reliable"] & ~unknown
+            current["depth"][unknown] = 0
         current["scene_depth"] = current["depth"]
         detail = {
             key: obs[key]

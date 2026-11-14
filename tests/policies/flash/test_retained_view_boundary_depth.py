@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.surface_grounding import SurfaceFitView, WholeSurfaceFit
+from lerobot.policies.flash.surface_grounding import ShapeConfig, SurfaceFitView, WholeSurfaceFit
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
 
@@ -97,3 +97,41 @@ def test_protruding_poses_still_rejected_with_the_retained_view(clip, delta_mm):
     verdict = clip["check"](clip["two"], pose)
     assert not verdict["accepted"]
     assert verdict["scene_depth_coherent_protrusion"]
+
+
+def test_recent_measured_surface_can_refute_its_own_noisy_depth_before_map_confirmation():
+    # These three measured points came from the accepted view but have not
+    # entered the confirmed accumulated map. A stale depth reading in that
+    # same view cannot independently prove that the points occupy empty space.
+    k = np.array([[100.0, 0, 20.0], [0, 100.0, 20.0], [0, 0, 1.0]])
+    mask = np.zeros((48, 48), bool)
+    mask[12:30, 12:30] = True
+    uv = np.array([[16.0, 20.0], [20.0, 20.0], [24.0, 20.0]])
+    points = np.column_stack(((uv[:, 0] - 20) * 0.005, np.zeros(3), np.full(3, 0.5)))
+    current_depth = np.full(mask.shape, 0.5, np.float32)
+    retained_depth = np.full(mask.shape, 0.52, np.float32)
+    current = {
+        "obs": {"points": points},
+        "depth": current_depth,
+        "scene_depth": current_depth,
+        "mask": mask,
+        "frame_id": 2,
+    }
+    retained = {
+        "obs": {"points": points.copy()},
+        "depth": retained_depth,
+        "scene_depth": retained_depth,
+        "mask": mask,
+        "frame_id": 1,
+    }
+    # A different patch occupies the map. The just-accepted points are still
+    # pending its strict growth/confirmation rule.
+    map_points = points + [0.1, 0, 0]
+    fit = WholeSurfaceFit(
+        map_points, current, k, ShapeConfig(), reference_views=(SurfaceFitView(retained, k, np.eye(4)),)
+    )
+    good = fit.scene_depth_check(np.eye(4))
+    assert not good["scene_depth_views"][1]["coherent_protrusion"]
+    wrong = np.eye(4)
+    wrong[0, 3] = 0.03
+    assert fit.scene_depth_check(wrong)["scene_depth_coherent_protrusion"]

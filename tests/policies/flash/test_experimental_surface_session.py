@@ -149,6 +149,43 @@ def prepared_frames(monkeypatch):
     return prepare, rgb, depth, mask, k
 
 
+def test_pose_cannot_remove_map_conflicts_to_pass_its_own_geometry_check(monkeypatch):
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    tracker = GrowingSurfaceSession(
+        prepare.shape_config,
+        GrowingSurfaceConfig(
+            uncertainty=PoseUncertaintyConfig(enabled=False),
+        ),
+    )
+    assert tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)["status"] == "initialized"
+    rogue = np.array([[-0.025, -0.015, 0.90], [0.0, 0.015, 0.90], [0.025, -0.015, 0.90]])
+    tracker.store.add(rogue, np.eye(4), -1, active=True)
+    old_map = tracker.store.points.copy()
+    frame = prepare.prepare(rgb, depth, mask, k, 1)
+    cloud = points()
+    frame.update(step=np.eye(4), point_pairs=(cloud, cloud.copy()), match_source_frame=0)
+    direct = tracker.prepare_geometry(frame).check_pose(
+        np.eye(4),
+        max_outlier_fraction=tracker.config.uncertainty.max_visible_outlier_fraction,
+        agreement_m=tracker.config.agreement_m,
+        min_overlap=tracker.config.min_overlap,
+    )
+    assert not direct["accepted"]
+
+    def propose_unchanged_pose(_fitter, proposal, _previous, *, uncertainty, check):
+        # This is a candidate, not an accepted pose. The production check must
+        # use the unchanged map. The refresh-path counterpart is exercised
+        # through the actual session in test_shared_surface_refresh.
+        assert check(proposal)["accepted"] == direct["accepted"]
+        np.testing.assert_array_equal(tracker.store.points, old_map)
+        return proposal.copy(), {}
+
+    monkeypatch.setattr(ImageConditionedFit, "correct_surface_first", propose_unchanged_pose)
+    result = tracker.update(frame, 0.1)
+    assert result["status"] != "observed_candidate"
+    np.testing.assert_array_equal(tracker.store.points, old_map)
+
+
 def test_recent_view_budget_keeps_map_and_uses_latest_accepted_measurement(monkeypatch):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
     tracker = GrowingSurfaceSession(
@@ -310,7 +347,10 @@ def test_growth_checks_previous_rays_without_removing_hidden_back_surface(monkey
 
 
 @pytest.mark.parametrize("surface_priority", [False, True])
-def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(monkeypatch, surface_priority):
+@pytest.mark.parametrize("refresh", [False, True])
+def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(
+    monkeypatch, surface_priority, refresh
+):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
     # Even a mocked solver cannot publish a pose contradicted by scene depth,
     # or use repeated failures to confirm new geometry.
@@ -320,6 +360,7 @@ def test_repeated_wrong_fit_cannot_confirm_geometry_in_previously_empty_space(mo
             uncertainty=PoseUncertaintyConfig(enabled=False),
             surface_priority=surface_priority,
             growth_min_overlap=0.25,
+            refresh_observed_surface=refresh,
         ),
     )
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
@@ -670,7 +711,8 @@ def test_growth_thresholds_cannot_be_weaker_than_tracking():
 def test_tracking_can_accept_a_pose_without_accepting_surface_growth(monkeypatch):
     prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
     tracker = GrowingSurfaceSession(
-        prepare.shape_config, GrowingSurfaceConfig(uncertainty=PoseUncertaintyConfig(enabled=False))
+        prepare.shape_config,
+        GrowingSurfaceConfig(uncertainty=PoseUncertaintyConfig(enabled=False)),
     )
     tracker.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
     initial = tracker.store.points.copy()

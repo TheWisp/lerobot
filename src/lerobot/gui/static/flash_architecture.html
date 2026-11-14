@@ -827,7 +827,7 @@
       </section>
 
       <section>
-        <h2>2. How the surface grows over time</h2>
+        <h2>2. How the surface grows and is refined</h2>
         <p class="intro">
           Growth is separate from accepting a pose. Only confirmed patches enter
           <code>S</code>, so a new patch cannot validate the same frame that
@@ -848,15 +848,18 @@
             <p>An observed pose aligns this frame's clean depth to S[&lt;t].</p>
           </article>
           <article>
-            <small>After growth check</small>
-            <strong>New cells · pending</strong>
+            <small>After pose acceptance</small>
+            <strong>Existing points · refine / new cells · pending</strong>
             <p>
+              Replace the overlapping visible region with current clean depth
+              in fixed object coordinates. Remove individual points contradicted
+              by reliable current depth and mask. Hidden or unknown points stay unchanged.
               Broad overlap admits a consistent new patch. Optional local growth
               admits only nearby, non-conflicting cells outside the mapped area.
-              Neither can affect the next fit until confirmed.
+              New cells cannot affect fitting until confirmed by a later frame.
             </p>
             <a class="metric-link" href="#metric-growth"
-              >Overlap · agreement with earlier views</a
+              >Overlap · depth agreement · refreshed points</a
             >
           </article>
           <article>
@@ -873,12 +876,17 @@
         </div>
         <div class="loop">↶ The next fit reads the updated active surface.</div>
         <p class="caveat">
-          <strong>Replacement rule today:</strong> a newer view does not
-          automatically replace the first patch. The map combines confirmed
-          measurements. Its size limit may evict a patch that covers little
-          unique surface; that is a memory rule, not a judgment that a newer
-          patch is more accurate. Incorrect old geometry is not automatically
-          repaired. Separately, the first image remains a texture anchor; the
+          <strong>Update rule:</strong> fresh sessions refresh the observed surface
+          after an accepted pose (<code>refresh_observed_surface = true</code>).
+          Replacement uses actual current samples, without averaging. Hidden,
+          unknown and uncertain boundary regions remain available to the next fit.
+          Only coordinates refreshed from the latest accepted reliable observation
+          can veto the next candidate; this set is fixed before fitting.
+          Replacement and removal follow acceptance and do not require the stricter
+          new-patch growth check. Rejected poses cannot change the map. The
+          patch-count limit may evict a patch covering little unique surface;
+          that remains a memory rule.
+          Separately, the first image remains a texture anchor; the
           fresh-session default uses the latest accepted image for partial-view
           geometry checks.
         </p>
@@ -896,8 +904,8 @@
           <strong>Why Kalman?</strong> A small visible patch may constrain depth
           well but leave tilt uncertain. Kalman keeps a pose and its uncertainty
           across frames: predict first, then let the new fit correct the
-          directions it actually measures well. It can reject a jump that is too
-          large for their combined uncertainty. Geometry checks still apply.
+          directions it actually measures well. The size of the jump is recorded,
+          not a rejection rule. Geometry checks still apply.
           <br /><strong>Scope:</strong> fitting can run without Kalman; it adds
           memory and uncertainty handling. The flow below shows fresh-session
           defaults with Kalman enabled. Older saved results may use other
@@ -1016,9 +1024,9 @@
             <g class="node measured" data-routes="clear fallback lost">
               <rect x="110" y="295" width="255" height="82" rx="17" />
               <text x="237.5" y="325">
-                Find pose Q[t] for S[&lt;t]
+                Fit confirmed map S[&lt;t]
                 <tspan class="sub" x="237.5" dy="21">
-                  Compare transformed S with O[t]
+                  Confirmed map S[&lt;t] → current O[t]
                 </tspan>
               </text>
             </g>
@@ -1069,7 +1077,7 @@
               <text x="237.5" y="785">
                 OBSERVED P[t]
                 <tspan class="sub" x="237.5" dy="21">
-                  May grow surface after stricter check
+                  Refine, retire, or grow S[&lt;t]
                 </tspan>
               </text>
             </g>
@@ -1268,7 +1276,9 @@
             <p>
               <b>Read:</b> <code>surface_median_mm</code>,
               <code>observed_overlap</code>, visible outlier fractions, and
-              <code>scene_depth_coherent_protrusion</code>.
+              <code>scene_depth_coherent_protrusion</code>,
+              <code>reliable_reference_points</code>, <code>full_reference_points</code>,
+              and <code>rejection_reference_frame</code>.
             </p>
             <p>
               <b>Gate:</b> reject a broad protrusion or three separate small
@@ -1276,6 +1286,15 @@
               enough overlap and no more than the configured outlier fraction.
               Missing depth and nearer occluders are unknown, not conflicts.
               A small isolated patch alone does not trigger the hard veto.
+            </p>
+            <p>
+              <b>Fit source:</b> one local solve aligns the unchanged confirmed
+              map S[&lt;t] to current O[t]. Positive overlap uses the full map.
+              Negative evidence uses only its latest reliably refreshed points
+              and the latest accepted view. The candidate and any Kalman-adjusted
+              pose must pass these checks before O[t] changes the map. No eligible
+              old points means no stored-point veto; positive overlap is still
+              required. The candidate cannot erase conflicts to pass its own check.
             </p>
             <p>
               <b>Tune:</b> <code>depth_tolerance_m</code>,
@@ -1293,8 +1312,9 @@
             </p>
             <p>
               <b>Predict:</b> move the previous pose with measured group motion
-              when available; account for supplied camera motion. Add
-              uncertainty for motion error and elapsed time.
+              when available and account for supplied camera motion. Add
+              uncertainty for motion error and elapsed time. Surface refresh
+              does not change this motion source.
               If no usable measured group motion advances the pose,
               <code>unmeasured_rotation_std_deg_sqrt_s</code> increases rotation
               uncertainty before fitting (fresh-session default: 10°/√s).
@@ -1321,7 +1341,7 @@
             </p>
           </article>
           <article id="metric-growth">
-            <h3>Growth · may S gain new points?</h3>
+            <h3>Surface update · refine existing points and grow?</h3>
             <p>
               <b>Which surface:</b> <code>map_version_used</code> and
               <code>surface_frames_used</code> identify the confirmed map read
@@ -1333,7 +1353,10 @@
               <b>Read:</b> <code>growth.growth_mode</code>,
               <code>growth.observed_overlap</code>,
               <code>growth.patch_consistent</code>,
-              <code>growth.admitted_points</code>, <code>map_points</code>.
+              <code>growth.admitted_points</code>,
+              <code>growth.refined_points</code>,
+              <code>growth.refinement_mean_shift_mm</code>,
+              <code>growth.retired_points</code>, <code>map_points</code>.
             </p>
             <p>
               <b>Gate:</b> normally 75% of current depth points must agree within
@@ -1341,12 +1364,20 @@
               retained views. Optional local growth instead checks overlap in
               each nearby region and individually vetoes conflicting cells.
               Either path needs a later measured frame to confirm a pending patch.
+              After acceptance, surface refresh replaces the overlapping visible
+              region with actual current samples. It uses one storage-cell image
+              footprint for association and the pose's depth tolerance to distinguish
+              overlap from occlusion; the 3 mm new-growth distance does not limit
+              replacement. Individual active or pending points contradicted by
+              reliable depth and mask are removed. Hidden, unknown and uncertain
+              boundary points remain; pending points are cleaned before confirmation.
             </p>
             <p>
               <b>Tune:</b> <code>growth_agreement_m</code>,
               <code>growth_min_overlap</code>, <code>local_growth_enabled</code>,
               <code>growth_local_overlap</code>, <code>patch_consistency</code>,
-              <code>patch_overlap</code>, <code>confirmations</code>.
+              <code>patch_overlap</code>, <code>confirmations</code>,
+              <code>refresh_observed_surface</code> (fresh-session default: on).
             </p>
           </article>
           <article id="metric-output">

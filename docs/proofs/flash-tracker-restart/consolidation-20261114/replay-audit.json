@@ -1,0 +1,5561 @@
+{
+  "green_audited": {
+    "summary": {
+      "clip": "saved-4710ff450ed54995bfb2cbca12d049f4",
+      "frames": 215,
+      "observed": 192,
+      "recorded_observed": 135,
+      "predicted": 0,
+      "lost": 23,
+      "status_matches_recorded": 157,
+      "processing_ms_mean": 120.55946699950064,
+      "processing_ms_p99": 296.83709005359555,
+      "wall_s": 33.781965248985216,
+      "overrides": [
+        "surface_experiment.refresh_observed_surface=true",
+        "config.shape.registration.backend=\"small_gicp\"",
+        "shared_matching.backend=\"lk\"",
+        "config.observation.mask_margin_px=4",
+        "config.observation.outer_mask_margin_px=2"
+      ],
+      "arm": "replace",
+      "second_loss_observed": 23,
+      "second_loss_frames": 24,
+      "refreshed_frames": 191,
+      "retired_points": 2306,
+      "invalid_after_update": [],
+      "maintenance_ms_mean": 7.528988226360753,
+      "maintenance_ms_p99": 17.88658157456666,
+      "source_sha256": "0590caa732ce25a9a3d9a6f43766fb1bae37239f37d0dbc6ec2b1ad27f1272a6",
+      "pose_sha256": "e6a385965d47d95ad16903a826117c0de2480404057528301ca56e177156cf46",
+      "scope": "Full retained clip, recorded RGB/depth/masks; production surface policies; no pose labels."
+    },
+    "second_loss_observed": 23,
+    "rows": [
+      {
+        "frame": 1658,
+        "status": "initialized",
+        "reason": null
+      },
+      {
+        "frame": 1667,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1676,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1684,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1693,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1702,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1711,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1720,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1728,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1737,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1745,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1754,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1763,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1772,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1780,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1789,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1797,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1806,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1814,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1823,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1831,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1839,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1849,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1856,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1865,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1874,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1882,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1889,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1897,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1907,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1917,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1926,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1934,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1943,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1952,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1959,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1969,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1978,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1987,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1995,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2004,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2013,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2021,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2028,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2037,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2047,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2054,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2062,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2069,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2078,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2086,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2095,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2104,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2112,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2121,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2128,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2137,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2146,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2154,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2162,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2169,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2177,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2185,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2192,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2198,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2208,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2216,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2223,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2232,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2238,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2247,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2255,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2264,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2272,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2280,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2289,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2294,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2304,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2311,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2320,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2329,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2338,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2347,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2356,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2363,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2370,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2377,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2387,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2396,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2404,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2411,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2421,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2430,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2439,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2449,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2456,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2464,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2473,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2483,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2494,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2502,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2510,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2522,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2531,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2539,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2550,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2557,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2566,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2573,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2583,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2590,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2599,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2607,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2615,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2624,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2632,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2640,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2648,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2655,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2663,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2671,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2678,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2686,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2694,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2701,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2708,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2715,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2723,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2731,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2738,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2747,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2755,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2763,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2771,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2779,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2788,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2796,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2806,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2815,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2823,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2831,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2840,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2848,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2857,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2864,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2873,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2882,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2890,
+        "status": "lost",
+        "reason": "fused_pose_contradicts_observation"
+      },
+      {
+        "frame": 2897,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2905,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2912,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2922,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2929,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2936,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2943,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2951,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2958,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2966,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2975,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2983,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2992,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3002,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3008,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3016,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3024,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3033,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3041,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3049,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3057,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3065,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3074,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3082,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3091,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3098,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3107,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3114,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3122,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3131,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3139,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3147,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3156,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3164,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3173,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3182,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3189,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3199,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3206,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3215,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3224,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3233,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3242,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3252,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3262,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3270,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3279,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3289,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3297,
+        "status": "lost",
+        "reason": "fused_pose_contradicts_observation"
+      },
+      {
+        "frame": 3305,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3313,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3321,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3329,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3337,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3345,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3354,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3360,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3370,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3379,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3386,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3392,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3402,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3410,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3418,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3426,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3435,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3442,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      }
+    ]
+  },
+  "cube_audited": {
+    "summary": {
+      "clip": "saved-3b9b9f3d70a74fbda3d65772f3f32b9c",
+      "frames": 223,
+      "observed": 223,
+      "recorded_observed": 102,
+      "predicted": 0,
+      "lost": 0,
+      "status_matches_recorded": 101,
+      "processing_ms_mean": 77.0798297150002,
+      "processing_ms_p99": 90.58151464443654,
+      "wall_s": 21.463071423815563,
+      "overrides": [
+        "surface_experiment.refresh_observed_surface=true",
+        "config.shape.registration.backend=\"small_gicp\"",
+        "shared_matching.backend=\"lk\"",
+        "config.observation.mask_margin_px=4",
+        "config.observation.outer_mask_margin_px=2"
+      ],
+      "arm": "replace",
+      "second_loss_observed": 24,
+      "second_loss_frames": 24,
+      "refreshed_frames": 222,
+      "retired_points": 232,
+      "invalid_after_update": [],
+      "maintenance_ms_mean": 3.6917016768056126,
+      "maintenance_ms_p99": 5.816175651270894,
+      "source_sha256": "0590caa732ce25a9a3d9a6f43766fb1bae37239f37d0dbc6ec2b1ad27f1272a6",
+      "pose_sha256": "be4a3d5f415cdce76f69f8d21deea3c7e564f36d43793bb1c809c25c4a9c1837",
+      "scope": "Full retained clip, recorded RGB/depth/masks; production surface policies; no pose labels."
+    },
+    "second_loss_observed": 24,
+    "rows": [
+      {
+        "frame": 1617,
+        "status": "initialized",
+        "reason": null
+      },
+      {
+        "frame": 1625,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1632,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1640,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1648,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1654,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1661,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1669,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1675,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1684,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1690,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1697,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1705,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1713,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1719,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1730,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1737,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1745,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1752,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1758,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1766,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1774,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1779,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1787,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1795,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1802,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1810,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1817,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1823,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1831,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1838,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1845,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1853,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1860,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1868,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1875,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1882,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1890,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1899,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1907,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1914,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1920,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1929,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1936,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1943,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1950,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1957,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1964,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1973,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1980,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1988,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1995,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2002,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2009,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2016,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2022,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2031,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2038,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2044,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2050,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2057,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2063,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2069,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2075,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2082,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2087,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2092,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2101,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2110,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2121,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2130,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2140,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2151,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2161,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2171,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2181,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2192,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2203,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2213,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2224,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2233,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2242,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2251,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2259,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2269,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2278,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2287,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2296,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2305,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2314,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2323,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2333,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2342,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2351,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2360,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2370,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2381,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2391,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2399,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2407,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2415,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2423,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2433,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2441,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2448,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2458,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2465,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2474,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2482,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2489,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2497,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2505,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2513,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2521,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2529,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2537,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2545,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2553,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2563,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2570,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2578,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2586,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2594,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2604,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2612,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2621,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2630,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2637,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2645,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2654,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2662,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2671,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2678,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2688,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2696,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2705,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2712,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2722,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2729,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2738,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2744,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2753,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2761,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2770,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2778,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2789,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2797,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2806,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2815,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2821,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2830,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2837,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2846,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2853,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2861,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2869,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2876,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2884,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2892,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2901,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2909,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2916,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2924,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2933,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2940,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2949,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2957,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2966,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2974,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2982,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2990,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2996,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3004,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3011,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3017,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3024,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3031,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3036,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3045,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3053,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3064,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3072,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3083,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3093,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3098,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3104,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3113,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3121,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3131,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3140,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3151,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3159,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3168,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3178,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3188,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3196,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3205,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3215,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3226,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3235,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3246,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3251,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3257,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3264,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3269,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3276,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3283,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3289,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3296,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3303,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3310,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3317,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3325,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3333,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3339,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3348,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3355,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3360,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3367,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3375,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3382,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3389,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3396,
+        "status": "observed_candidate",
+        "reason": null
+      }
+    ]
+  },
+  "green_before_cleanup": {
+    "summary": {
+      "clip": "saved-4710ff450ed54995bfb2cbca12d049f4",
+      "frames": 215,
+      "observed": 175,
+      "recorded_observed": 135,
+      "predicted": 0,
+      "lost": 40,
+      "status_matches_recorded": 138,
+      "processing_ms_mean": 111.6468386356394,
+      "processing_ms_p99": 314.1471786983309,
+      "wall_s": 31.461553550092503,
+      "overrides": [
+        "surface_experiment.refresh_observed_surface=true",
+        "surface_experiment.refinement_max_weight=0",
+        "config.observation.mask_margin_px=4",
+        "config.observation.outer_mask_margin_px=2",
+        "config.shape.registration.backend=\"small_gicp\"",
+        "shared_matching.backend=\"lk\""
+      ]
+    },
+    "second_loss_observed": 23,
+    "rows": [
+      {
+        "frame": 1658,
+        "status": "initialized",
+        "reason": null
+      },
+      {
+        "frame": 1667,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1676,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1684,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1693,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1702,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1711,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1720,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1728,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1737,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1745,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1754,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1763,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1772,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1780,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1789,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1797,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1806,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1814,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1823,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1831,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1839,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1849,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1856,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1865,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1874,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1882,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1889,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1897,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1907,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1917,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1926,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1934,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1943,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1952,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1959,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1969,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1978,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1987,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1995,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2004,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2013,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2021,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2028,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2037,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2047,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2054,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2062,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2069,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2078,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2086,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2095,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2104,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2112,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2121,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2128,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2137,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2146,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2154,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2162,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2169,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2177,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2185,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2192,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2198,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2208,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2216,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2223,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2232,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2238,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2247,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2255,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2264,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2272,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2280,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2289,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2294,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2304,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2311,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2320,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2329,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2338,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2347,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2356,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2363,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2370,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2377,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2387,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2396,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2404,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2411,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2421,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2430,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2439,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2449,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2456,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2464,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2473,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2483,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2494,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2502,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2510,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2522,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2531,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2539,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2550,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2557,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2566,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2573,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2583,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2590,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2599,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2607,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2615,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2624,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2632,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2640,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2648,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2655,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2663,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2671,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2678,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2686,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2694,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2701,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2708,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2715,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2723,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2731,
+        "status": "lost",
+        "reason": "fused_pose_contradicts_observation"
+      },
+      {
+        "frame": 2738,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2747,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2755,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2763,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2771,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2779,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2788,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2796,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2806,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2815,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2823,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2831,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2840,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2848,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2857,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2864,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2873,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2882,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2890,
+        "status": "lost",
+        "reason": "fused_pose_contradicts_observation"
+      },
+      {
+        "frame": 2897,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2905,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2912,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2922,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2929,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2936,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2943,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2951,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2958,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2966,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2975,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2983,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2992,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3002,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3008,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3016,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3024,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3033,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3041,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3049,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3057,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3065,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3074,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3082,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3091,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3098,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3107,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3114,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3122,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3131,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3139,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3147,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3156,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3164,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3173,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3182,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3189,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3199,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3206,
+        "status": "lost",
+        "reason": "fused_pose_contradicts_observation"
+      },
+      {
+        "frame": 3215,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3224,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3233,
+        "status": "lost",
+        "reason": "fused_pose_contradicts_observation"
+      },
+      {
+        "frame": 3242,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3252,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3262,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3270,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3279,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3289,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3297,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3305,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3313,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3321,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3329,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3337,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3345,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3354,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3360,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3370,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3379,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3386,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3392,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3402,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3410,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3418,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3426,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3435,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3442,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      }
+    ]
+  },
+  "green_before_cleanup_repeat": {
+    "summary": {
+      "clip": "saved-4710ff450ed54995bfb2cbca12d049f4",
+      "frames": 215,
+      "observed": 194,
+      "recorded_observed": 135,
+      "predicted": 0,
+      "lost": 21,
+      "status_matches_recorded": 155,
+      "processing_ms_mean": 101.46704537923947,
+      "processing_ms_p99": 279.61099284701044,
+      "wall_s": 28.52438651281409,
+      "overrides": [
+        "surface_experiment.refresh_observed_surface=true",
+        "surface_experiment.refinement_max_weight=0",
+        "config.observation.mask_margin_px=4",
+        "config.observation.outer_mask_margin_px=2",
+        "config.shape.registration.backend=\"small_gicp\"",
+        "shared_matching.backend=\"lk\""
+      ]
+    },
+    "second_loss_observed": 24,
+    "rows": [
+      {
+        "frame": 1658,
+        "status": "initialized",
+        "reason": null
+      },
+      {
+        "frame": 1667,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1676,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1684,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1693,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1702,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1711,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1720,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1728,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1737,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1745,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1754,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1763,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1772,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1780,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1789,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1797,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1806,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1814,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1823,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1831,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1839,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1849,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1856,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1865,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1874,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1882,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1889,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1897,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1907,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1917,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1926,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1934,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1943,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1952,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1959,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1969,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1978,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1987,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1995,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2004,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2013,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2021,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2028,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2037,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2047,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2054,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2062,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2069,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2078,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2086,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2095,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2104,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2112,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2121,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2128,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2137,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2146,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2154,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2162,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2169,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2177,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2185,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2192,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2198,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2208,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2216,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2223,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2232,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2238,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2247,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2255,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2264,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2272,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2280,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2289,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2294,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2304,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2311,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2320,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2329,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2338,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2347,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2356,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2363,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2370,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2377,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2387,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2396,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2404,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2411,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2421,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2430,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2439,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2449,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2456,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2464,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2473,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2483,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2494,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2502,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2510,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2522,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2531,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2539,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2550,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2557,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2566,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2573,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2583,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2590,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2599,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2607,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2615,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2624,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2632,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2640,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2648,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2655,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2663,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2671,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2678,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2686,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2694,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2701,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2708,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2715,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2723,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2731,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2738,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2747,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2755,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2763,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2771,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2779,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2788,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2796,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2806,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2815,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2823,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2831,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2840,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2848,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2857,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2864,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2873,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2882,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2890,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2897,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2905,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2912,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2922,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2929,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2936,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2943,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2951,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2958,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2966,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2975,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2983,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2992,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3002,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3008,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3016,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3024,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3033,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3041,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3049,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3057,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3065,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3074,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3082,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3091,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3098,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3107,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3114,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3122,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3131,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3139,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3147,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3156,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3164,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3173,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3182,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3189,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3199,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3206,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3215,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3224,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3233,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3242,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3252,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3262,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3270,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3279,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3289,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3297,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3305,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3313,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3321,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3329,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3337,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3345,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3354,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3360,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3370,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3379,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3386,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3392,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3402,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3410,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3418,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3426,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3435,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3442,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      }
+    ]
+  },
+  "green_after_cleanup": {
+    "summary": {
+      "clip": "saved-4710ff450ed54995bfb2cbca12d049f4",
+      "frames": 215,
+      "observed": 193,
+      "recorded_observed": 135,
+      "predicted": 0,
+      "lost": 22,
+      "status_matches_recorded": 156,
+      "processing_ms_mean": 106.67059948386321,
+      "processing_ms_p99": 290.04250517114986,
+      "wall_s": 30.762895374093205,
+      "overrides": [
+        "surface_experiment.refresh_observed_surface=true",
+        "config.observation.mask_margin_px=4",
+        "config.observation.outer_mask_margin_px=2",
+        "config.shape.registration.backend=\"small_gicp\"",
+        "shared_matching.backend=\"lk\""
+      ]
+    },
+    "second_loss_observed": 24,
+    "rows": [
+      {
+        "frame": 1658,
+        "status": "initialized",
+        "reason": null
+      },
+      {
+        "frame": 1667,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1676,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1684,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1693,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1702,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1711,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1720,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1728,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1737,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1745,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1754,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1763,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1772,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1780,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1789,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1797,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1806,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1814,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1823,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1831,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1839,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1849,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1856,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1865,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1874,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1882,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1889,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1897,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1907,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1917,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1926,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1934,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1943,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1952,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1959,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1969,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1978,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1987,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 1995,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2004,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2013,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2021,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2028,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2037,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2047,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2054,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2062,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2069,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2078,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2086,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2095,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2104,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2112,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2121,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2128,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2137,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2146,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2154,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2162,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2169,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2177,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2185,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2192,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2198,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2208,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2216,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2223,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2232,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2238,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2247,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2255,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2264,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2272,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2280,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2289,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2294,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2304,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2311,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2320,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2329,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2338,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2347,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2356,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2363,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2370,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2377,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2387,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2396,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2404,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2411,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2421,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2430,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2439,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2449,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2456,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2464,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2473,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2483,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2494,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2502,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2510,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2522,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2531,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2539,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2550,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2557,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2566,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2573,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2583,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2590,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2599,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2607,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2615,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2624,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2632,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2640,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2648,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2655,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2663,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2671,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2678,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2686,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2694,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2701,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2708,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2715,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2723,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2731,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2738,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2747,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2755,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2763,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2771,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2779,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2788,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2796,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2806,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2815,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2823,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2831,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2840,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2848,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 2857,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2864,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2873,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2882,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2890,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2897,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2905,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2912,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2922,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2929,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2936,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2943,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2951,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2958,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2966,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2975,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2983,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 2992,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3002,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3008,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3016,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3024,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3033,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3041,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3049,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3057,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3065,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3074,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3082,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3091,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3098,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3107,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3114,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3122,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3131,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3139,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3147,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3156,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3164,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3173,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3182,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3189,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3199,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3206,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3215,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3224,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3233,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3242,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3252,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3262,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3270,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3279,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3289,
+        "status": "observed_candidate",
+        "reason": null
+      },
+      {
+        "frame": 3297,
+        "status": "lost",
+        "reason": "fused_pose_contradicts_observation"
+      },
+      {
+        "frame": 3305,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3313,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3321,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3329,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3337,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3345,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3354,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3360,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3370,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3379,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3386,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3392,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3402,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3410,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3418,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3426,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3435,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      },
+      {
+        "frame": 3442,
+        "status": "lost",
+        "reason": "no_observation_compatible_candidate"
+      }
+    ]
+  }
+}

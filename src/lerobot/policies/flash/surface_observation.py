@@ -18,6 +18,7 @@ from scipy.spatial import cKDTree
 @dataclass(frozen=True)
 class SurfaceObservationConfig:
     mask_margin_px: int = 2
+    outer_mask_margin_px: int = 0
     depth_span_m: float = 0.01
     depth_neighborhood_px: int = 3
     normal_bilateral_diameter_px: int = 5

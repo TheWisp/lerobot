@@ -129,7 +129,9 @@ class VisionPipelineConfig:
             if key == "filtered_depth_for_fitting":
                 continue
             if value is not None and (
-                not np.isfinite(value) or value < 0 or (value == 0 and key != "mask_margin_px")
+                not np.isfinite(value)
+                or value < 0
+                or (value == 0 and key not in ("mask_margin_px", "outer_mask_margin_px"))
             ):
                 raise ValueError(f"invalid observation setting: {key}")
         for key, value in asdict(self.shape).items():
