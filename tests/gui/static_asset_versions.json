@@ -8,8 +8,8 @@
     "v": "6"
   },
   "app.js": {
-    "sha256_16": "c440e7a60fe1bd0e",
-    "v": "92"
+    "sha256_16": "122ab097d426cfe9",
+    "v": "93"
   },
   "apply_completion.js": {
     "sha256_16": "02caba238a16fe46",
@@ -24,12 +24,12 @@
     "v": "1"
   },
   "bridge.js": {
-    "sha256_16": "20cbc598a28ca6cb",
-    "v": "4"
+    "sha256_16": "2c79864434c9f05b",
+    "v": "5"
   },
   "bridge_consumers.js": {
-    "sha256_16": "9382f6c2d5cc8cec",
-    "v": "4"
+    "sha256_16": "5442e551f2ce8e71",
+    "v": "5"
   },
   "bug_report.js": {
     "sha256_16": "494caaadacba39e3",
@@ -44,8 +44,8 @@
     "v": "5"
   },
   "chunk_player.js": {
-    "sha256_16": "be2c357473a11999",
-    "v": "23"
+    "sha256_16": "17c16a115d256f06",
+    "v": "25"
   },
   "dataset_browser.js": {
     "sha256_16": "8ed58e70ceba9f0b",
@@ -63,17 +63,25 @@
     "sha256_16": "d3bc22d5096c2f9c",
     "v": "89"
   },
+  "flash_editor.css": {
+    "sha256_16": "02dddca3aa45bd51",
+    "v": "4"
+  },
+  "flash_editor.js": {
+    "sha256_16": "905ec18e6a148cfb",
+    "v": "5"
+  },
   "flash_experiments.css": {
-    "sha256_16": "ef7b208f77a73155",
-    "v": "22"
+    "sha256_16": "1a7a53e7357f8250",
+    "v": "30"
   },
   "flash_experiments.js": {
-    "sha256_16": "7407e11f5919993a",
-    "v": "44"
+    "sha256_16": "4928b080c38def76",
+    "v": "49"
   },
   "flash_live.js": {
-    "sha256_16": "9eb97a0ea9fcb0fa",
-    "v": "25"
+    "sha256_16": "f4f7f20d9f0c42d7",
+    "v": "44"
   },
   "flash_pipeline_settings.js": {
     "sha256_16": "8421a902e8d84fb7",
@@ -124,8 +132,8 @@
     "v": "16"
   },
   "rgbd_scene.js": {
-    "sha256_16": "6d855e87e5208717",
-    "v": "7"
+    "sha256_16": "bc6d58e001983cdd",
+    "v": "11"
   },
   "robot.js": {
     "sha256_16": "24e128f6381038d4",
