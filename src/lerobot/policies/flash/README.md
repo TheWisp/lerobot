@@ -27,6 +27,8 @@ can return an approximate, joint-clipped solution without checking that the tool
 reaches the requested Cartesian pose. Queue completion means actions were sent;
 it does not establish that the tool reached the goal or the manipulation succeeded.
 
+The remaining demo-action work is tracked in [demo action follow-ups](docs/demo_action_todo.md).
+
 Start with:
 
 - [Pipeline and limitations](docs/tracking_pipeline.md): data flow, geometry,
