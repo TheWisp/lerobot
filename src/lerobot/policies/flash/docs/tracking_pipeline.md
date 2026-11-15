@@ -12,8 +12,8 @@ Status: experimental implementation; accuracy and runtime remain limited.
 differ. The live adapter uses aligned camera RGB-D and the same SAM3 adapter as
 the Data tab; recorded experiments use saved RGB-D/masks. Identical inputs and
 settings produce identical poses, surfaces, groups and covariance in parity tests.
-Fresh sessions use shared **LK**, the single-loop **Surface fit**, groups, growing surface and Kalman
-with the current geometry checks. UFM and the library solvers remain selectable.
+Fresh sessions use shared **LK**, **small_gicp**, groups, a growing surface and Kalman
+with the current geometry checks. UFM and other surface solvers remain selectable.
 Saved experiments retain their actual settings; playback never reruns inference.
 
 The output is a timestamped 4×4 transform from fixed initial surface coordinates
@@ -29,9 +29,10 @@ or pose labels, the surface metric is explicitly unscored. Differences of a few
 millimetres alone do not establish a meaningful regression: inspect the error
 tail, availability, geometry conflicts and label quality too.
 
-**Robot execution is not connected to this new session yet.** The older demo
-compiler/run engine still uses its earlier representation. This live view is a
-camera-only perception debugger, not a robot controller.
+The Live camera view is a camera-only perception debugger. The demo editor uses
+the same tracking session through `DemoRunTracker`; its separate action worker
+uses tracked poses to build robot joint actions. Tracking itself does not command
+the robot.
 
 **Estimate a rigid object's pose from its visible surface.** Use aligned RGB-D
 and SAM masks, image matches, and optional group/gripper predictions. Grow the

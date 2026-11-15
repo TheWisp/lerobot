@@ -7,7 +7,7 @@
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
     <link rel="stylesheet" href="/static/style.css?v=173">
     <link rel="stylesheet" href="/static/flash_experiments.css?v=30">
-    <link rel="stylesheet" href="/static/flash_editor.css?v=4">
+    <link rel="stylesheet" href="/static/flash_editor.css?v=5">
     <script type="importmap">{"imports":{"three":"/static/vendor/three.module.js"}}</script>
 </head>
 <body>
@@ -473,6 +473,7 @@
                     <div id="flash-editor-demo-actions" class="flash-editor-actions" hidden>
                         <input id="flash-editor-name" placeholder="Name this demo" maxlength="80" aria-label="Demo name" onchange="flashEditorName()">
                         <button id="flash-editor-save" onclick="keepFlashDemo()" disabled>Save demo</button><span id="flash-editor-save-state"></span>
+                        <button id="flash-editor-run-demo" onclick="runSelectedFlashDemo()" disabled>Run</button>
                         <select id="flash-editor-camera" aria-label="Demo camera" onchange="changeFlashEditorCamera()"></select>
                     </div>
                 </header>
@@ -493,6 +494,7 @@
                         </div>
                         <div id="flash-editor-image-host"><canvas id="flash-editor-image" aria-label="Demo image; choose Pick on an object to select its location" onclick="pickFlashDemoObject(event)"></canvas><canvas id="flash-editor-marks"></canvas><div id="flash-editor-scene-host" hidden><canvas id="flash-editor-scene" aria-label="Demo 3D scene" hidden></canvas></div><canvas id="flash-editor-depth" aria-label="Demo processed depth" hidden></canvas><span id="flash-editor-depth-info" hidden></span></div>
                         <div class="flash-editor-playback"><button id="flash-editor-play" onclick="playFlashDemo()" disabled>Play</button><input id="flash-editor-position" type="range" min="0" max="0" value="0" aria-label="Demo frame" oninput="seekFlashDemo(Number(this.value))" disabled><span id="flash-editor-time">0.0 s</span></div>
+                        <div id="flash-editor-current-key"></div>
                         <div class="flash-editor-playback-scope"><span id="flash-editor-valid-span"></span><label><input id="flash-editor-full-recording" type="checkbox" onchange="updateFlashDemoPlaybackRange()">Full recording</label></div>
                     </div>
                     <aside id="flash-editor-edit-tools">
@@ -505,10 +507,10 @@
                             <button id="flash-editor-cancel-track" onclick="cancelFlashDemoTracking()" hidden>Stop tracking</button>
                             <p id="flash-editor-tracking-status" role="status"></p>
                         </section>
-                        <section><h2>Keyframes <small id="flash-editor-key-count"></small></h2><div class="training-field-hint">Follow</div><div id="flash-editor-references" class="flash-group-modes" role="group" aria-label="Keyframe reference"></div>
+                        <section><h2>Keyframes <small id="flash-editor-key-count"></small></h2><div id="flash-editor-keys"></div><div class="training-field-hint">Reference for new keyframes</div><div id="flash-editor-references" class="flash-group-modes" role="group" aria-label="Keyframe reference"></div>
                             <button id="flash-editor-mark" onclick="markFlashDemoKeyframe()" disabled>+ Keyframe</button>
                             <div class="flash-editor-range-actions"><button id="flash-editor-range-start" onclick="startFlashDemoRange()" disabled>Mark start</button><button id="flash-editor-range-end" onclick="finishFlashDemoRange()" disabled>Mark end</button><button id="flash-editor-range-cancel" onclick="flashEditor.rangeStart=null;renderFlashEditor()" hidden>Cancel</button></div>
-                            <p id="flash-editor-range-hint" class="training-field-hint"></p><div id="flash-editor-keys"></div>
+                            <p id="flash-editor-range-hint" class="training-field-hint"></p>
                         </section>
                     </aside>
                 </div>
@@ -1053,7 +1055,7 @@ nebius iam auth-public-key generate \
     <script src="/static/flash_experiments.js?v=49"></script>
     <script src="/static/flash_pipeline_settings.js?v=2"></script>
     <script src="/static/flash_live.js?v=44"></script>
-    <script src="/static/flash_editor.js?v=5"></script>
+    <script src="/static/flash_editor.js?v=7"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>

@@ -247,7 +247,7 @@ function openFlashDemoPlayer() {
             if(flashEditor.player!==player)return;
             flashEditor.frame=frame;flashEditor.overlay=evidence;flashEditor.overlaySelection=selection;editorElement('position').value=frame;
             editorElement('time').textContent=`${(frame/source.fps).toFixed(2)} s · ${frame}`;
-            drawFlashDemoMarks();
+            showFlashDemoKeyframe();drawFlashDemoMarks();
         },onHold:held=>{
             if(flashEditor.player!==player)return;
             if(held){
@@ -376,6 +376,16 @@ function flashDemoKeyRanges(keys){
     }
     return ranges;
 }
+function flashDemoReferenceName(reference){
+    return reference==='world'?'World (robot base)':flashEditor.document.objects.find(o=>o.id===reference)?.name||reference;
+}
+function showFlashDemoKeyframe(){
+    const frame=flashEditor.frame, key=flashEditor.document?.keyframes.find(k=>k.frame===frame);
+    editorElement('current-key').textContent=key?`Keyframe ${frame} · Relative to ${flashDemoReferenceName(key.reference)}`:`Frame ${frame} · Not a keyframe`;
+    for(const row of editorElement('keys').children){
+        row.firstChild.setAttribute('aria-current',String(frame>=Number(row.dataset.start)&&frame<=Number(row.dataset.end)));
+    }
+}
 function editorButton(text,callback){const b=document.createElement('button');b.type='button';b.textContent=text;b.onclick=callback;return b;}
 function renderFlashEditor(){
     const doc=flashEditor.document, busy=flashEditor.busy;
@@ -390,6 +400,8 @@ function renderFlashEditor(){
     editorElement('start').hidden=!!flashEditor.previewHome||!!flashEditor.recording;
     editorElement('start').disabled=busy||!!flashEditor.trackingPid;
     editorElement('apply').disabled=busy||!!flashEditor.recording||!!flashEditor.trackingPid||!!flashEditor.execution?.running;
+    editorElement('run-demo').disabled=editorElement('apply').disabled||!doc?.keyframes.length||!flashEditor.library.demos.some(d=>d.id===flashEditor.entry?.id);
+    editorElement('run-demo').title=flashEditor.library.demos.some(d=>d.id===flashEditor.entry?.id)?'Run this demo in the live view':'Save this replay as a demo first';
     if(flashEditor.execution?.running)editorElement('record').disabled=true;
     editorElement('save').disabled=!doc||busy;
     editorElement('save').textContent=flashEditor.library.demos.some(d=>d.id===flashEditor.entry?.id)?'Save changes':'Save demo';
@@ -425,16 +437,19 @@ function renderFlashEditor(){
     editorElement('key-count').textContent=`${doc.keyframes.length} frames`;
     for(const range of flashDemoKeyRanges(doc.keyframes)){
         const row=document.createElement('div');row.className='flash-editor-key';
-        const name=doc.objects.find(o=>o.id===range.reference)?.name||'World';
+        row.dataset.start=range.start;row.dataset.end=range.end;
+        const name=flashDemoReferenceName(range.reference);
         const first=(range.start/flashEditor.source.fps).toFixed(2),last=(range.end/flashEditor.source.fps).toFixed(2);
         const span=range.start===range.end?`${first} s`:`${first}–${last} s`;
-        const seek=editorButton(`${span} · ${name}`,()=>seekFlashDemo(range.start));
-        seek.title=`Frames ${range.start}–${range.end} · ${range.end-range.start+1} frames`;
+        const seek=editorButton(span,()=>seekFlashDemo(range.start));
+        const reference=document.createElement('strong');reference.textContent=`Relative to ${name}`;
+        const count=document.createElement('small');count.textContent=range.start===range.end?`Keyframe ${range.start}`:`Frames ${range.start}–${range.end} · ${range.end-range.start+1} keyframes`;
+        seek.append(reference,count);
         const remove=editorButton('×',()=>{doc.keyframes=doc.keyframes.filter(k=>k.frame<range.start||k.frame>range.end);editorChanged();});
         remove.setAttribute('aria-label',range.start===range.end?'Remove keyframe '+range.start:`Remove keyframes ${range.start} through ${range.end}`);
         row.append(seek,remove);editorElement('keys').append(row);
     }
-    drawFlashDemoMarks();
+    showFlashDemoKeyframe();drawFlashDemoMarks();
 }
 function drawFlashDemoMarks(){
     const canvas=editorElement('image'),marks=editorElement('marks'),doc=flashEditor.document;
@@ -564,8 +579,9 @@ async function pollFlashDemo(){
         liveElement('panel').classList.toggle('flash-demo-execution',!!execution.running);
         if(editorElement('status').textContent==='Failed to fetch')editorStatus('Connected.');
         editorElement('execution').hidden=!execution.running&&execution.returncode===undefined;
+        const executionState=execution.state==='complete'?'path complete — check placement':execution.state;
         editorElement('execution').textContent=execution.running?
-            `${execution.mode==='robot'?'Robot':'Test run · no motion'} · ${execution.state} · ${Math.min((execution.keyframe||0)+1,execution.total||1)} / ${execution.total||'…'}`:
+            `${execution.mode==='robot'?'Robot':'Test run · no motion'} · ${executionState} · ${Math.min((execution.keyframe||0)+1,execution.total||1)} / ${execution.total||'…'}`:
             (execution.returncode===0?'Run stopped.':execution.reason||'Run ended.');
         editorElement('stop').disabled=!own?.running&&!flashEditor.previewHome;
         for(const id of ['robot','teleop','setup-camera','fps','matching','matcher','depth-source','settings-save'])editorElement(id).disabled=!!status.running;
@@ -583,12 +599,18 @@ async function pollFlashDemo(){
 }
 window.addEventListener('resize',drawFlashDemoMarks);
 
-async function prepareFlashDemoRun(){
-    const id=editorElement('apply-demo').value;
+async function runSelectedFlashDemo(){
+    if(flashEditor.busy||!flashEditor.entry)return;
+    if(flashEditor.dirty&&!(await saveFlashDemo()))return;
+    await prepareFlashDemoRun(flashEditor.entry.id);
+}
+async function prepareFlashDemoRun(id=editorElement('apply-demo').value){
     if(!id){editorStatus('Choose a saved demo to apply.');return;}
     flashEditor.busy=true;renderFlashEditor();editorStatus('Preparing keyframes…');
     try{
         const plan=await editorRequest('/api/run/flash/editor/prepare',{id});
+        flashEditor.player?.pause();flashEditor.mode='live';flashEditor.entry=null;renderFlashEditor();
+        editorElement('apply-demo').value=id;
         flashEditor.preparedPlan=plan;
         editorElement('apply-title').textContent=plan.name;
         editorElement('apply-description').textContent=`${plan.robot} · ${plan.keyframes.length} keyframes`;

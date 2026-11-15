@@ -45,6 +45,17 @@ def test_unobserved_points_keep_helping_icp_but_cannot_veto_next_pose():
     assert points[:, 0].max() >= hidden[:, 0].max() - 0.003
 
 
+def test_transferred_surface_uses_current_geometry_without_an_accepted_live_view():
+    current, k = scene()
+    fit = LatestObservationFit(current["obs"]["points"], current, k, ShapeConfig(), accepted_view=None)
+    assert evaluate(fit)["accepted"]
+    wrong = np.eye(4)
+    wrong[2, 3] = -0.01
+    result = evaluate(fit, wrong)
+    assert not result["accepted"]
+    assert result["rejection_reference_frame"] is None
+
+
 @pytest.mark.parametrize("offset", [-0.01, 0.01])
 @pytest.mark.parametrize("axis", [0, 1, 2])
 def test_reliable_surface_still_rejects_real_displacements(axis, offset):

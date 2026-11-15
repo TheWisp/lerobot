@@ -2,22 +2,25 @@
 
 A consecutive range stores measured tool poses relative to its selected object
 at range entry (or the robot base), and the demonstrated gripper commands.
-The reference is acquired once before entering each range. There is no new matcher,
-confidence estimator, attachment inference or recovery search here.
+The live reference can update the unissued command queue. There is no new
+matcher, confidence estimator, attachment inference or recovery search here.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 from .demo_document import DemoDocument, tracking_selection
-from .geometry import interpolate, transform
+from .execution import TimedAction
+from .experimental_surface_session import PoseHint
+from .geometry import transform
 from .live_surface_session import LIVE_METHOD, LiveSurfaceSession
 from .perception import RGBDFrame
+from .surface_kalman import PoseKalmanFilter
 
 PLAN_VERSION = 2
 POSE_AVAILABLE = {"initialized", "observed_candidate", "predicted"}
@@ -101,6 +104,18 @@ def compile_demo(dataset, episode, document, tracking_directory: Path, robot, ca
         gripper_observed = float(state[model.gripper])
         if not np.isfinite([gripper, gripper_observed]).all():
             raise ValueError("Keyframe gripper action is nonfinite")
+        entry_demo_speed = None
+        if previous is not None and key.frame > previous.frame + 1:
+            # A marked rest frame followed by pre-grasp supplies the actual
+            # recorded approach speed, even though the intervening images are
+            # not themselves keyframes.
+            positions = []
+            for frame_index in range(previous.frame, key.frame + 1):
+                recorded = dataset[first + frame_index]["observation.state"]
+                recorded_state = dict(zip(state_names, recorded.tolist(), strict=True))
+                positions.append(model.forward(recorded_state)[:3, 3])
+            path_m = float(np.linalg.norm(np.diff(positions, axis=0), axis=1).sum())
+            entry_demo_speed = path_m * dataset.fps / (key.frame - previous.frame)
         keys.append(
             {
                 "frame": key.frame,
@@ -114,6 +129,7 @@ def compile_demo(dataset, episode, document, tracking_directory: Path, robot, ca
                 "state": state,
                 "gripper": gripper,
                 "gripper_observed": gripper_observed,
+                "entry_demo_speed_m_s": entry_demo_speed,
             }
         )
         previous = key
@@ -139,11 +155,71 @@ class DemoRunTracker:
         self.mask_source = mask_source
         self.reference_path = reference_path
         self.started = False
+        self.demo_reference_frame = None
+        self.live_accepted_roles = set()
         self.method = LIVE_METHOD
 
     def step(self, frame, *, measured_masks=None):
         measured_masks = measured_masks or self.measure_masks(frame)
-        return self.session.step(frame, measured_masks=measured_masks)
+        hints = self._initial_pose_hints(frame, measured_masks[1])
+        for role, hint in hints.items():
+            track = self.engine.candidates[LIVE_METHOD][role]
+            # The demo and live scene are separate observations. The demo's
+            # motion prior must not pull this first live fit back to its old
+            # camera position. Keep the surface; reset only pose prediction.
+            track.pose = hint.camera_from_reference.copy()
+            track.base_from_camera = frame.base_from_camera.copy()
+            track.kalman = None
+        result = self.session.step(
+            frame,
+            measured_masks=measured_masks,
+            pose_hints=hints,
+        )
+        for role in hints:
+            track = self.engine.candidates[LIVE_METHOD][role]
+            if track.accepted_frame == frame.frame_id and track.kalman is None:
+                track.kalman = PoseKalmanFilter(
+                    track.pose, track.reference.mean(0), frame.source_time_s, track.config.uncertainty
+                )
+        for role, track in self.engine.candidates[LIVE_METHOD].items():
+            if track.accepted_frame == frame.frame_id:
+                self.live_accepted_roles.add(role)
+        return result
+
+    def _initial_pose_hints(self, frame, masks):
+        """Use each measured live mask to start its first demo-to-scene fit.
+
+        This is a starting pose only. The shared surface check must still
+        accept the fitted pose before the executor can use it.
+        """
+        hints = {}
+        depth = frame.depth.astype(np.float32) * frame.depth_m_per_unit
+        for role, track in self.engine.candidates[LIVE_METHOD].items():
+            if role in self.live_accepted_roles or track.reference is None:
+                continue
+            valid = masks[role] & np.isfinite(depth) & (depth > 0)
+            y, x = np.nonzero(valid)
+            if len(x) < 3:
+                continue
+            z = depth[y, x]
+            intrinsics = frame.intrinsics
+            measured = np.column_stack(
+                (
+                    (x - intrinsics[0, 2]) * z / intrinsics[0, 0],
+                    (y - intrinsics[1, 2]) * z / intrinsics[1, 1],
+                    z,
+                )
+            )
+            pose = np.eye(4)
+            pose[:3, 3] = np.median(measured, axis=0) - np.median(track.reference, axis=0)
+            hints[role] = PoseHint(
+                pose,
+                "demo_live_mask_center",
+                frame.source_time_s,
+                frame.source_time_s,
+                track.reference_frame,
+            )
+        return hints
 
     def measure_masks(self, frame):
         if not self.started:
@@ -158,6 +234,15 @@ class DemoRunTracker:
             # live image or click coordinates from a different camera view.
             self.mask_source.masks(initial)
             self.session.step(initial, measured_masks=(initial.frame_id, masks, 0.0))
+            self.demo_reference_frame = initial.frame_id
+            # Transfer the object's measured surface and appearance, not the
+            # old scene's depth. Only a live accepted view may later veto a
+            # live pose or become the last accepted image-match reference.
+            for track in self.engine.candidates[LIVE_METHOD].values():
+                track.accepted_frame = None
+                track.accepted_pose = None
+                track.accepted_observation = None
+                track.accepted_intrinsics = None
             self.started = True
         return self.session.measure_masks(frame)
 
@@ -165,103 +250,125 @@ class DemoRunTracker:
         self.session.close()
 
 
-class KeyframeExecutor:
-    """One bounded servo step. Each range acquires its reference before starting.
+@dataclass(frozen=True)
+class PlannedDemoRange:
+    """A demonstrated range expressed as robot API actions at 30 Hz."""
 
-    The caller owns the motor clock and dispatch. A reference is fixed for its
-    demonstrated range; another range must acquire new evidence. Every step
-    uses current measured joints. Stop is terminal, including during occlusion.
+    actions: tuple[TimedAction, ...]
+    next_index: int
+    target: np.ndarray
+    evidence: dict | None
+    entry_speed_m_s: float
+    seed_deg: np.ndarray
+    demo_path_m: float
+    demo_duration_s: float
+    reference_pose: np.ndarray
+    start_index: int
+
+
+def _robot_action(model, joints_deg, gripper):
+    """Convert the robot's IK degrees to its ordinary action units."""
+    values = np.asarray(joints_deg, dtype=float)
+    if values.shape != (len(model.joint_names),) or not np.isfinite(values).all():
+        raise ValueError("Robot IK did not produce finite joints")
+    if not np.isfinite(gripper):
+        raise ValueError("Demo gripper action is nonfinite")
+    return dict(zip(model.joint_names, values * model.units_per_degree, strict=True)) | {
+        model.gripper: float(gripper)
+    }
+
+
+def _solve_robot_ik(model, seed_deg, target, gripper):
+    seed = _robot_action(model, seed_deg, gripper)
+    solved = model.inverse(seed, target)
+    return np.asarray([solved[name] for name in model.joint_names]) / model.units_per_degree
+
+
+def _reference_for_range(plan, first, observations):
+    role = first["reference"]
+    if role == "world":
+        return np.eye(4), None
+    observed = observations.get(role)
+    if not observed or observed.get("pose") is None or observed.get("status") not in POSE_AVAILABLE:
+        raise ValueError(f"{role} needs a pose before this range")
+    reference = np.asarray(plan["base_from_camera"]) @ transform(observed["pose"])
+    evidence = {
+        "reference": role,
+        "reference_frame": first["reference_frame"],
+        "status": observed["status"],
+        "source_time_s": observed.get("source_time_s"),
+        "available_time_s": observed.get("available_time_s"),
+        "base_from_reference": reference.tolist(),
+    }
+    return reference, evidence
+
+
+def plan_demo_range(plan, model, index, state, observations, now, *, fps=30.0):
+    """Convert a demo range to a queue; new targets rebuild the unissued suffix.
+
+    The robot owns IK and joint units. The editor supplies only the recorded
+    tool path, the latest reference pose, and the recorded gripper actions.
+    No separate Cartesian gate, search, or per-tick IK sits in this path.
     """
-
-    def __init__(self, plan, model, *, max_age_s=0.5, joint_speed_deg_s=30.0):
-        self.plan, self.model = plan, model
-        self.max_age_s, self.joint_speed_deg_s = max_age_s, joint_speed_deg_s
-        self.index = 0
-        self.stopped = False
-        self.status = "ready"
-        self.target = None
-        self.evidence = None
-        self.reference_frame = None
-        self.reference = None
-
-    def stop(self):
-        self.stopped, self.status = True, "stopped"
-
-    def step(self, now, dt, state, observations):
-        if self.stopped or self.index == len(self.plan["keyframes"]):
-            if not self.stopped:
-                self.status = "complete"
-            return None
-        if not 0 < dt <= 0.1:
-            self.status = "waiting: motor clock interrupted"
-            return None
-        key = self.plan["keyframes"][self.index]
-        if self.reference_frame != key["reference_frame"]:
-            self.target = None
-            reference = np.eye(4)
-            self.evidence = None
-            if key["reference"] != "world":
-                evidence = observations.get(key["reference"])
-                if (
-                    not evidence
-                    or evidence["status"] not in POSE_AVAILABLE
-                    or evidence.get("pose") is None
-                    or not 0 <= now - evidence["source_time_s"] <= self.max_age_s
-                    or not evidence["source_time_s"] <= evidence["available_time_s"] <= now
-                ):
-                    self.status = f"waiting: {key['reference']} needs a current pose before this range"
-                    return None
-                reference = np.asarray(self.plan["base_from_camera"]) @ transform(evidence["pose"])
-                self.evidence = {
-                    "reference": key["reference"],
-                    "reference_frame": key["reference_frame"],
-                    "status": evidence["status"],
-                    "source_time_s": evidence["source_time_s"],
-                    "available_time_s": evidence["available_time_s"],
-                    "acquired_time_s": now,
-                    "base_from_reference": reference.tolist(),
-                }
-            self.reference, self.reference_frame = reference, key["reference_frame"]
-        target = self.reference @ transform(key["reference_from_tool"])
-        self.target = target
-        current = self.model.forward(state)
-        distance = np.linalg.norm(target[:3, 3] - current[:3, 3])
-        angle = Rotation.from_matrix(current[:3, :3].T @ target[:3, :3]).magnitude()
-        reached = distance < 0.003 and angle < np.deg2rad(3)
-        if reached:
-            # Keep the demonstrated gripper value in the robot's native units.
-            # Do not close on the way to the approach pose.
-            action = {name: state[name] for name in self.model.joint_names}
-            action[self.model.gripper] = key["gripper"]
-            # The recorded command may close beyond a held object's aperture.
-            # Requiring the motor to reach that command would wait forever at
-            # contact. Use the demonstrated measured aperture as the milestone.
-            observed = key["gripper_observed"]
-            actual = state[self.model.gripper]
-            direction = np.sign(key["gripper"] - observed)
-            gripper_ready = (
-                abs(actual - observed) <= 2 if direction == 0 else direction * (actual - observed) >= -2
+    keys = plan["keyframes"]
+    first = keys[index]
+    end = index + 1
+    while end < len(keys) and keys[end]["reference_frame"] == first["reference_frame"]:
+        end += 1
+    range_keys = keys[index:end]
+    reference, evidence = _reference_for_range(plan, first, observations)
+    if evidence is not None:
+        evidence["planned_at_s"] = now
+    targets = [reference @ transform(key["reference_from_tool"]) for key in range_keys]
+    seed = model.degrees(state)
+    joints = seed.copy()
+    period = 1.0 / fps
+    demo_positions = np.asarray(
+        [
+            transform(key.get("demo_tool", target))[:3, 3]
+            for key, target in zip(range_keys, targets, strict=True)
+        ]
+    )
+    path_m = float(np.linalg.norm(np.diff(demo_positions, axis=0), axis=1).sum())
+    duration_s = (range_keys[-1]["frame"] - first["frame"]) * period
+    speed = first.get("entry_demo_speed_m_s") or (path_m / duration_s if duration_s and path_m else 0.04)
+    actions = []
+    # Join a newly acquired range at the demo's measured approach speed.
+    start_tool = model.forward(state)
+    entry_distance = float(np.linalg.norm(targets[0][:3, 3] - start_tool[:3, 3]))
+    entry_ticks = max(1, int(np.ceil(entry_distance / speed * fps)))
+    first_joints = _solve_robot_ik(model, joints, targets[0], float(first["gripper"]))
+    first_gripper = float(state[model.gripper])
+    actions.append(TimedAction(0, _robot_action(model, seed, first_gripper), f"entry:{first['frame']}"))
+    for step in range(1, entry_ticks + 1):
+        ratio = step / entry_ticks
+        action = _robot_action(
+            model,
+            seed + ratio * (first_joints - seed),
+            first_gripper + ratio * (float(first["gripper"]) - first_gripper),
+        )
+        actions.append(TimedAction(len(actions), action, f"entry:{first['frame']}"))
+    joints = first_joints
+    for key, target in zip(range_keys, targets, strict=True):
+        joints = _solve_robot_ik(model, joints, target, float(key["gripper"]))
+        action = _robot_action(model, joints, float(key["gripper"]))
+        actions.append(
+            TimedAction(
+                len(actions),
+                action,
+                f"demo:{key['frame']}",
+                interval_complete=key is range_keys[-1],
             )
-            if gripper_ready:
-                self.index += 1
-            self.status = "complete" if self.index == len(self.plan["keyframes"]) else "gripper"
-            return action
-        # Small Cartesian increments, then a joint-speed bound. One IK solve,
-        # never a search/retry loop or an unbounded stale command queue.
-        fraction = min(1.0, 0.05 * dt / max(distance, 1e-12), np.deg2rad(30) * dt / max(angle, 1e-12))
-        try:
-            action = self.model.inverse(state, interpolate(current, target, fraction))
-        except ValueError as exc:
-            self.status = f"waiting: {exc}"
-            return None
-        for name, scale in zip(self.model.joint_names, self.model.units_per_degree, strict=True):
-            limit = self.joint_speed_deg_s * dt * scale
-            action[name] = float(np.clip(action[name], state[name] - limit, state[name] + limit))
-        # A constrained solver can return its seed when no local step is
-        # possible. Do not keep sending an unchanged command labelled moving.
-        if np.allclose(self.model.degrees(action), self.model.degrees(state)):
-            self.status = f"waiting: IK made no progress ({distance * 1000:.1f} mm / {np.rad2deg(angle):.1f}° remaining)"
-            return None
-        action[self.model.gripper] = state[self.model.gripper]
-        self.status = "moving"
-        return action
+        )
+    return PlannedDemoRange(
+        tuple(actions),
+        end,
+        targets[-1],
+        evidence,
+        speed,
+        seed,
+        path_m,
+        duration_s,
+        reference,
+        index,
+    )

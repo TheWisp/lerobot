@@ -39,6 +39,12 @@
 #flash-editor-range-hint {font-size:11px;line-height:1.5;}
 #flash-editor-workspace .flash-editor-key button:first-child {white-space:normal;}
 .flash-editor-key button:first-child {flex:1; text-align:left;}
+.flash-editor-key strong, .flash-editor-key small {display:block;margin-top:5px;}
+.flash-editor-key strong {font-weight:500;}
+.flash-editor-key small {color:#aabdce;}
+#flash-editor-workspace .flash-editor-key button[aria-current="true"] {background:#213e5b;border-color:#72b7ff;}
+#flash-editor-current-key {padding-top:8px;min-height:18px;color:#dce8f4;}
+#flash-editor-keys {margin-bottom:14px;}
 #flash-editor-references {margin:7px 0 12px; flex-wrap:wrap;}
 #flash-editor-references button[aria-pressed="true"] {background:#315b80; border-color:#72b7ff;}
 #flash-editor-tracking-status {font-size:12px; line-height:1.5; color:#b8c7d8;}

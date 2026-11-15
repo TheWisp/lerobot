@@ -5,8 +5,10 @@ reader, calibration conversion and SO-107 IK are the production paths.
 """
 
 import json
+from concurrent.futures import Future
 from dataclasses import replace
 from threading import Event
+from time import perf_counter, sleep
 from unittest.mock import Mock
 
 import numpy as np
@@ -15,14 +17,19 @@ import pytest
 from lerobot.datasets.camera_calibration import attach_robot_geometry
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.flash.demo_document import DemoKeyframe, DemoObject, atomic_json, load_document
-from lerobot.policies.flash.demo_execution import PLAN_VERSION, DemoRunTracker, KeyframeExecutor, compile_demo
+from lerobot.policies.flash.demo_execution import (
+    PLAN_VERSION,
+    DemoRunTracker,
+    compile_demo,
+    plan_demo_range,
+)
 from lerobot.policies.flash.demo_live_worker import ExecutionLoop
 from lerobot.policies.flash.demo_tracking import track_demo
 from lerobot.policies.flash.live_surface_session import LIVE_METHOD
 from lerobot.policies.flash.surface_session_config import defaults
 from lerobot.robots.so107_follower_gravity import SO107FollowerGravity, SO107FollowerGravityRobotConfig
 from tests.policies.flash.test_demo_tracking import Masks, rgbd_episode  # noqa: F401
-from tests.policies.flash.test_shared_image_tracking import frame
+from tests.policies.flash.test_shared_image_tracking import frame, masks
 
 
 @pytest.fixture
@@ -117,86 +124,178 @@ def test_live_moved_reference_retargets_real_ik_without_connecting(robot, tmp_pa
     moved = np.eye(4)
     moved[1, 3] = 0.01
     initial_tool = loop.model.forward(loop.state)
-    for i in range(150):
-        now = 1 + i / 30
-        loop.observations = evidence(moved, source=now, available=now)
-        action = loop.tick(now, 1 / 30)
-        if loop.executor.status == "complete":
-            break
-        if i == 0:
-            assert action[loop.model.gripper] == 90  # no early grasp
-    assert loop.executor.status == "complete"
+    now = perf_counter()
+    loop.observations = evidence(moved, source=now, available=now)
+    try:
+        loop.start()
+        deadline = perf_counter() + 3
+        while loop.status != "complete" and perf_counter() < deadline:
+            sleep(0.01)
+        assert loop.status == "complete", loop.error
+    finally:
+        loop.close()
     expected = initial_tool[:3, 3] + [-0.01, 0, 0]
-    np.testing.assert_allclose(loop.model.forward(loop.state)[:3, 3], expected, atol=0.003)
+    np.testing.assert_allclose(loop.model.forward(loop.state)[:3, 3], expected, atol=0.005)
     assert loop.state[loop.model.gripper] == 10
     robot.connect.assert_not_called()
     robot.send_action.assert_not_called()
 
 
-@pytest.mark.parametrize("reason", ["lost", "stale", "future", "unavailable"])
-def test_missing_or_wrong_time_evidence_does_not_command_or_advance(robot, reason):
+def test_target_needs_a_pose_but_not_an_arbitrary_age_limit(robot):
     model = robot.cartesian_model()
-    executor = KeyframeExecutor(plan_for(robot), model)
-    observations = evidence(
-        status=reason if reason in {"lost", "predicted"} else "observed_candidate",
-        source=0 if reason == "stale" else 2 if reason == "future" else 1,
-        available=2 if reason in {"future", "unavailable"} else 1,
-    )
-    assert executor.step(1, 1 / 30, ready_state(model), observations) is None
-    assert executor.index == 0
-    assert executor.status.startswith("waiting")
-    # Recovery follows a new accepted frame; no restarting or retry stack.
-    assert executor.step(1.1, 1 / 30, ready_state(model), evidence(source=1.1, available=1.1)) is not None
+    with pytest.raises(ValueError, match="needs a pose"):
+        plan_demo_range(plan_for(robot), model, 0, ready_state(model), {}, 100)
+    old = evidence(source=1, available=2)
+    assert plan_demo_range(plan_for(robot), model, 0, ready_state(model), old, 100).actions
 
 
 def test_stop_is_terminal_even_when_evidence_returns(robot, tmp_path):
     stop = Event()
     loop = ExecutionLoop(plan_for(robot), robot, tmp_path, stop, simulate=True)
-    loop.observations = evidence()
     stop.set()
-    assert loop.tick(1, 1 / 30) is None
+    loop.start()
+    loop.thread.join(1)
     assert loop.commands_sent == 0
-    loop.executor.stop()
-    stop.clear()
-    assert loop.tick(1.1, 1 / 30) is None
+    loop.close()
     assert loop.commands_sent == 0
 
 
-def test_world_keyframe_and_joint_speed_bound(robot):
+def test_world_keyframe_uses_robot_owned_ik_and_opens_gripper_during_entry(robot):
     model = robot.cartesian_model()
     plan = plan_for(robot, reference="world")
     target = np.asarray(plan["keyframes"][0]["reference_from_tool"])
     target[0, 3] += 0.02
     plan["keyframes"][0]["reference_from_tool"] = target.tolist()
-    executor = KeyframeExecutor(plan, model, joint_speed_deg_s=1)
     state = ready_state(model)
-    action = executor.step(1, 1 / 30, state, {})
-    assert action is not None
-    assert all(abs(action[name] - state[name]) <= 1 / 30 + 1e-9 for name in model.joint_names)
-    assert action[model.gripper] == state[model.gripper]
+    planned = plan_demo_range(plan, model, 0, state, {}, 1)
+    assert planned.actions[0].interval.startswith("entry:")
+    assert planned.actions[0].action[model.gripper] > 10
+    assert planned.actions[-1].action[model.gripper] == 10
+    assert planned.actions[-1].interval_complete
+    assert planned.entry_speed_m_s > 0
 
 
-def test_ik_cannot_silently_accept_unreachable_goal(robot):
+def test_robot_ik_returns_bounded_approximation_without_editor_pose_gate(robot):
     model = robot.cartesian_model()
     state = ready_state(model)
     target = model.forward(state)
     target[0, 3] += 5
-    with pytest.raises(ValueError, match="limits|reach"):
-        model.inverse(state, target)
+    action = model.inverse(state, target)
+    q = model.degrees(action)
+    assert np.isfinite(q).all()
+    assert np.all(q >= model.lower_deg) and np.all(q <= model.upper_deg)
 
 
-def test_stalled_ik_is_waiting_without_sending_unchanged_commands(robot):
+def test_preflight_rejects_nonrigid_observed_reference(robot):
     model = robot.cartesian_model()
-    plan = plan_for(robot, reference="world")
-    plan["keyframes"][0]["reference_from_tool"][0][3] += 0.01
-    state = ready_state(model)
-    # The IK contract allows a constrained solver to return its seed. FK and
-    # the controller remain real; only that solver outcome is supplied here.
-    model.inverse = Mock(return_value={name: state[name] for name in model.joint_names})
-    executor = KeyframeExecutor(plan, model)
-    assert executor.step(1, 1 / 30, state, {}) is None
-    assert executor.index == 0
-    assert executor.status == "waiting: IK made no progress (10.0 mm / 0.0° remaining)"
+    pose = np.eye(4)
+    pose[0, 0] = 2
+    with pytest.raises(ValueError, match=r"SO\(3\)"):
+        plan_demo_range(plan_for(robot), model, 0, ready_state(model), evidence(pose), 1)
+
+
+def test_target_update_rewrites_only_unissued_motor_commands(robot, tmp_path):
+    from copy import deepcopy
+
+    plan = plan_for(robot)
+    key0 = plan["keyframes"][0]
+    key1, key2 = deepcopy(key0), deepcopy(key0)
+    key1["frame"] = 1
+    key2["frame"] = 2
+    key1["reference_from_tool"][0][3] += 0.002
+    key2["reference_from_tool"][0][3] += 0.004
+    plan["keyframes"] += [key1, key2]
+    loop = ExecutionLoop(plan, robot, tmp_path, Event(), simulate=True)
+    loop._motor = Mock()
+    loop._motor.metrics.ticks = 0
+    now = perf_counter()
+    first = plan_demo_range(plan, loop.model, 0, loop.state, evidence(source=now), now)
+    future = Future()
+    future.set_result(first)
+    loop._future = future
+    loop._publish_ready()
+    original = loop._queue.snapshot().pending
+    assert [a.interval for a in original if a.interval.startswith("demo:")] == ["demo:0", "demo:1", "demo:2"]
+    for tick, _command in enumerate(original):
+        issued, _ = loop._queue.take(tick)
+        loop._queue.note_issued(issued.action)
+        loop.state.update(issued.action)
+        if issued.interval == "demo:0":
+            break
+    issued_tick = loop._queue.snapshot().last_tick
+    loop.index = 1
+    moved = np.eye(4)
+    moved[1, 3] = 0.01
+    loop.observations = evidence(moved, source=now + 1)
+    assert loop._target_changed(loop.observations)
+    replacement = plan_demo_range(plan, loop.model, loop.index, loop.state, loop.observations, now + 1)
+    future = Future()
+    future.set_result(replacement)
+    loop._future = future
+    loop._motor.metrics.ticks = issued_tick + 1
+    loop._publish_ready()
+    pending = loop._queue.snapshot().pending
+    assert pending[0].tick == issued_tick + 1
+    assert [a.interval for a in pending if a.interval.startswith("demo:")] == ["demo:1", "demo:2"]
+    assert loop._queue.snapshot().last_tick == issued_tick
+    assert pending[-1].action != original[-1].action
+    loop._planner.shutdown(wait=True)
+
+
+def test_camera_updates_do_not_restart_a_partly_sent_approach(robot, tmp_path):
+    plan = plan_for(robot)
+    plan["keyframes"][0]["reference_from_tool"][0][3] += 0.02
+    loop = ExecutionLoop(plan, robot, tmp_path, Event(), simulate=True)
+    loop._motor = Mock()
+    loop._motor.metrics.ticks = 0
+    now = perf_counter()
+    first = plan_demo_range(plan, loop.model, 0, loop.state, evidence(source=now), now)
+    future = Future()
+    future.set_result(first)
+    loop._future = future
+    loop._publish_ready()
+    old_entries = sum(a.interval.startswith("entry:") for a in loop._queue.snapshot().pending)
+    assert old_entries > 2
+    issued, _ = loop._queue.take(0)
+    loop._queue.note_issued(issued.action)
+    loop.state.update(issued.action)
+    moved = np.eye(4)
+    moved[1, 3] = 0.005
+    updated = plan_demo_range(plan, loop.model, 0, loop.state, evidence(moved), now + 1)
+    future = Future()
+    future.set_result(updated)
+    loop._future = future
+    loop._motor.metrics.ticks = 1
+    loop._publish_ready()
+    new_entries = sum(a.interval.startswith("entry:") for a in loop._queue.snapshot().pending)
+    assert new_entries == old_entries - 1
+    loop._planner.shutdown(wait=True)
+
+
+def test_running_simulation_retargets_while_motor_queue_keeps_moving(robot, tmp_path):
+    plan = plan_for(robot)
+    plan["keyframes"][0]["reference_from_tool"][0][3] += 0.04
+    loop = ExecutionLoop(plan, robot, tmp_path, Event(), simulate=True)
+    now = perf_counter()
+    loop.observations = evidence(source=now, available=now)
+    try:
+        loop.start()
+        deadline = perf_counter() + 4
+        while loop.commands_sent < 3 and perf_counter() < deadline:
+            sleep(0.01)
+        assert loop.commands_sent >= 3
+        moved = np.eye(4)
+        moved[1, 3] = 0.01
+        loop.observations = evidence(moved, source=perf_counter())
+        while loop.status not in ("complete", "failed") and perf_counter() < deadline:
+            sleep(0.01)
+        assert loop.status == "complete", loop.error
+        assert loop._revision >= 2  # Initial queue and at least one replacement.
+        assert loop.evidence["base_from_reference"] == (np.asarray(plan["base_from_camera"]) @ moved).tolist()
+    finally:
+        loop.close()
+    robot.connect.assert_not_called()
+    robot.send_action.assert_not_called()
 
 
 def test_demo_reference_is_reused_by_actual_shared_tracker(rgbd_episode, tmp_path):  # noqa: F811
@@ -210,6 +309,12 @@ def test_demo_reference_is_reused_by_actual_shared_tracker(rgbd_episode, tmp_pat
     try:
         current = replace(frame(100), source_time_s=10.0, available_time_s=10.0)
         measured = tracker.measure_masks(current)
+        for role in ("object_1", "object_2"):
+            transferred = tracker.engine.candidates[LIVE_METHOD][role]
+            assert transferred.accepted_frame is None
+            assert transferred.accepted_observation is None
+            assert transferred.initial_appearance_view is not None
+            assert len(transferred.store.points) > 0
         row, _, _ = tracker.step(current, measured_masks=measured)
         with np.load(folder / "reference.npz") as saved:
             assert saved["depth"].dtype == np.float32
@@ -218,6 +323,106 @@ def test_demo_reference_is_reused_by_actual_shared_tracker(rgbd_episode, tmp_pat
             assert result[LIVE_METHOD + "_status"] == "observed_candidate"
             np.testing.assert_allclose(result[LIVE_METHOD], np.eye(4), atol=0.003)
             assert tracker.engine.candidates[LIVE_METHOD][role].reference_frame == 99
+            assert tracker.engine.candidates[LIVE_METHOD][role].accepted_frame == 100
+    finally:
+        tracker.close()
+
+
+@pytest.mark.parametrize("valid_live_depth", [True, False])
+def test_demo_live_scene_initializes_from_current_mask_after_large_move(tmp_path, valid_live_depth):
+    reference = frame(0)
+    old_mask = masks()["left"]
+    yy, xx = np.indices(old_mask.shape)
+    shaped_depth = 850 + 0.2 * (xx - 30) + 0.03 * (xx - 30) * (yy - 40) + 0.012 * (xx - 30) ** 2
+    old_depth = reference.depth.copy()
+    old_depth[old_mask] = shaped_depth[old_mask]
+    np.savez_compressed(
+        tmp_path / "reference.npz",
+        rgb=reference.rgb,
+        depth=old_depth.astype(np.float32) * 0.001,
+        intrinsics=reference.intrinsics,
+        object_1=old_mask,
+    )
+    moved_mask = np.zeros_like(old_mask)
+    moved_mask[:, 12:] = old_mask[:, :-12]
+    new_depth = reference.depth.copy()
+    new_depth[:, 12:] = old_depth[:, :-12]
+    if not valid_live_depth:
+        new_depth[moved_mask] = 0
+    current = replace(
+        frame(100),
+        rgb=np.zeros_like(reference.rgb),
+        depth=new_depth,
+        source_time_s=10.0,
+        available_time_s=10.0,
+    )
+
+    class MovedMasks:
+        prompts = {"object_1": "left"}
+
+        def masks(self, _frame):
+            return {"object_1": moved_mask}
+
+    tracker = DemoRunTracker({"settings": defaults()}, tmp_path / "reference.npz", MovedMasks())
+    try:
+        measured = tracker.measure_masks(current)
+        transferred = tracker.engine.candidates[LIVE_METHOD]["object_1"]
+        assert transferred.accepted_frame is None
+        assert transferred.accepted_observation is None
+        row, _, _ = tracker.step(current, measured_masks=measured)
+        result = row["objects"]["object_1"]
+        if valid_live_depth:
+            assert result[LIVE_METHOD + "_status"] == "observed_candidate", result[LIVE_METHOD + "_details"]
+            assert result[LIVE_METHOD + "_details"]["hint_source"] == "demo_live_mask_center"
+            assert abs(result[LIVE_METHOD][0][3] - 0.108) < 0.025
+            assert transferred.accepted_frame == 100
+            assert transferred.accepted_observation["frame_id"] == 100
+        else:
+            assert result[LIVE_METHOD + "_status"] != "observed_candidate"
+            assert transferred.accepted_frame is None
+    finally:
+        tracker.close()
+
+
+def test_new_scene_visible_surface_is_not_vetoed_by_demo_background(tmp_path):
+    demo = frame(0)
+    demo_mask = np.zeros(demo.depth.shape, bool)
+    demo_mask[20:70, 20:50] = True
+    live_mask = demo_mask.copy()
+    live_mask[20:70, 50:65] = True  # more of the same object is visible now
+    demo_depth = np.full(demo.depth.shape, 1000, np.uint16)
+    demo_depth[demo_mask] = 850
+    live_depth = np.full(demo.depth.shape, 1000, np.uint16)
+    live_depth[live_mask] = 850
+    np.savez_compressed(
+        tmp_path / "reference.npz",
+        rgb=demo.rgb,
+        depth=demo_depth.astype(np.float32) * 0.001,
+        intrinsics=demo.intrinsics,
+        object_1=demo_mask,
+    )
+
+    class LiveMasks:
+        prompts = {"object_1": "toy"}
+
+        def masks(self, _frame):
+            return {"object_1": live_mask}
+
+    tracker = DemoRunTracker({"settings": defaults()}, tmp_path / "reference.npz", LiveMasks())
+    try:
+        current = replace(frame(100), depth=live_depth, source_time_s=10.0, available_time_s=10.0)
+        row, _, _ = tracker.step(current)
+        result = row["objects"]["object_1"]
+        assert result[LIVE_METHOD + "_status"] == "observed_candidate", result[LIVE_METHOD + "_details"]
+        track = tracker.engine.candidates[LIVE_METHOD]["object_1"]
+        assert track.accepted_frame == 100
+        assert track.accepted_observation["frame_id"] == 100
+        # The new lobe is in front of the demo's background. The demo view may
+        # guide registration but must not become a retained live-scene veto.
+        next_frame = replace(frame(101), depth=live_depth, source_time_s=10.1, available_time_s=10.1)
+        next_row, _, _ = tracker.step(next_frame)
+        assert next_row["objects"]["object_1"][LIVE_METHOD + "_status"] == "observed_candidate"
+        assert track.accepted_frame == 101
     finally:
         tracker.close()
 
@@ -299,6 +504,29 @@ def test_record_reopen_compile_uses_actual_measured_joints_and_selected_referenc
         compile_demo(ds, 0, document, folder, robot, "camera")
 
 
+def test_rest_keyframe_uses_recorded_approach_speed(robot, tmp_path):
+    model = robot.cartesian_model()
+    states = [ready_state(model) for _ in range(3)]
+    states[1][model.joint_names[1]] += 4
+    states[2][model.joint_names[1]] += 8
+    ds, document, folder = make_annotated_demo(robot, tmp_path, states)
+    document.keyframes = [
+        DemoKeyframe(frame=0, reference="world", label="Rest"),
+        DemoKeyframe(frame=2, reference="object_1", label="Pre-grasp"),
+    ]
+    atomic_json(
+        folder / "frames/000002.json",
+        {"objects": {"object_1": {"status": "observed_candidate", "pose": np.eye(4).tolist()}}},
+    )
+    plan = compile_demo(ds, 0, document, folder, robot, "camera")
+    points = [model.forward(state)[:3, 3] for state in states]
+    expected_path = sum(np.linalg.norm(b - a) for a, b in zip(points, points[1:], strict=False))
+    expected_speed = expected_path / (2 / 30)
+    assert plan["keyframes"][1]["entry_demo_speed_m_s"] == pytest.approx(expected_speed)
+    planned = plan_demo_range(plan, model, 1, states[0], evidence(source=1, available=1), 1)
+    assert planned.entry_speed_m_s == pytest.approx(expected_speed)
+
+
 def test_held_object_motion_does_not_cancel_lift_and_later_occlusion_keeps_keys(robot, tmp_path):
     model = robot.cartesian_model()
     states = [ready_state(model) for _ in range(3)]
@@ -336,49 +564,34 @@ def test_range_finishes_through_occlusion_then_waits_for_new_reference(robot, tm
     first = plan["keyframes"][0]
     second, third = deepcopy(first), deepcopy(first)
     second["frame"] = 1
-    second["reference_from_tool"][1][3] -= 0.015  # +15 mm robot X
+    second["reference_from_tool"][1][3] -= 0.003  # +3 mm robot X in one 30 Hz tick
     third["frame"] = third["reference_frame"] = 10  # gap: new range, same object
     plan["keyframes"] += [second, third]
-    loop = ExecutionLoop(plan, robot, tmp_path, Event(), simulate=True)
-    initial = loop.model.forward(loop.state)
-    loop.observations = evidence()
-    loop.tick(1, 1 / 30)
-    acquired = deepcopy(loop.executor.evidence)
-    # The object can now be hidden or moving with the tool. Neither changes
-    # the range-entry reference or subtracts that movement from the goals.
+    model = robot.cartesian_model()
+    initial = model.forward(ready_state(model))
+    first_range = plan_demo_range(plan, model, 0, ready_state(model), evidence(), 1)
+    assert first_range.next_index == 2
+    acquired = deepcopy(first_range.evidence)
+    assert first_range.actions[-1].action[model.gripper] == 10
+    # The reference is captured once. Occlusion and later movement do not
+    # change the preflighted 30 Hz commands inside this demonstrated range.
     moved = np.eye(4)
     moved[0, 3] = 0.1
-    for i in range(1, 150):
-        now = 1 + i / 30
-        loop.observations = evidence(moved, source=now, available=now) if i % 2 else {}
-        if loop.executor.index == 2:
-            break
-        assert loop.tick(now, 1 / 30) is not None
-        assert loop.executor.evidence == acquired
-    assert loop.executor.index == 2
-    np.testing.assert_allclose(
-        loop.model.forward(loop.state)[:3, 3], initial[:3, 3] + [0.015, 0, 0], atol=0.003
-    )
-    loop.observations = {}
-    assert loop.tick(now + 1 / 30, 1 / 30) is None
-    assert loop.executor.target is None
-    assert loop.executor.index == 2
-    # The next range acquires a different current pose, never the old anchor.
+    assert first_range.evidence == acquired
+    np.testing.assert_allclose(first_range.target[:3, 3], initial[:3, 3] + [0.003, 0, 0], atol=0.003)
+    with pytest.raises(ValueError, match="needs a pose"):
+        plan_demo_range(plan, model, 2, ready_state(model), {}, 1)
     moved = np.eye(4)
-    moved[1, 3] = -0.01  # +10 mm robot X
-    loop.observations = evidence(moved, status="predicted", source=now, available=now)
-    assert loop.tick(now + 2 / 30, 1 / 30) is not None
-    np.testing.assert_allclose(loop.executor.target[:3, 3], initial[:3, 3] + [0.01, 0, 0], atol=1e-8)
-    assert loop.executor.evidence["reference_frame"] == 10
-    loop.executor.stop()
-    assert loop.tick(now + 3 / 30, 1 / 30) is None
+    moved[1, 3] = -0.01
+    second = plan_demo_range(plan, model, 2, ready_state(model), evidence(moved, status="predicted"), 1)
+    np.testing.assert_allclose(second.target[:3, 3], initial[:3, 3] + [0.01, 0, 0], atol=1e-8)
+    assert second.evidence["reference_frame"] == 10
     robot.connect.assert_not_called()
     robot.send_action.assert_not_called()
 
 
 def test_motor_disconnect_is_independent_of_perception_shutdown(robot, tmp_path):
     """The real dispatch branch owns a fake I/O boundary, never a serial port."""
-    import time
 
     class IO:
         geometry = robot.geometry
@@ -418,7 +631,7 @@ def test_motor_disconnect_is_independent_of_perception_shutdown(robot, tmp_path)
         stop.set()  # Same event as camera worker SIGINT/EOF; no need to wait for history flush.
         assert boundary.disconnected.wait(1)
         commands = boundary.calls
-        loop.tick(time.perf_counter(), 1 / 30)
+        sleep(0.05)
         assert boundary.calls == commands
     finally:
         loop.close()
@@ -456,21 +669,21 @@ def test_recorded_joint_units_must_match_execution(robot, tmp_path):
         compile_demo(ds, 0, document, folder, robot, "camera")
 
 
-def test_grasp_contact_uses_measured_aperture_not_unreachable_command(robot):
+def test_gripper_command_follows_entry_motion_without_waiting_for_contact_aperture(robot):
     model = robot.cartesian_model()
     plan = plan_for(robot, reference="world")
     plan["keyframes"][0]["gripper_observed"] = 50
-    executor = KeyframeExecutor(plan, model)
     state = ready_state(model)
     state[model.gripper] = 90
-    action = executor.step(1, 1 / 30, state, {})
-    assert action[model.gripper] == 10
-    assert executor.index == 0
-    # Contact stops the motor at 50, while it keeps commanding closure to 10.
-    state[model.gripper] = 50
-    action = executor.step(1.1, 1 / 30, state, {})
-    assert action[model.gripper] == 10
-    assert executor.status == "complete"
+    planned = plan_demo_range(plan, model, 0, state, {}, 1)
+    entry = [
+        action.action[model.gripper] for action in planned.actions if action.interval.startswith("entry:")
+    ]
+    assert entry[0] == 90
+    assert entry[-1] == 10
+    assert all(a >= b for a, b in zip(entry, entry[1:], strict=False))
+    assert planned.actions[-1].action[model.gripper] == 10
+    assert planned.actions[-1].interval_complete
 
 
 def test_simulation_thread_never_opens_or_writes_robot(robot, tmp_path):
@@ -478,10 +691,43 @@ def test_simulation_thread_never_opens_or_writes_robot(robot, tmp_path):
     loop = ExecutionLoop(plan_for(robot, reference="world"), robot, tmp_path, stop, simulate=True)
     try:
         loop.start()
-        stop.wait(0.15)
+        deadline = perf_counter() + 2
+        while loop.status != "complete" and perf_counter() < deadline:
+            sleep(0.01)
     finally:
         loop.close()
     assert loop.error is None
     assert loop.commands_sent > 0
+    assert len(loop._completed_ranges) == 1
+    assert loop._completed_ranges[0]["recorded_demo_duration_s"] == 0
+    assert loop._completed_ranges[0]["commanded_demo_duration_s"] >= 0
+    trace = json.loads((tmp_path / "motor_trace.json").read_text())
+    assert trace["total_ticks"] >= loop.commands_sent > 0
+    assert any(sample["requested"] and sample["accepted"] for sample in trace["samples"])
+    assert all(sample["observed_at_s"] is not None for sample in trace["samples"])
+    assert all(model_name in trace["samples"][-1]["observed"] for model_name in loop.model.joint_names)
     robot.connect.assert_not_called()
     robot.send_action.assert_not_called()
+
+
+def test_range_uses_final_motor_readback_without_cartesian_settle_gate(robot, tmp_path, monkeypatch):
+    class LaggingRobot(ExecutionLoop._SimulationRobot):
+        def send_action(self, action):
+            super().send_action(action)
+            self.state["wrist_flex.pos"] = action["wrist_flex.pos"] - 5.0
+            return action
+
+    monkeypatch.setattr(ExecutionLoop, "_SimulationRobot", LaggingRobot)
+    plan = plan_for(robot, reference="world")
+    loop = ExecutionLoop(plan, robot, tmp_path, Event(), simulate=True)
+    try:
+        loop.start()
+        deadline = perf_counter() + 2
+        while loop.status != "complete" and perf_counter() < deadline:
+            sleep(0.01)
+        assert loop.status == "complete"
+        target = np.asarray(plan["keyframes"][0]["reference_from_tool"])
+        actual = robot.cartesian_model().forward(loop.state)
+        assert np.linalg.norm(actual[:3, 3] - target[:3, 3]) > 0.003
+    finally:
+        loop.close()

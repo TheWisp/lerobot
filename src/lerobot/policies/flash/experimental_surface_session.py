@@ -746,8 +746,10 @@ class GrowingSurfaceSession:
             from .surface_refresh import LatestObservationFit
 
             fit_type = LatestObservationFit
-            extra["accepted_view"] = SurfaceFitView(
-                self.accepted_observation, self.accepted_intrinsics, self.accepted_pose
+            extra["accepted_view"] = (
+                SurfaceFitView(self.accepted_observation, self.accepted_intrinsics, self.accepted_pose)
+                if self.accepted_observation is not None
+                else None
             )
         return fit_type(
             self.store.points,

@@ -220,11 +220,60 @@ def attach_rejection_geometry(full, accepted_view):
 class LatestObservationFit(WholeSurfaceFit):
     """Full-map positive agreement with frozen latest-measurement vetoes."""
 
-    def __init__(self, *args, accepted_view: SurfaceFitView, **kwargs):
+    def __init__(self, *args, accepted_view: SurfaceFitView | None, **kwargs):
         super().__init__(*args, **kwargs)
-        attach_rejection_geometry(self, accepted_view)
+        if accepted_view is not None:
+            attach_rejection_geometry(self, accepted_view)
+        else:
+            # The demonstrated view can guide registration, but it belongs to
+            # another scene. Until a live view is accepted, validate against
+            # current RGB-D only.
+            self._transfer_check = WholeSurfaceFit(
+                *args,
+                **{**kwargs, "reference_views": ()},
+            )
 
     def check_pose(self, pose, *, max_outlier_fraction=None, agreement_m=None, min_overlap=0.0):
+        if hasattr(self, "_transfer_check"):
+            full = self._transfer_check
+            predicted = move(full.reference_queries, pose)
+            visible, empty, silhouette = full._projection_evidence(predicted)
+            count = float(visible.sum())
+            distance = full.target_tree.query(predicted)[0]
+            outlier = (
+                float((visible * (distance > full.config.depth_tolerance_m)).sum() / count) if count else 0.0
+            )
+            free_space = float(np.mean(np.sqrt(empty) * silhouette > full.config.depth_tolerance_m))
+            scene = full.scene_depth_check(pose)
+            current_distance = full.prepared_reference.tree.query(
+                (full.observation["obs"]["points"] - pose[:3, 3]) @ pose[:3, :3]
+            )[0]
+            overlap = (
+                float(np.mean(current_distance <= (agreement_m or full.config.depth_tolerance_m)))
+                if len(current_distance)
+                else 0.0
+            )
+            geometry_accepted = not scene["scene_depth_coherent_protrusion"]
+            if max_outlier_fraction is not None:
+                geometry_accepted &= (
+                    count > 0
+                    and max(outlier, free_space, scene["scene_depth_outlier_fraction"])
+                    <= max_outlier_fraction
+                )
+            return {
+                **scene,
+                "observed_outlier_fraction": outlier,
+                "free_space_outlier_fraction": free_space,
+                "has_visible_overlap": count > 0,
+                "observed_overlap": overlap,
+                "observed_overlap_basis": "current_points_to_full_map",
+                "surface_median_mm": float(np.median(current_distance) * 1000)
+                if len(current_distance)
+                else None,
+                "geometry_accepted": bool(geometry_accepted),
+                "accepted": bool(geometry_accepted and overlap >= min_overlap),
+                "rejection_reference_frame": None,
+            }
         full = self
         eligible, validator, frame = full._latest_rejection
         distances = full.prepared_reference.tree.query(

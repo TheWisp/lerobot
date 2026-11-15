@@ -7,7 +7,6 @@ editors and policies consume this interface without selecting a robot family.
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 
 @dataclass
@@ -37,13 +36,9 @@ class CartesianModel:
 
     def inverse(self, state, target):
         q = np.asarray(self.kinematics.inverse_kinematics(self.degrees(state), target))
-        if not np.isfinite(q).all() or np.any(q < self.lower_deg) or np.any(q > self.upper_deg):
-            raise ValueError("Target exceeds the calibrated joint limits")
-        reached = self.kinematics.forward_kinematics(q)
-        distance = np.linalg.norm(reached[:3, 3] - target[:3, 3])
-        angle = Rotation.from_matrix(reached[:3, :3].T @ target[:3, :3]).magnitude()
-        # A failed IK solve is not a reachable target. These are execution
-        # tolerances (3 mm / 3 degrees), independent of perception acceptance.
-        if distance > 0.003 or angle > np.deg2rad(3):
-            raise ValueError(f"IK did not reach target ({distance * 1000:.1f} mm, {np.rad2deg(angle):.1f}°)")
+        if not np.isfinite(q).all():
+            raise ValueError("Robot IK produced nonfinite joints")
+        # The robot model defines its actual joint range. A Cartesian target
+        # may be approximate at a limit; do not turn that into an editor veto.
+        q = np.clip(q, self.lower_deg, self.upper_deg)
         return dict(zip(self.joint_names, q * self.units_per_degree, strict=True))

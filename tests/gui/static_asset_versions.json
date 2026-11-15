@@ -64,12 +64,12 @@
     "v": "89"
   },
   "flash_editor.css": {
-    "sha256_16": "02dddca3aa45bd51",
-    "v": "4"
+    "v": "5",
+    "sha256_16": "22c050bf0f861c1a"
   },
   "flash_editor.js": {
-    "sha256_16": "905ec18e6a148cfb",
-    "v": "5"
+    "v": "7",
+    "sha256_16": "c4d0f925ed5fc88e"
   },
   "flash_experiments.css": {
     "sha256_16": "1a7a53e7357f8250",

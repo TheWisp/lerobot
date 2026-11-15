@@ -1405,61 +1405,42 @@
       </section>
       <section class="panel" id="demo-execution">
         <h2>Demo editor → robot action</h2>
-        <p>The editor uses the tracking result above. Robot-specific kinematics stay on the robot.</p>
-        <p>Mark start/end retains every recorded frame in that inclusive interval.
-          Consecutive keyframes with the same reference form one range.
-          Each retains its measured joints and gripper command, expressed relative
-          to the selected object's pose at the start of that range.
-          The valid demo spans the first through last keyframe, including the gaps
-          between intervals. Playback defaults to that span; Full recording exposes
-          the original footage for editing. Execution visits only the marked keyframes.</p>
-        <p>Demo inspection: recorded RGB + the same frame's processed depth, masks,
-          pose and accumulated surface → shared 2D / 3D / Depth views.
-          Playback buffers these together; it never draws another frame's pose on the current image.</p>
-        <svg viewBox="0 0 1080 310" role="img" aria-label="Demo keyframes and current tracked poses produce a robot tool target, then bounded joint actions" style="width:100%;height:auto">
+        <p>The editor obtains a live object pose from the tracker above. A recorded robot episode
+          supplies marked tool poses and gripper commands; each tool pose is stored relative to
+          its selected object or the robot base.</p>
+        <svg viewBox="0 0 1080 220" role="img" aria-label="Recorded tool poses and live object poses form Cartesian targets, which robot kinematics convert to joint commands for the motor loop" style="width:100%;height:auto">
           <defs><marker id="demo-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#88a6bb"/></marker></defs>
           <g fill="none" stroke="#88a6bb" stroke-width="2" marker-end="url(#demo-arrow)">
-            <path d="M260 65 H330"/><path d="M260 210 H300 V110 H330"/>
-            <path d="M600 85 H660"/><path d="M860 85 H910"/>
-            <path d="M760 125 V205"/>
+            <path d="M250 65 H315"/><path d="M250 165 H285 V100 H315"/>
+            <path d="M515 80 H555"/><path d="M755 80 H795"/>
           </g>
           <g fill="#172a38" stroke="#58778c">
-            <rect x="10" y="20" width="250" height="100" rx="10"/>
-            <rect x="10" y="165" width="250" height="110" rx="10"/>
-            <rect x="330" y="20" width="270" height="120" rx="10"/>
-            <rect x="660" y="35" width="200" height="90" rx="10"/>
-            <rect x="910" y="35" width="160" height="90" rx="10"/>
-            <rect x="650" y="205" width="230" height="65" rx="10"/>
+            <rect x="10" y="20" width="240" height="90" rx="10"/>
+            <rect x="10" y="125" width="240" height="80" rx="10"/>
+            <rect x="315" y="35" width="200" height="95" rx="10"/>
+            <rect x="555" y="35" width="200" height="95" rx="10"/>
+            <rect x="795" y="35" width="275" height="95" rx="10"/>
           </g>
           <g fill="#e5edf4" font-size="16" text-anchor="middle">
-            <text x="135" y="46">Edited demo keyframe</text>
-            <text x="135" y="73" font-size="14">Measured joints → calibrated tool pose</text>
-            <text x="135" y="98" font-size="14">Relative to range entry + gripper</text>
-            <text x="135" y="192">Current shared tracker</text>
-            <text x="135" y="219" font-size="14">Primed with demo reference image/depth</text>
-            <text x="135" y="245" font-size="14">Same object coordinates · current pose</text>
-            <text x="465" y="48">Acquire reference at range entry</text>
-            <text x="465" y="78" font-size="14">Keep reference × each local tool pose</text>
-            <text x="465" y="106" font-size="14">World → saved robot-base target</text>
-            <text x="760" y="64">One motor step · 30 Hz</text>
-            <text x="760" y="94" font-size="14">Robot FK / IK + joint speed bound</text>
-            <text x="990" y="65">Joint action</text>
-            <text x="990" y="95" font-size="14">Robot or simulation</text>
-            <text x="765" y="231">Wait · no new action</text>
-            <text x="765" y="253" font-size="13">Missing entry pose, IK or clock failure</text>
+            <text x="130" y="47">Recorded demo</text>
+            <text x="130" y="73" font-size="14">Relative tool path + gripper</text>
+            <text x="130" y="155">Live tracker</text>
+            <text x="130" y="182" font-size="14">Current object pose</text>
+            <text x="415" y="65">Cartesian tool targets</text>
+            <text x="415" y="95" font-size="14">In the robot base frame</text>
+            <text x="655" y="65">Robot kinematics</text>
+            <text x="655" y="95" font-size="14">IK → joint actions</text>
+            <text x="932" y="65">Action queue → motor loop</text>
+            <text x="932" y="95" font-size="14">30 Hz → Robot.send_action</text>
           </g>
         </svg>
-        <p>Each object range waits for a published pose (observed or predicted) from
-          a frame no older than 0.5 s. That reference is fixed until the range ends,
-          so moving the held object does not cancel the demonstrated lift, and
-          occlusion during placement does not stop the range. A gap or change of
-          reference starts a new range and requires new evidence. World means the
-          robot base and does not require a tracked pose. References are not chased
-          if they move during a range.</p>
-        <p>
-          Motion uses at most 5 cm/s, 30°/s and 30 joint-degrees/s. The recorded gripper
-          command applies at the keyframe (within 3 mm / 3°). Stop cancels execution;
-          a test run never connects robot motors.</p>
+        <p>The planner converts Cartesian targets to joint and gripper actions before
+          publishing the unissued queue. New live poses can revise future commands;
+          already issued commands remain issued. The motor loop reads robot state and
+          sends joint actions at 30 Hz without waiting for a tracker frame or an IK solve.
+          The robot's <code>send_action</code> API does not receive Cartesian targets.
+          The current IK adapter can return a joint-clipped approximation; issuing its
+          actions does not prove that the tool reached the Cartesian goal.</p>
       </section>
       <section class="panel" id="frame-evidence">
         <h2>5. Inspect the same result from either source</h2>

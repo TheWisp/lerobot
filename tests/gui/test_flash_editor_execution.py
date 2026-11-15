@@ -122,8 +122,9 @@ async def test_apply_rejects_old_execution_rules_before_camera_or_motors(prepare
     launch.assert_not_called()
 
 
+@pytest.mark.parametrize("entry_point", ["live", "demo"])
 def test_apply_dialog_sends_explicit_simulation_and_shows_execution(
-    gui_page, prepared, monkeypatch, tmp_path
+    gui_page, prepared, monkeypatch, tmp_path, entry_point
 ):
     async def start(request, **kwargs):
         assert kwargs["extra"]["demo_execution"]["simulate"] is True
@@ -145,11 +146,23 @@ def test_apply_dialog_sends_explicit_simulation_and_shows_execution(
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.get_by_role("button", name="FLASH", exact=True).click()
     page.get_by_role("button", name="Demo editor", exact=True).click()
-    page.locator("#flash-editor-apply-demo").select_option("fixture")
-    page.locator("#flash-editor-apply").click()
+    if entry_point == "demo":
+        page.locator("#flash-editor-demos button").click()
+        expect(page.locator("#flash-editor-edit-view")).to_be_visible()
+        page.locator("#flash-editor-run-demo").click()
+        expect(page.locator("#flash-editor-live-actions")).to_be_visible()
+        expect(page.locator("#flash-editor-apply-demo")).to_have_value("fixture")
+    else:
+        page.locator("#flash-editor-apply-demo").select_option("fixture")
+        page.locator("#flash-editor-apply").click()
     expect(page.locator("#flash-editor-apply-keyframes li")).to_have_count(3)
     expect(page.locator("#flash-editor-run-robot")).to_be_visible()
     page.locator("#flash-editor-simulate").click()
     expect(page.locator("#flash-editor-execution")).to_contain_text("Test run · no motion")
     expect(page.locator("#flash-editor-execution")).to_contain_text("waiting: object_1")
+    atomic_json(
+        tmp_path / "execution.json",
+        {"mode": "simulation", "state": "complete", "keyframe": 3, "total": 3},
+    )
+    expect(page.locator("#flash-editor-execution")).to_contain_text("path complete — check placement")
     assert not errors

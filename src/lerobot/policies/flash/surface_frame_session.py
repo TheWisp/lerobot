@@ -322,7 +322,7 @@ class SurfaceFrameSession:
             else None
         )
 
-    def step(self, frame, masks, *, mask_ms=0.0, archive_callback=None):
+    def step(self, frame, masks, *, mask_ms=0.0, archive_callback=None, pose_hints=None):
         if self.last_frame_id is not None and frame.frame_id <= self.last_frame_id:
             raise ValueError("Frame IDs must increase; create a new session to reseed")
         for role in self.sessions:
@@ -466,6 +466,8 @@ class SurfaceFrameSession:
                         track.reference_frame,
                         object_usable=prepared["current"]["usable"] if shared else None,
                     )
+                if pose_hints is not None and role in pose_hints:
+                    hint = pose_hints[role]
                 result = track.update(
                     candidate_input,
                     frame.source_time_s,

@@ -1,0 +1,105 @@
+{
+  "mode": "robot",
+  "state": "complete",
+  "keyframe": 343,
+  "total": 343,
+  "commands": 423,
+  "tool": [
+    [
+      0.24566002503240134,
+      -0.09763342140678125,
+      -0.9644267038637442,
+      -0.02646366396991354
+    ],
+    [
+      -0.9311687857270504,
+      0.25273410594978074,
+      -0.26277397926236135,
+      -0.17604226126879052
+    ],
+    [
+      0.2693990434071563,
+      0.9625971050829994,
+      -0.028826527663565166,
+      0.12437738059327295
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "target": null,
+  "measured_tool_speed_m_s": 0.0,
+  "last_range": {
+    "reference_frame": 570,
+    "commands": 423,
+    "recorded_demo_path_m": 0.27333278937339944,
+    "recorded_demo_duration_s": 6.1,
+    "commanded_demo_duration_s": 6.9773836098611355
+  },
+  "completed_ranges": [
+    {
+      "reference_frame": 320,
+      "commands": 31,
+      "recorded_demo_path_m": 0.0,
+      "recorded_demo_duration_s": 0.0,
+      "commanded_demo_duration_s": 0.0
+    },
+    {
+      "reference_frame": 420,
+      "commands": 192,
+      "recorded_demo_path_m": 0.1945146121812538,
+      "recorded_demo_duration_s": 2.8666666666666667,
+      "commanded_demo_duration_s": 4.333400894887745
+    },
+    {
+      "reference_frame": 570,
+      "commands": 423,
+      "recorded_demo_path_m": 0.27333278937339944,
+      "recorded_demo_duration_s": 6.1,
+      "commanded_demo_duration_s": 6.9773836098611355
+    }
+  ],
+  "motor": {
+    "late_ticks": 0,
+    "skipped_ticks": 24,
+    "max_dispatch_gap_s": 2.6666215548757464
+  },
+  "updated_s": 1284995.71424025,
+  "evidence": {
+    "reference": "object_2",
+    "reference_frame": 570,
+    "status": "observed_candidate",
+    "source_time_s": 1284879.27101378,
+    "available_time_s": 1284879.578771215,
+    "base_from_reference": [
+      [
+        -0.9560069423399248,
+        -0.12175847364784019,
+        0.2668812475480725,
+        -0.24866075056918016
+      ],
+      [
+        -0.21800246703404957,
+        0.9036441459765553,
+        -0.3686491310302681,
+        -0.05513914434371727
+      ],
+      [
+        -0.19627952151188724,
+        -0.410611898923122,
+        -0.8904337245959482,
+        0.34486997209547116
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "planned_at_s": 1284879.580373841
+  }
+}

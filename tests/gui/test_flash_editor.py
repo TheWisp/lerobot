@@ -271,6 +271,53 @@ def test_playback_defaults_to_keyframe_span_without_cutting_recording(gui_page, 
     assert len(load_document(episode, 0)[0].keyframes) == 2
 
 
+def test_saved_keyframe_references_follow_playback_not_new_key_choice(gui_page, episode):
+    from playwright.sync_api import expect
+
+    document, _ = load_document(episode, 0)
+    document.objects = [DemoObject(id="object_1", name="cube", point=(25, 20))]
+    document.keyframes = [DemoKeyframe(frame=2, reference="world")] + [
+        DemoKeyframe(frame=i, reference="object_1") for i in range(5, 8)
+    ]
+    save_document(episode, 0, document)
+    atomic_json(
+        flash_editor.EDITOR_DIR / "demos.json",
+        {
+            "recent": None,
+            "demos": [
+                {
+                    "id": "fixture",
+                    "root": str(episode.root),
+                    "episode": 0,
+                    "name": "References",
+                    "created_at": 1,
+                }
+            ],
+        },
+    )
+    page = gui_page
+    page.get_by_role("button", name="FLASH", exact=True).click()
+    page.get_by_role("button", name="Demo editor", exact=True).click()
+    page.locator("#flash-editor-demos button").click()
+    keys = page.locator("#flash-editor-keys")
+    expect(keys).to_contain_text("Keyframe 2")
+    expect(keys).to_contain_text("Relative to World (robot base)")
+    expect(keys).to_contain_text("Frames 5–7 · 3 keyframes")
+    expect(keys).to_contain_text("Relative to cube")
+    current = page.locator("#flash-editor-current-key")
+    expect(current).to_have_text("Keyframe 2 · Relative to World (robot base)")
+    page.locator("#flash-editor-position").fill("6")
+    expect(current).to_have_text("Keyframe 6 · Relative to cube")
+    expect(keys.locator('[aria-current="true"]')).to_contain_text("Frames 5–7")
+    # Choosing a reference for a future edit must not relabel a saved keyframe.
+    page.locator("#flash-editor-references").get_by_role("button", name="World", exact=True).click()
+    expect(current).to_have_text("Keyframe 6 · Relative to cube")
+    page.locator("#flash-editor-position").fill("4")
+    expect(current).to_have_text("Frame 4 · Not a keyframe")
+    expect(keys.locator('[aria-current="true"]')).to_have_count(0)
+    assert load_document(episode, 0)[0].keyframes == document.keyframes
+
+
 def test_editor_ui_edits_real_episode(gui_page, episode):
     from playwright.sync_api import expect
 
