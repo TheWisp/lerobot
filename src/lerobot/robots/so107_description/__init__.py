@@ -21,6 +21,13 @@ def get_urdf_path() -> Path:
     return p
 
 
+def get_gravity_urdf_path() -> Path:
+    """SO-107 dynamics model with estimated masses for gravity feed-forward only."""
+    p = _PKG_DIR / "urdf" / "SO107_gravity.urdf"
+    assert p.exists(), f"SO-107 gravity URDF missing at {p}"
+    return p
+
+
 def get_meshes_dir() -> Path:
     """Absolute path to the directory containing the SO-107 link meshes."""
     p = _PKG_DIR / "meshes"
@@ -61,4 +68,4 @@ def _viz_spec() -> dict:
 
 VIZ_SPEC = _viz_spec()
 
-__all__ = ["get_urdf_path", "get_meshes_dir", "VIZ_SPEC"]
+__all__ = ["get_urdf_path", "get_gravity_urdf_path", "get_meshes_dir", "VIZ_SPEC"]

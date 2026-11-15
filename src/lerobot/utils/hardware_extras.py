@@ -41,6 +41,7 @@ IMPORT_FOR_EXTRA: dict[str, tuple[str, ...]] = {
     "intelrealsense": ("pyrealsense2",),
     "openarm-ff": ("mujoco", "openarm_mujoco"),
     "phone": ("hebi", "teleop"),
+    "pink-dep": ("pinocchio", "pink", "qpsolvers", "proxsuite"),
     "pynput-dep": ("pynput",),
     "pyserial-dep": ("serial",),
     "pyzmq-dep": ("zmq",),

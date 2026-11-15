@@ -16,6 +16,7 @@
 
 from .config import RobotConfig
 from .robot import Robot
+from .so107_follower_gravity.config_so107_follower_gravity import SO107FollowerGravityRobotConfig
 from .utils import make_robot_from_config
 
-__all__ = ["Robot", "RobotConfig", "make_robot_from_config"]
+__all__ = ["Robot", "RobotConfig", "SO107FollowerGravityRobotConfig", "make_robot_from_config"]
