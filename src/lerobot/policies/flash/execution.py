@@ -50,6 +50,10 @@ class TimedAction:
     requires_milestone: str | None = None
     may_skip_if_late: bool = False
     plan_evidence: PlanEvidence | None = None
+    # Adapted base-from-tool pose before IK and robot-side motor compensation.
+    # Carried with the queued action so a receipt retains the dispatched target,
+    # even if a later observation replaces the rest of the plan.
+    tool_target: tuple[tuple[float, ...], ...] | None = None
 
 
 @dataclass(frozen=True)

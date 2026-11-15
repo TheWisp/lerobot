@@ -1,8 +1,13 @@
 /* Demo navigation stays separate from the shared live viewer and episode editor. */
-#tab-flash #flash-editor-sidebar {width:260px; min-width:200px; overflow-y:auto; font-size:13px;}
+#tab-flash #flash-editor-sidebar {width:260px; min-width:200px; overflow:hidden; font-size:13px;display:flex;flex-direction:column;}
+.flash-editor-library-section {display:flex;flex-direction:column;flex:1 1 0;min-height:100px;overflow:hidden;}
+.flash-editor-library-list {overflow-y:auto;min-height:0;flex:1;}
+.flash-editor-library-list > p {margin:12px 20px;color:#9aadc1;line-height:1.5;}
+#flash-editor-library-divider {flex:none;touch-action:none;}
+#flash-editor-sidebar > .sidebar-header,#flash-editor-sidebar > .flash-demo-nav {flex:none;}
 #flash-editor-sidebar .sidebar-header {display:flex; justify-content:space-between; align-items:center; padding:16px 12px;}
 #flash-editor-sidebar h1 {margin:0; font-size:17px;}
-#flash-editor-workspace button:not(.btn-launch):not(.btn-stop), #flash-editor-settings-dialog button {padding:7px 10px; border:1px solid #3b526a; border-radius:5px; background:#20344b; color:#edf3fa; cursor:pointer; font:inherit; white-space:nowrap;}
+#flash-editor-workspace :where(button:not(.btn-launch):not(.btn-stop):not(.btn-terminal):not(.flash-group-modes button):not(.flash-viewer-transport button):not(#flash-live-panel button)), #flash-editor-settings-dialog button {padding:7px 10px; border:1px solid #3b526a; border-radius:5px; background:#20344b; color:#edf3fa; cursor:pointer; font:inherit; white-space:nowrap;}
 #flash-editor-workspace button:disabled, #flash-editor-settings-dialog button:disabled {opacity:.45; cursor:default;}
 #flash-editor-workspace #flash-editor-sidebar .flash-demo-nav {display:block; width:calc(100% - 16px); margin:4px 8px; padding:12px; text-align:left; background:transparent; border-color:transparent; white-space:normal;}
 #flash-editor-workspace #flash-editor-sidebar .flash-demo-nav:hover {background:#20344b;}
@@ -16,7 +21,7 @@
 .flash-editor-header {min-height:36px; gap:20px;}
 #flash-editor-title {font-size:17px; flex:none;}
 .flash-editor-toolbar-divider {height:24px; border-left:1px solid #34465b; margin:0 3px;}
-#flash-editor-workspace input:not([type="range"]), #flash-editor-workspace select, #flash-editor-settings-dialog input:not([type="checkbox"]), #flash-editor-settings-dialog select {box-sizing:border-box; min-width:0; padding:7px; border:1px solid #31516c; border-radius:4px; background:#101923; color:#e4ecf5; font:inherit;}
+#flash-editor-workspace input:not([type="range"]):not([type="checkbox"]), #flash-editor-workspace select, #flash-editor-settings-dialog input:not([type="checkbox"]), #flash-editor-settings-dialog select {box-sizing:border-box; min-width:0; padding:7px; border:1px solid #31516c; border-radius:4px; background:#101923; color:#e4ecf5; font:inherit;}
 #flash-editor-workspace input:focus, #flash-editor-workspace select:focus {outline:1px solid #4fc3f7;}
 #flash-editor-apply-demo {max-width:200px;}
 #flash-editor-status {margin:0; min-height:19px; color:#aabdce;}
@@ -24,7 +29,7 @@
 #flash-editor-empty strong {font-size:18px; color:#dce8f4; font-weight:500;}
 #flash-editor-empty p {max-width:360px; line-height:1.7;}
 #flash-editor-edit-view {flex:1; min-height:0; display:flex; gap:16px;}
-.flash-editor-video-column {flex:1; min-width:0; min-height:0; display:flex; flex-direction:column;}
+.flash-editor-video-column {flex:1; min-width:0; min-height:0; display:flex; flex-direction:column;gap:10px;}
 #flash-editor-edit-tools {width:240px; min-width:200px; overflow-y:auto; border-left:1px solid #293b50; padding-left:16px;}
 #flash-editor-edit-tools section {padding:4px 0 16px; margin-bottom:16px; border-bottom:1px solid #293b50;}
 #flash-editor-edit-tools h2 {font-size:13px; margin:0 0 12px;}
@@ -46,23 +51,18 @@
 #flash-editor-current-key {padding-top:8px;min-height:18px;color:#dce8f4;}
 #flash-editor-keys {margin-bottom:14px;}
 #flash-editor-references {margin:7px 0 12px; flex-wrap:wrap;}
-#flash-editor-references button[aria-pressed="true"] {background:#315b80; border-color:#72b7ff;}
 #flash-editor-tracking-status {font-size:12px; line-height:1.5; color:#b8c7d8;}
-#flash-editor-image-host {position:relative; flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#0e1925; border-radius:6px; overflow:hidden;}
+#flash-editor-image-host {position:relative; flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#101923; border-radius:4px; overflow:hidden;}
 #flash-editor-image {max-width:100%; max-height:100%; object-fit:contain;}
 #flash-editor-marks {position:absolute; pointer-events:none;}
-.flash-editor-display-controls {display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:36px;margin-bottom:10px;}
-.flash-editor-display-controls label {display:flex;align-items:center;gap:4px;white-space:nowrap;}
-#flash-editor-workspace .flash-editor-display-controls button[aria-pressed="true"] {background:#315b80;border-color:#72b7ff;}
+.flash-editor-display-controls {display:flex;align-items:center;flex-wrap:wrap;}
+
 #flash-editor-scene {width:100%;height:100%;display:block;}
 #flash-editor-scene-host {position:absolute;inset:0;}
 #flash-editor-depth {max-width:100%;max-height:100%;object-fit:contain;}
 #flash-editor-depth-info {position:absolute;bottom:12px;left:12px;color:#e6edf5;background:#101923cc;padding:5px 8px;border-radius:4px;pointer-events:none;}
-.flash-editor-playback {display:flex; align-items:center; gap:10px; padding:12px 0 0;}
-.flash-editor-playback input {flex:1; min-width:0;}
-.flash-editor-playback-scope {display:flex;justify-content:space-between;align-items:center;gap:12px;padding-top:6px;color:#aabdce;font-size:12px;}
+.flash-editor-playback-scope {display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 0 12px;color:#aabdce;font-size:12px;}
 .flash-editor-playback-scope label {display:flex;align-items:center;gap:5px;}
-#flash-editor-time {min-width:90px; font-variant-numeric:tabular-nums; font-size:12px; color:#aabdce;}
 #flash-editor-live-host, #flash-editor-preview-host {flex:1; min-height:0; display:flex; flex-direction:column;}
 #flash-editor-live-host #rerun-viewer {height:100%;}
 #flash-editor-preview-host #flash-live-panel {height:100%;}
@@ -85,10 +85,16 @@
 
 #flash-editor-reference-hint {font-size:12px; line-height:1.5; margin:10px 0;}
 #flash-editor-tracking-status {margin:10px 0 0;}
-#flash-editor-apply-dialog {width:min(560px,90vw);padding:0;}
-#flash-editor-apply-dialog header, #flash-editor-apply-dialog footer {display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 20px;}
-#flash-editor-apply-dialog h2 {margin:0;font-size:18px;}
-#flash-editor-apply-keyframes {padding-left:20px;line-height:1.9;}
-#flash-editor-apply-error {color:#ffba99;}
 #flash-editor-execution {margin:0 0 10px;color:#79d6c5;font-size:13px;}
 #flash-editor-preview-host .flash-demo-execution :is(#flash-live-name,#flash-live-select,#flash-live-pick,#flash-live-clear) {display:none;}
+.flash-editor-rollout #flash-editor-preview-host :is(#flash-live-name,#flash-live-select,#flash-live-pick,#flash-live-clear,#flash-live-return-camera) {display:none;}
+.flash-editor-rollout #flash-live-panel {overflow:hidden;padding:0;}
+.flash-editor-rollout .flash-live-viewer {min-height:0;}
+#flash-editor-output-divider {flex:none;touch-action:none;margin-bottom:-10px;}
+#flash-editor-output-divider:focus-visible {outline:1px solid #4fc3f7;}
+#flash-editor-run-log {flex:none;min-height:0;border-top:1px solid #304960;}
+#flash-editor-run-log summary {padding:8px 0;color:#aebfd0;font-size:12px;cursor:pointer;}
+#flash-editor-run-log .run-terminal-panel {height:170px;}
+#flash-editor-run-log .run-terminal {white-space:pre-wrap;}
+
+.flash-editor-rollout .flash-viewer-actions, .flash-demo-execution .flash-viewer-actions {display:none;}

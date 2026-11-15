@@ -53,7 +53,7 @@ def test_tracked_episode_overlay_and_keyframe_edits(gui_page, rgbd_episode, tmp_
                 ink:pixels.some((v,i)=>i%4===3&&v>0)});
         }});
     }""")
-    page.locator("#flash-editor-recent").click()
+    page.locator("#flash-editor-demos button").first.click()
     expect(page.locator("#flash-editor-tracking-status")).to_contain_text("Tracking complete", timeout=30_000)
     page.wait_for_function("flashEditor.overlay?.frame === 0")
     page.locator("#flash-editor-position").fill("2")

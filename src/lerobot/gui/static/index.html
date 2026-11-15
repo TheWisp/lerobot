@@ -6,8 +6,8 @@
     <title>LeRobot GUI</title>
     <script>document.title = `LeRobot GUI [${window.location.host}]`;</script>
     <link rel="stylesheet" href="/static/style.css?v=173">
-    <link rel="stylesheet" href="/static/flash_experiments.css?v=30">
-    <link rel="stylesheet" href="/static/flash_editor.css?v=5">
+    <link rel="stylesheet" href="/static/flash_experiments.css?v=37">
+    <link rel="stylesheet" href="/static/flash_editor.css?v=9">
     <script type="importmap">{"imports":{"three":"/static/vendor/three.module.js"}}</script>
 </head>
 <body>
@@ -452,11 +452,13 @@
         </nav>
         <div class="layout flash-workspace" id="flash-editor-workspace" hidden>
             <aside class="sidebar" id="flash-editor-sidebar">
-                <div class="sidebar-header"><h1>Demos</h1><button type="button" id="flash-editor-settings" onclick="openFlashEditorSettings()">Settings</button></div>
+                <div class="sidebar-header"><h1>Demo editor</h1><button type="button" id="flash-editor-settings" onclick="openFlashEditorSettings()">Settings</button></div>
                 <button type="button" id="flash-editor-live" class="flash-demo-nav" onclick="selectFlashEditorLive()" aria-current="page"><span class="flash-demo-live-dot"></span>Live</button>
-                <button type="button" id="flash-editor-recent" class="flash-demo-nav" onclick="openFlashDemoEntry(flashEditor.library.recent,true)" disabled>Last replay</button>
-                <div class="flash-demo-list-heading">Saved demos</div>
-                <div id="flash-editor-demos" aria-label="Saved demos"></div>
+                <div id="flash-editor-demo-section" class="flash-editor-library-section"><div class="flash-demo-list-heading">Demos</div>
+                    <div id="flash-editor-demos" class="flash-editor-library-list" aria-label="Demos"></div></div>
+                <div id="flash-editor-library-divider" class="section-resize-handle" role="separator" aria-label="Resize demos and rollouts" aria-orientation="horizontal" tabindex="0"></div>
+                <div class="flash-editor-library-section"><div class="flash-demo-list-heading">Rollouts</div>
+                    <div id="flash-editor-rollouts" class="flash-editor-library-list" aria-label="Rollouts"></div></div>
             </aside>
             <div class="sidebar-resize-handle"></div>
             <main class="main" id="flash-editor-main">
@@ -468,34 +470,40 @@
                         <button id="flash-editor-stop" class="btn-stop" onclick="stopFlashDemo()" disabled>Stop</button>
                         <span class="flash-editor-toolbar-divider"></span>
                         <select id="flash-editor-apply-demo" aria-label="Demo to apply"><option value="">Choose a demo</option></select>
-                        <button id="flash-editor-apply" onclick="prepareFlashDemoRun()">Apply</button>
+                        <button id="flash-editor-apply" onclick="applyFlashDemo()">Apply to robot</button>
                     </div>
                     <div id="flash-editor-demo-actions" class="flash-editor-actions" hidden>
-                        <input id="flash-editor-name" placeholder="Name this demo" maxlength="80" aria-label="Demo name" onchange="flashEditorName()">
-                        <button id="flash-editor-save" onclick="keepFlashDemo()" disabled>Save demo</button><span id="flash-editor-save-state"></span>
-                        <button id="flash-editor-run-demo" onclick="runSelectedFlashDemo()" disabled>Run</button>
-                        <select id="flash-editor-camera" aria-label="Demo camera" onchange="changeFlashEditorCamera()"></select>
+                        <input id="flash-editor-name" placeholder="Name this demo" maxlength="80" aria-label="Demo name" onchange="renameFlashDemo()">
+                        <button id="flash-editor-save" onclick="keepFlashDemo()" disabled>Save changes</button><span id="flash-editor-save-state"></span>
+                        <button id="flash-editor-run-demo" onclick="runSelectedFlashDemo()" disabled>Apply to robot</button>
                     </div>
                 </header>
                 <p id="flash-editor-status" role="status">Choose your setup in Settings, then open Live.</p>
                 <p id="flash-editor-execution" role="status" hidden></p>
                 <div id="flash-editor-live-host" hidden></div>
                 <div id="flash-editor-preview-host" hidden></div>
-                <div id="flash-editor-empty"><strong>Record a demonstration</strong><p>Use teleoperation to show the task. Then choose objects and keyframes in Last replay.</p></div>
+                <div id="flash-editor-empty"><strong>Record a demonstration</strong><p>Use teleoperation to show the task. Stop saves it automatically in Demos.</p></div>
+                <div id="flash-editor-output-divider" class="section-resize-handle" role="separator" aria-label="Resize rollout output" aria-orientation="horizontal" aria-controls="flash-editor-run-log" tabindex="0" hidden></div>
+                <details id="flash-editor-run-log" hidden>
+                    <summary>Output</summary>
+                    <div class="run-terminal-panel">
+                        <div class="run-terminal-header"><span>Rollout output</span><span class="terminal-actions"><button class="btn-terminal" type="button" onclick="copyTerminal('flash-editor-terminal')" title="Copy" aria-label="Copy rollout log">Copy</button></span></div>
+                        <div class="run-terminal" id="flash-editor-terminal" role="log" aria-label="Rollout output"><div class="terminal-line">Loading output…</div></div>
+                    </div>
+                </details>
                 <div id="flash-editor-edit-view" hidden>
                     <div class="flash-editor-video-column">
-                        <div class="flash-editor-display-controls">
+                        <div class="flash-editor-display-controls flash-experiment-tools flash-viewer-toolbar">
                             <div class="flash-group-modes" role="group" aria-label="Demo view"><button id="flash-editor-view-2d" aria-pressed="true" onclick="setFlashDemoView('2d')">2D</button><button id="flash-editor-view-3d" aria-pressed="false" onclick="setFlashDemoView('3d')">3D</button><button id="flash-editor-view-depth" aria-pressed="false" onclick="setFlashDemoView('depth')">Depth</button></div>
-                            <label><input id="flash-editor-outline" type="checkbox" checked onchange="drawFlashDemoMarks()"> Outline</label>
+                            <button id="flash-editor-reset-view" onclick="flashEditor.viewer?.reset()" hidden>Reset 3D camera</button>
+                            <label><input id="flash-editor-outline" type="checkbox" checked onchange="drawFlashDemoMarks()"> Mask (2D)</label>
                             <label><input id="flash-editor-surface" type="checkbox" onchange="drawFlashDemoMarks()"> Surface</label>
-                            <label><input id="flash-editor-pose" type="checkbox" checked onchange="drawFlashDemoMarks()"> Pose</label>
+                            <label><input id="flash-editor-pose" type="checkbox" checked onchange="drawFlashDemoMarks()"> Pose + axes</label>
                             <label><input id="flash-editor-rejected" type="checkbox" onchange="drawFlashDemoMarks()"> Rejected poses</label>
-                            <button id="flash-editor-reset-view" onclick="flashEditor.viewer?.reset()" hidden>Reset view</button>
+                            <label id="flash-editor-trajectory-tools" title="Demonstrated tool path; waypoint times are relative to playback"><input id="flash-editor-trajectory" type="checkbox" checked disabled onchange="drawFlashDemoTrajectory()">Actions</label>
                         </div>
-                        <div id="flash-editor-image-host"><canvas id="flash-editor-image" aria-label="Demo image; choose Pick on an object to select its location" onclick="pickFlashDemoObject(event)"></canvas><canvas id="flash-editor-marks"></canvas><div id="flash-editor-scene-host" hidden><canvas id="flash-editor-scene" aria-label="Demo 3D scene" hidden></canvas></div><canvas id="flash-editor-depth" aria-label="Demo processed depth" hidden></canvas><span id="flash-editor-depth-info" hidden></span></div>
-                        <div class="flash-editor-playback"><button id="flash-editor-play" onclick="playFlashDemo()" disabled>Play</button><input id="flash-editor-position" type="range" min="0" max="0" value="0" aria-label="Demo frame" oninput="seekFlashDemo(Number(this.value))" disabled><span id="flash-editor-time">0.0 s</span></div>
-                        <div id="flash-editor-current-key"></div>
-                        <div class="flash-editor-playback-scope"><span id="flash-editor-valid-span"></span><label><input id="flash-editor-full-recording" type="checkbox" onchange="updateFlashDemoPlaybackRange()">Full recording</label></div>
+                        <div id="flash-editor-image-host" class="flash-viewer-canvas"><canvas id="flash-editor-image" aria-label="Demo image; choose Pick on an object to select its location" onclick="pickFlashDemoObject(event)"></canvas><canvas id="flash-editor-marks"></canvas><div id="flash-editor-scene-host" hidden><canvas id="flash-editor-scene" aria-label="Demo 3D scene" hidden></canvas></div><canvas id="flash-editor-depth" aria-label="Demo processed depth" hidden></canvas><span id="flash-editor-depth-info" hidden></span><span id="flash-editor-resolution" class="flash-replay-resolution" aria-label="Recorded image resolution" hidden></span></div>
+                        <div class="flash-editor-playback flash-viewer-transport"><button id="flash-editor-play" onclick="playFlashDemo()" disabled>Play</button><input id="flash-editor-position" type="range" min="0" max="0" value="0" aria-label="Demo frame" oninput="seekFlashDemo(Number(this.value))" disabled><span id="flash-editor-time">0.0 s</span></div>
                     </div>
                     <aside id="flash-editor-edit-tools">
                         <section><h2>Objects <span id="flash-editor-object-count">0 / 3</span></h2>
@@ -507,7 +515,10 @@
                             <button id="flash-editor-cancel-track" onclick="cancelFlashDemoTracking()" hidden>Stop tracking</button>
                             <p id="flash-editor-tracking-status" role="status"></p>
                         </section>
-                        <section><h2>Keyframes <small id="flash-editor-key-count"></small></h2><div id="flash-editor-keys"></div><div class="training-field-hint">Reference for new keyframes</div><div id="flash-editor-references" class="flash-group-modes" role="group" aria-label="Keyframe reference"></div>
+                        <section><h2>Keyframes <small id="flash-editor-key-count"></small></h2>
+                            <div id="flash-editor-current-key"></div>
+                            <div class="flash-editor-playback-scope"><span id="flash-editor-valid-span"></span><label><input id="flash-editor-full-recording" type="checkbox" onchange="updateFlashDemoPlaybackRange()">Full recording</label></div>
+                            <div id="flash-editor-keys"></div><div class="training-field-hint">Reference for new keyframes</div><div id="flash-editor-references" class="flash-group-modes" role="group" aria-label="Keyframe reference"></div>
                             <button id="flash-editor-mark" onclick="markFlashDemoKeyframe()" disabled>+ Keyframe</button>
                             <div class="flash-editor-range-actions"><button id="flash-editor-range-start" onclick="startFlashDemoRange()" disabled>Mark start</button><button id="flash-editor-range-end" onclick="finishFlashDemoRange()" disabled>Mark end</button><button id="flash-editor-range-cancel" onclick="flashEditor.rangeStart=null;renderFlashEditor()" hidden>Cancel</button></div>
                             <p id="flash-editor-range-hint" class="training-field-hint"></p>
@@ -516,17 +527,6 @@
                 </div>
             </main>
         </div>
-        <dialog id="flash-editor-apply-dialog" class="flash-pipeline-settings">
-            <header><h2 id="flash-editor-apply-title">Apply demo</h2><button aria-label="Close apply demo" onclick="editorElement('apply-dialog').close()">×</button></header>
-            <div class="flash-editor-setup-body">
-                <p id="flash-editor-apply-description"></p>
-                <ol id="flash-editor-apply-keyframes"></ol>
-                <p>Each robot run first moves to the saved rest position. Stop also interrupts this reset.</p>
-                <p>Each range uses its reference pose at the start, then follows the demonstrated motion through occlusion. The next range waits for its own current reference.</p>
-                <p id="flash-editor-apply-error" role="status"></p>
-            </div>
-            <footer><button id="flash-editor-simulate" onclick="startFlashDemoRun(true)">Test run · no robot motion</button><button id="flash-editor-run-robot" onclick="startFlashDemoRun(false)">Run robot</button></footer>
-        </dialog>
         <dialog id="flash-editor-settings-dialog" class="flash-pipeline-settings">
             <header><h2>Demo setup</h2><button type="button" aria-label="Close demo settings" onclick="editorElement('settings-dialog').close()">×</button></header>
             <div class="flash-editor-setup-body">
@@ -667,31 +667,36 @@
             <div class="sidebar-resize-handle"></div>
             <div class="main" id="flash-live-main">
                 <section id="flash-live-panel" aria-label="Live tracking inspector">
-                    <div class="flash-experiment-tools">
+                    <div class="flash-experiment-tools flash-viewer-actions">
                         <input id="flash-live-name" placeholder="Object name" aria-label="Live object name">
                         <button id="flash-live-select" type="button" onclick="controlFlashLive('select')" disabled>Track by name</button>
                         <button id="flash-live-pick" type="button" onclick="toggleFlashLivePicker()" aria-pressed="false" disabled>Pick object</button>
                         <button id="flash-live-clear" type="button" onclick="controlFlashLive('clear')" disabled>Clear object</button>
-                        <div id="flash-live-stream-mode" class="flash-group-modes" data-mode="processed" role="group" aria-label="Frame stream"><button type="button" data-mode="raw" aria-pressed="false" onclick="setFlashLiveStream('raw')">Raw</button><button type="button" data-mode="processed" aria-pressed="true" onclick="setFlashLiveStream('processed')">Processed</button></div>
+                    </div>
+                    <div class="flash-experiment-tools flash-viewer-toolbar">
                         <div id="flash-live-view-mode" class="flash-group-modes" data-mode="2d" role="group" aria-label="Viewer mode"><button type="button" data-mode="2d" aria-pressed="true" onclick="setFlashLiveView('2d')">2D</button><button type="button" data-mode="3d" aria-pressed="false" onclick="setFlashLiveView('3d')">3D</button><button type="button" data-mode="depth" aria-pressed="false" onclick="setFlashLiveView('depth')">Depth</button></div>
                         <button id="flash-live-camera-view" type="button" onclick="flashLive.viewer?.reset()" hidden>Reset 3D camera</button>
+                        <div id="flash-live-stream-mode" class="flash-group-modes" data-mode="processed" role="group" aria-label="Frame stream"><button type="button" data-mode="raw" aria-pressed="false" onclick="setFlashLiveStream('raw')">Raw</button><button type="button" data-mode="processed" aria-pressed="true" onclick="setFlashLiveStream('processed')">Processed</button></div>
                         <label><input id="flash-live-mask" type="checkbox" checked onchange="drawFlashLive()">Mask (2D)</label>
-                        <label><input id="flash-live-surface" type="checkbox" checked onchange="drawFlashLive()">Surface + axes</label>
+                        <label><input id="flash-live-surface" type="checkbox" checked onchange="drawFlashLive()">Surface</label>
+                        <label><input id="flash-live-pose" type="checkbox" checked onchange="drawFlashLive()">Pose + axes</label>
                         <label title="Magenta: rejected fit. Blue: rejected fallback prediction. These are not published estimates."><input id="flash-live-rejected" type="checkbox" onchange="drawFlashLive()">Rejected poses</label>
                         <label id="flash-live-filled-control" hidden><input id="flash-live-filled" type="checkbox" onchange="drawFlashLive()"><span id="flash-live-filled-label">Show added depth</span></label>
                         <div class="flash-group-control">Groups <div id="flash-live-groups" class="flash-group-modes" data-mode="objects" role="group" aria-label="Live group display"><button type="button" data-mode="none" aria-pressed="false" onclick="setFlashGroupMode('flash-live-groups','none')">None</button><button type="button" data-mode="objects" aria-pressed="true" onclick="setFlashGroupMode('flash-live-groups','objects')">Objects</button><button type="button" data-mode="all" aria-pressed="false" onclick="setFlashGroupMode('flash-live-groups','all')">All</button></div><span id="flash-live-group-count" class="flash-group-count" aria-live="polite"></span></div>
+                        <label id="flash-live-trajectory-tools" hidden title="Dispatched targets; waypoint times are relative to playback"><input id="flash-live-trajectory" type="checkbox" checked onchange="drawFlashLiveTrajectory()">Actions</label>
                     </div>
-                    <div class="flash-live-history" id="flash-live-playback" hidden>
+                    <p id="flash-live-status" role="status"></p><p id="flash-live-objects"></p>
+                    <div class="flash-live-viewer flash-viewer-canvas">
+                        <canvas id="flash-live-image" onclick="clickFlashLive(event)" onmousemove="inspectFlashLiveDepth(event)" onmouseleave="if(flashLive.view==='depth')liveElement('depth-info').textContent=flashLive.depthSummary" aria-label="Camera image or depth map; use Pick object to select an object in 2D"></canvas>
+                        <canvas id="flash-live-scene" hidden aria-label="Live 3D scene; drag to orbit"></canvas>
+                        <span id="flash-live-depth-info" class="flash-live-depth-info" hidden></span>
+                        <span id="flash-live-resolution-overlay" class="flash-replay-resolution" aria-label="Recorded image resolution" hidden></span>
+                    </div>
+                    <div class="flash-live-history flash-viewer-transport" id="flash-live-playback" hidden>
                         <button type="button" id="flash-live-return-camera" onclick="followFlashLive()" hidden>Return to camera</button>
                         <button type="button" id="flash-live-play" onclick="playFlashHistory()" aria-label="Play recording">Play</button>
                         <input id="flash-live-history-position" type="range" min="0" max="0" value="0" aria-label="Recorded frame" oninput="loadFlashHistory(Number(this.value))" disabled>
                         <span id="flash-live-play-time"></span>
-                    </div>
-                    <p id="flash-live-status" role="status"></p><p id="flash-live-objects"></p>
-                    <div class="flash-live-viewer">
-                        <canvas id="flash-live-image" onclick="clickFlashLive(event)" onmousemove="inspectFlashLiveDepth(event)" onmouseleave="if(flashLive.view==='depth')liveElement('depth-info').textContent=flashLive.depthSummary" aria-label="Camera image or depth map; use Pick object to select an object in 2D"></canvas>
-                        <canvas id="flash-live-scene" hidden aria-label="Live 3D scene; drag to orbit"></canvas>
-                        <span id="flash-live-depth-info" class="flash-live-depth-info" hidden></span>
                     </div>
                 </section>
             </div>
@@ -1055,8 +1060,9 @@ nebius iam auth-public-key generate \
     <script src="/static/run.js?v=195"></script>
     <script src="/static/flash_experiments.js?v=49"></script>
     <script src="/static/flash_pipeline_settings.js?v=2"></script>
-    <script src="/static/flash_live.js?v=44"></script>
-    <script src="/static/flash_editor.js?v=7"></script>
+    <script src="/static/flash_trajectory.js?v=5"></script>
+    <script src="/static/flash_live.js?v=50"></script>
+    <script src="/static/flash_editor.js?v=13"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>

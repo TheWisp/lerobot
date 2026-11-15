@@ -23,10 +23,6 @@
 .flash-experiment-tools select { background: #16263c; color: #eee; border: 1px solid #31516c; border-radius: 4px; padding: 5px; }
 .flash-group-control { display: inline-flex; align-items: center; gap: 5px; }
 .flash-group-count { color: #9eb5ca; font-size: 12px; white-space: nowrap; }
-.flash-group-modes { display: inline-flex; border: 1px solid #31516c; border-radius: 5px; overflow: hidden; }
-.flash-experiment-tools .flash-group-modes button { border: 0; border-radius: 0; padding: 5px 8px; }
-.flash-experiment-tools .flash-group-modes button + button { border-left: 1px solid #31516c; }
-.flash-experiment-tools .flash-group-modes button[aria-pressed="true"] { background: #315b80; color: #fff; }
 .flash-experiment-mask-label { color: #00d2c8; }
 .flash-experiment-pose-label { color: #ffffff; }
 #flash-experiment-explanation { font-size: 12px; color: #b8c7d8; margin: 0; }
@@ -36,6 +32,10 @@
 #flash-experiment-player:fullscreen { width: 100vw; height: 100vh; }
 #flash-experiment-status { color: #b8c7d8; font-size: 13px; min-height: 20px; }
 #flash-experiment-sidebar button:not(.flash-experiment-item), .flash-experiment-tools button { background: #16263c; color: #c7d4e5; border: 1px solid #31516c; border-radius: 4px; padding: 5px 9px; cursor: pointer; }
+.flash-group-modes { display: inline-flex; border: 1px solid #31516c; border-radius: 5px; overflow: hidden; }
+.flash-group-modes > button { background:#16263c; color:#c7d4e5; cursor:pointer; font:inherit; border: 0; border-radius: 0; padding: 5px 8px; }
+.flash-group-modes button + button { border-left: 1px solid #31516c; }
+.flash-group-modes button[aria-pressed="true"] { background: #315b80; color: #fff; }
 @media (max-width: 700px) {
     #tab-flash #flash-sidebar { width: 180px; min-width: 150px; }
     #tab-flash #flash-experiment-view { padding: 8px; }
@@ -154,7 +154,8 @@
 .flash-live-settings textarea { height: 180px; font: 12px monospace; }
 #flash-live-panel { display: flex; flex: 1; flex-direction: column; gap: 10px; padding: 16px; min-height: 0; overflow-y: auto; }
 #flash-live-status, #flash-live-objects { margin: 0; font-size: 13px; color: #b8c7d8; }
-.flash-live-viewer { flex: 1; min-height: 240px; position: relative; background: #101923; }
+.flash-live-viewer { flex: 1; min-height: 0; position: relative; background: #101923; }
+.flash-replay-resolution { position: absolute; top: 10px; right: 10px; z-index: 3; padding: 4px 7px; border: 1px solid #d6e4f333; border-radius: 4px; background: #101923d9; color: #e8f1fa; font: 11px/1.2 sans-serif; font-variant-numeric: tabular-nums; pointer-events: none; }
 .rgbd-metric-ruler { position: absolute; left: 12px; bottom: 12px; z-index: 2; display: flex; flex-direction: column; gap: 4px; padding: 7px 9px; color: #e8f1fa; background: #101923dc; border-radius: 4px; font: 11px/1.2 sans-serif; pointer-events: none; }
 .rgbd-metric-bar { box-sizing: border-box; display: block; height: 8px; border-left: 2px solid #e8f1fa; border-right: 2px solid #e8f1fa; border-bottom: 2px solid #e8f1fa; }
 .rgbd-metric-label { white-space: nowrap; }
@@ -176,7 +177,6 @@
 .flash-live-history { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .flash-live-history[hidden], #flash-live-camera-view[hidden] { display: none; }
 #flash-live-history-position { flex: 1; min-width: 120px; }
-#flash-live-play-time { min-width: 60px; color: #b8c7d8; font-variant-numeric: tabular-nums; }
 @media (max-width: 700px) { .flash-pipeline-form .training-field-row { grid-template-columns: 1fr; } }
 
 /* The global reset removes dialog's browser centering/padding. Restore both. */
@@ -193,3 +193,24 @@
 .flash-pipeline-form input:disabled { opacity: .5; }
 .flash-pipeline-form .training-field[hidden] { display: none; }
 #flash-live-settings, .flash-live-history button, .flash-live-history select { padding: 7px 10px; border: 1px solid #415b74; border-radius: 5px; background: #20344b; color: #edf3fa; cursor: pointer; }
+
+/* Shared viewer layout: controls, canvas, then playback. */
+.flash-viewer-toolbar {gap:10px 14px;font-size:13px;flex:none;}
+.flash-viewer-toolbar label {white-space:nowrap;}
+.flash-viewer-actions input {background:#101923;color:#e4ecf5;border:1px solid #31516c;border-radius:4px;padding:5px 9px;font:inherit;}
+.flash-viewer-canvas {border-radius:4px;overflow:hidden;}
+.flash-viewer-transport {display:flex;align-items:center;gap:10px;flex:none;min-height:32px;padding:0;font-size:12px;}
+.flash-viewer-transport input[type=range] {flex:1;min-width:0;margin:0;}
+.flash-viewer-transport > span {min-width:80px;color:#b8c7d8;font-variant-numeric:tabular-nums;text-align:right;}
+.flash-viewer-transport button {padding:7px 10px;border:1px solid #415b74;border-radius:5px;background:#20344b;color:#edf3fa;cursor:pointer;font:inherit;}
+#flash-live-trajectory-tools[hidden] {display:none;}
+.flash-trajectory {position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none;overflow:hidden;}
+.flash-trajectory path {fill:none;stroke-linecap:round;stroke-linejoin:round;}
+.flash-trajectory .trajectory-halo {stroke:#091522;stroke-width:5;opacity:.65;}
+.flash-trajectory .trajectory-future {stroke:#84a5ba;stroke-width:2;opacity:.45;}
+.flash-trajectory .trajectory-past {stroke:#4fc3f7;stroke-width:2;}
+.flash-trajectory .trajectory-waypoint {fill:#4fc3f7;stroke:#122337;stroke-width:.6;opacity:.65;pointer-events:all;cursor:pointer;}
+.flash-trajectory .trajectory-waypoint.future {fill:#84a5ba;opacity:.35;}
+.flash-trajectory .trajectory-waypoint:hover,.flash-trajectory .trajectory-waypoint:focus {opacity:1;fill:#fff;stroke:#4fc3f7;stroke-width:2;outline:none;}
+.flash-trajectory .trajectory-current {fill:#fff;stroke:#4fc3f7;stroke-width:2;}
+.flash-trajectory-tooltip {position:absolute;z-index:4;pointer-events:none;white-space:nowrap;padding:6px 9px;background:#101923ed;border:1px solid #31516c;border-radius:4px;color:#edf3fa;font-size:12px;font-variant-numeric:tabular-nums;box-shadow:0 3px 12px #0005;}

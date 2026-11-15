@@ -9,6 +9,8 @@ import sys
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -32,6 +34,7 @@ _recording: dict | None = None
 _record_process = None
 _tracking_job = None
 _preview_process = None
+_record_tasks = set()
 EDITOR_DIR = gui_config_dir() / "flash" / "editor"
 
 
@@ -107,24 +110,44 @@ def _profiles(settings, *, require_teleop=True):
 
 def _read_library():
     path = EDITOR_DIR / "demos.json"
-    return json.loads(path.read_text()) if path.exists() else {"recent": None, "demos": []}
+    library = json.loads(path.read_text()) if path.exists() else {"recent": None, "demos": []}
+    # Migrate the old staging entry once. Naming was never required to retain
+    # the underlying dataset, and it is no longer required to list the demo.
+    recent = library.get("recent")
+    if recent and not any(d["id"] == recent["id"] for d in library["demos"]):
+        library["demos"].insert(0, {**recent, "name": _demo_name(recent["created_at"])})
+        atomic_json(path, library)
+    return library
 
 
-def _remember_recording():
+def _demo_name(created_at):
+    return "Demo · " + datetime.fromtimestamp(created_at).strftime("%d %b, %H:%M")
+
+
+def _remember_recording(recording=None, process=None):
     library = _read_library()
-    if _recording and _record_process and _record_process.returncode == 0:
-        identity = _recording["id"]
+    recording = recording or _recording
+    process = process or _record_process
+    if recording and process and process.returncode == 0:
+        identity = recording["id"]
         if library.get("completed") != identity:
             library["recent"] = {
                 "id": identity,
-                "root": _recording["root"],
+                "root": recording["root"],
                 "episode": 0,
-                "name": "Last replay",
-                "created_at": _recording["created_at"],
+                "name": _demo_name(recording["created_at"]),
+                "created_at": recording["created_at"],
             }
+            if not any(d["id"] == identity for d in library["demos"]):
+                library["demos"].insert(0, dict(library["recent"]))
             library["completed"] = identity
             atomic_json(EDITOR_DIR / "demos.json", library)
     return library
+
+
+async def _record_finished(recording, process):
+    await process.wait()
+    await asyncio.get_running_loop().run_in_executor(_io, _remember_recording, recording, process)
 
 
 @router.get("/library")
@@ -318,6 +341,9 @@ async def record(request: run.RecordRequest):
         "repo_id": request.repo_id,
         "fps": request.fps,
     }
+    task = asyncio.create_task(_record_finished(dict(_recording), _record_process))
+    _record_tasks.add(task)
+    task.add_done_callback(_record_tasks.discard)
     return {**launched, **_recording}
 
 
@@ -573,6 +599,21 @@ async def save(request: SaveDemo):
     return await asyncio.get_running_loop().run_in_executor(_io, write)
 
 
+@router.get("/trajectory")
+async def demo_trajectory(dataset_id: str, camera: str, episode: int = 0):
+    dataset = _dataset(dataset_id)
+
+    def read():
+        from lerobot.policies.flash.demo_trajectory import read_demo_trajectory
+
+        try:
+            return read_demo_trajectory(dataset, episode, camera)
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            raise HTTPException(422, "This recording has no calibrated robot actions") from exc
+
+    return await asyncio.get_running_loop().run_in_executor(_io, read)
+
+
 class PrepareDemo(BaseModel):
     id: str
 
@@ -584,6 +625,123 @@ class ApplyDemo(BaseModel):
 
 _execution_process = None
 _execution_directory = None
+
+
+@router.post("/run-demo")
+async def run_demo(request: PrepareDemo):
+    """One user action; preparation and validation still precede robot launch."""
+    prepared = await prepare_demo(request)
+    return await apply_demo(ApplyDemo(plan=prepared["plan"], simulate=False))
+
+
+def _rollout_directory(identity):
+    import re
+
+    if not re.fullmatch(r"rollout-[0-9a-f]{32}", identity):
+        raise HTTPException(404, "Unknown rollout")
+    directory = EDITOR_DIR / "rollouts" / identity
+    if not (directory / "run.json").is_file():
+        raise HTTPException(404, "Rollout is unavailable")
+    return directory
+
+
+@router.get("/rollouts")
+async def rollouts():
+    def read():
+        rows = []
+        for path in (EDITOR_DIR / "rollouts").glob("rollout-*/run.json"):
+            value = json.loads(path.read_text())
+            if value["state"] == "running" and not (
+                _execution_directory == path.parent
+                and _execution_process is not None
+                and _execution_process.returncode is None
+            ):
+                value["state"] = "interrupted"
+            rows.append(value)
+        return sorted(rows, key=lambda row: row["created_at"], reverse=True)
+
+    return await asyncio.get_running_loop().run_in_executor(_io, read)
+
+
+@router.get("/rollouts/{identity}/events")
+async def rollout_events(
+    identity: str,
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+    kind: str = "",
+):
+    def read():
+        directory = _rollout_directory(identity)
+        path = directory / "events.jsonl"
+        if not path.exists():
+            return {"events": [], "cursor": cursor, "more": False}
+        rows = []
+        with path.open("rb") as stream:
+            stream.seek(cursor)
+            while len(rows) < limit:
+                before = stream.tell()
+                line = stream.readline()
+                if not line.endswith(b"\n"):
+                    stream.seek(before)
+                    break
+                event = json.loads(line)
+                if not kind or event["kind"].startswith(kind):
+                    rows.append(event)
+            next_cursor = stream.tell()
+            more = bool(stream.read(1))
+        return {"events": rows, "cursor": next_cursor, "more": more}
+
+    return await asyncio.get_running_loop().run_in_executor(_io, read)
+
+
+@router.get("/rollouts/{identity}/trajectory")
+async def rollout_trajectory(identity: str):
+    def read():
+        from lerobot.policies.flash.rollout_trajectory import read_trajectory
+
+        try:
+            return read_trajectory(_rollout_directory(identity))
+        except (ValueError, KeyError, FileNotFoundError) as exc:
+            raise HTTPException(422, "This recording does not have a usable commanded tool path") from exc
+
+    return await asyncio.get_running_loop().run_in_executor(_io, read)
+
+
+@router.get("/rollouts/{identity}/log")
+async def rollout_log(identity: str):
+    def read():
+        directory = _rollout_directory(identity)
+        output = directory / "output.log"
+        if output.exists():
+            return {"text": output.read_text(errors="replace")}
+        # Older runs have the full event journal but no captured console output.
+        # Show their recorded lifecycle messages, without inventing stdout.
+        lines = ["Console output was not saved for this rollout. Recorded execution messages:"]
+        origin = None
+        path = directory / "events.jsonl"
+        if path.exists():
+            with path.open() as stream:
+                for line in stream:
+                    if not line.endswith("\n"):
+                        break
+                    event = json.loads(line)
+                    origin = event["time_s"] if origin is None else origin
+                    if event["kind"] in {
+                        "run.started",
+                        "execution.state",
+                        "run.finished",
+                        "robot.command_failed",
+                        "robot.read_failed",
+                    }:
+                        detail = event.get("state", event.get("mode", ""))
+                        reason = event.get("reason")
+                        lines.append(
+                            f"+{event['time_s'] - origin:.2f}s {event['kind']}: {detail}"
+                            + (f"\n{reason}" if reason else "")
+                        )
+        return {"text": "\n".join(lines)}
+
+    return await asyncio.get_running_loop().run_in_executor(_io, read)
 
 
 @router.post("/prepare")
@@ -686,29 +844,79 @@ async def apply_demo(request: ApplyDemo):
         camera = profile["cameras"][setup.camera]
         if camera["type"] != "intelrealsense":
             raise ValueError("The shared live worker currently requires RealSense")
-        return flash_tracking.TrackingStart(
-            serial=str(camera["serial_number_or_name"]),
-            width=camera["width"],
-            height=camera["height"],
-            fps=camera.get("fps", setup.fps),
-            pipeline_settings=plan["settings"],
-            depth_source=plan["depth_source"],
-        ), {
-            "demo_execution": {"plan_directory": str(folder), "robot": profile, "simulate": request.simulate},
-            "initial_selection": {"id": "editor-demo", "action": "select", "prompt": "demo objects"},
-        }
+        return (
+            flash_tracking.TrackingStart(
+                serial=str(camera["serial_number_or_name"]),
+                width=camera["width"],
+                height=camera["height"],
+                fps=camera.get("fps", setup.fps),
+                pipeline_settings=plan["settings"],
+                depth_source=plan["depth_source"],
+            ),
+            {
+                "demo_execution": {
+                    "plan_directory": str(folder),
+                    "robot": profile,
+                    "simulate": request.simulate,
+                },
+                "initial_selection": {"id": "editor-demo", "action": "select", "prompt": "demo objects"},
+            },
+            source,
+        )
 
     try:
-        camera, extra = await asyncio.get_running_loop().run_in_executor(_io, prepare)
+        camera, extra, source = await asyncio.get_running_loop().run_in_executor(_io, prepare)
     except (ValueError, KeyError, OSError) as exc:
         raise HTTPException(400, str(exc)) from exc
     # Stop only the editor's own camera preview. An unrelated Run is rejected
     # by start_worker instead of being stolen by this page.
     await stop_preview()
-    await flash_tracking.start_worker(camera, module="lerobot.policies.flash.demo_live_worker", extra=extra)
+    identity = "rollout-" + uuid.uuid4().hex
+    destination = EDITOR_DIR / "rollouts" / identity
+
+    def snapshot():
+        import shutil
+
+        folder = Path(extra["demo_execution"]["plan_directory"])
+        atomic_json(
+            destination / "run.json",
+            {
+                "schema_version": 1,
+                "id": identity,
+                "name": source["entry"]["name"],
+                "demo_id": source["entry"]["id"],
+                "created_at": time.time(),
+                "state": "running",
+                "outcome": "unknown",
+                "mode": "simulation" if request.simulate else "robot",
+            },
+        )
+        for name in ("plan.json", "source.json", "reference.npz"):
+            shutil.copyfile(folder / name, destination / name)
+
+    await asyncio.get_running_loop().run_in_executor(_io, snapshot)
+    extra["demo_execution"]["plan_directory"] = str(destination)
+    try:
+        await flash_tracking.start_worker(
+            camera,
+            module="lerobot.policies.flash.demo_live_worker",
+            extra=extra,
+            output_directory=destination,
+        )
+    except BaseException as exc:
+        from lerobot.policies.flash.rollout_recording import finish_run
+
+        await asyncio.get_running_loop().run_in_executor(
+            _io, partial(finish_run, destination, state="failed", reason=str(exc))
+        )
+        raise
     _preview_process = _execution_process = run._active_process
     _execution_directory = flash_tracking._directory
-    return {"pid": _execution_process.pid, "mode": "simulation" if request.simulate else "robot"}
+    return {
+        "pid": _execution_process.pid,
+        "mode": "simulation" if request.simulate else "robot",
+        "rollout": identity,
+    }
 
 
 @router.get("/execution")

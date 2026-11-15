@@ -48,7 +48,16 @@ def _freeze_startup_heap():
     gc.freeze()
 
 
-def run(directory: Path, config: dict, *, session_factory=None, on_observation=None, stop_event=None):
+def run(
+    directory: Path,
+    config: dict,
+    *,
+    session_factory=None,
+    on_observation=None,
+    stop_event=None,
+    journal=None,
+    on_camera_ready=None,
+):
     import pyrealsense2 as rs
 
     from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
@@ -90,6 +99,8 @@ def run(directory: Path, config: dict, *, session_factory=None, on_observation=N
         signal.signal(sig, lambda *_: stop.set())
 
     def state(status, **data):
+        if journal:
+            journal.emit("camera.state", status=status, **data)
         write_snapshot(
             directory / "state.json",
             {
@@ -113,6 +124,7 @@ def run(directory: Path, config: dict, *, session_factory=None, on_observation=N
             history = RollingHistory(
                 config["history_directory"],
                 seconds=config.get("history_seconds", 60),
+                journal=journal,
             )
         state("opening_camera")
         serial = config["serial"]
@@ -298,6 +310,11 @@ def run(directory: Path, config: dict, *, session_factory=None, on_observation=N
         pool = SearchPool(vision.shape.batch_query_workers) if vision.reuse_surface_search else None
         state("preview", depth_processing=camera.depth_processing, camera_streams=streams)
         while not stop.is_set():
+            if journal and history and history.error:
+                raise RuntimeError(history.error)
+            if on_camera_ready is not None and latest.snapshot() is not None:
+                on_camera_ready()
+                on_camera_ready = None
             if initial_selection is not None:
                 available = depth_stream.snapshot()[0] if depth_stream else latest.snapshot()
                 if available is not None:
@@ -312,6 +329,8 @@ def run(directory: Path, config: dict, *, session_factory=None, on_observation=N
             except Empty:
                 command = None
             if command:
+                if journal:
+                    journal.emit("operator.control", command=command)
                 command_id = command["id"]
                 try:
                     if command["action"] == "freeze":

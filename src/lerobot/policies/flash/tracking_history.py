@@ -513,16 +513,19 @@ def export_episode(directory):
 
 
 class RollingHistory:
-    def __init__(self, directory, *, seconds=60.0, reserve_bytes=512 * 1024**2):
-        if seconds <= 0 or reserve_bytes < 0:
+    def __init__(self, directory, *, seconds=60.0, reserve_bytes=512 * 1024**2, journal=None):
+        if (seconds is not None and seconds <= 0) or reserve_bytes < 0:
             raise ValueError("Invalid history limits")
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.seconds, self.reserve_bytes = seconds, reserve_bytes
+        self.journal = journal
         # Enough room for a short compression stall at camera frame rate. A
         # genuine overflow is counted and exposed, never silently subsampled.
         self.queue = Queue(maxsize=64)
         self.rows = []
+        self.by_frame = {}
+        self._last_index_write = 0.0
         self.dropped = 0
         self.error = None
         self.closed = False
@@ -541,6 +544,15 @@ class RollingHistory:
         """Camera-thread handoff, including frames before object selection."""
         if self.closed:
             raise RuntimeError("History already closed")
+        if self.journal:
+            if self.error:
+                raise RuntimeError(self.error)
+            self.journal.emit(
+                "camera.capture",
+                frame_id=frame.frame_id,
+                source_time_s=frame.source_time_s,
+                available_time_s=frame.available_time_s,
+            )
         try:
             snapshot = replace(
                 frame,
@@ -555,15 +567,23 @@ class RollingHistory:
             self.queue.put_nowait(("capture", snapshot))
         except Full:
             self.dropped += 1
+            if self.journal:
+                self.error = "Rollout camera writer fell behind; recording is incomplete"
+                raise RuntimeError(self.error) from None
 
     def attach_result(self, packet):
         """Add a processed result to its already captured frame by ID."""
         if self.closed:
             raise RuntimeError("History already closed")
+        if self.journal:
+            size = struct.unpack("<I", packet[:4])[0]
+            self.journal.emit("perception.result", result=json.loads(packet[4 : 4 + size]))
         try:
             self.queue.put_nowait(("result", (packet, time.perf_counter())))
         except Full:
             self.error = "Tracking result could not be recorded: history writer queue full"
+            if self.journal:
+                raise RuntimeError(self.error) from None
 
     def attach_processed_frame(self, frame, depth_source, *, masks=None, complete=True):
         """Record depth and optional SAM output against one captured frame ID.
@@ -584,10 +604,20 @@ class RollingHistory:
                 edges = np.flatnonzero(np.diff(np.pad(mask.ravel().astype(np.int8), (1, 1))))
                 runs[role] = np.column_stack((edges[::2], edges[1::2] - edges[::2])).tolist()
         event = (frame_id, depth_source, time.perf_counter(), depth, runs, complete)
+        if self.journal:
+            self.journal.emit(
+                "perception.processed",
+                frame_id=frame_id,
+                depth_source=depth_source,
+                masks_rle=runs,
+                complete=complete,
+            )
         try:
             self.queue.put_nowait(("processed", event))
         except Full:
             self.error = "Processed frame could not be recorded: history writer queue full"
+            if self.journal:
+                raise RuntimeError(self.error) from None
 
     def _index(self):
         return {
@@ -598,6 +628,16 @@ class RollingHistory:
             "dropped_frames": self.dropped,
             "error": self.error,
         }
+
+    def _publish_index(self, *, force=False):
+        # A full run has no fixed-size window. Checkpoint its display index at
+        # most once per second, rather than rewriting the growing index on
+        # every capture, depth result and pose publication. Payloads and the
+        # event journal are persisted independently as they arrive.
+        now = time.monotonic()
+        if self.seconds is not None or force or now - self._last_index_write >= 1:
+            write_snapshot(self.directory / "index.json", self._index())
+            self._last_index_write = now
 
     def _write(self, packet):
         n = struct.unpack("<I", packet[:4])[0]
@@ -622,7 +662,7 @@ class RollingHistory:
             },
         }
         with locked(self.directory, exclusive=True):
-            cutoff = row["time_s"] - self.seconds
+            cutoff = row["time_s"] - self.seconds if self.seconds is not None else float("-inf")
             window = [r for r in self.rows + [row] if r["time_s"] >= cutoff]
             needed = {i for r in window for i in r["dependencies"]}
             retained = [r for r in self.rows if r["time_s"] >= cutoff or r["frame"] in needed]
@@ -648,11 +688,13 @@ class RollingHistory:
             temporary.write_bytes(encoded)
             temporary.replace(path)
             self.rows = retained
+            self.by_frame = {r["frame"]: r for r in retained}
             available = {r["frame"] for r in retained}
             for r in retained:
                 r["context_only"] = r["time_s"] < cutoff
                 r["missing_dependencies"] = sorted(set(r["dependencies"]) - available)
-            self.error = None
+            if not self.journal:
+                self.error = None
             write_snapshot(self.directory / "index.json", self._index())
 
     def _write_capture(self, frame):
@@ -670,11 +712,13 @@ class RollingHistory:
             "objects": {},
         }
         with locked(self.directory, exclusive=True):
-            cutoff = row["time_s"] - self.seconds
-            expired = [r for r in self.rows if r["time_s"] < cutoff]
-            self.rows = [r for r in self.rows if r["time_s"] >= cutoff]
+            cutoff = row["time_s"] - self.seconds if self.seconds is not None else float("-inf")
+            expired = [r for r in self.rows if r["time_s"] < cutoff] if self.seconds is not None else []
+            if expired:
+                self.rows = [r for r in self.rows if r["time_s"] >= cutoff]
             for old in expired:
                 self._remove_frame(old["frame"])
+                self.by_frame.pop(old["frame"], None)
             if shutil.disk_usage(self.directory).free - len(encoded) < self.reserve_bytes:
                 write_snapshot(self.directory / "index.json", self._index())
                 raise OSError(
@@ -685,8 +729,10 @@ class RollingHistory:
             temporary.write_bytes(encoded)
             temporary.replace(path)
             self.rows.append(row)
-            self.error = None
-            write_snapshot(self.directory / "index.json", self._index())
+            self.by_frame[row["frame"]] = row
+            if not self.journal:
+                self.error = None
+            self._publish_index()
 
     def _remove_frame(self, frame):
         for suffix in (".bin.z", ".bin.zst", ".processed.json", ".overlay.json", ".model_depth.zst"):
@@ -696,7 +742,7 @@ class RollingHistory:
     def _write_processed(self, event):
         frame_id, source, ready_time_s, depth, masks, complete = event
         with locked(self.directory, exclusive=True):
-            row = next((r for r in self.rows if r["frame"] == frame_id), None)
+            row = self.by_frame.get(frame_id)
             if row is None:
                 return  # Its camera capture expired or was not retained.
             path = self.directory / f"{frame_id:010d}.processed.json"
@@ -725,7 +771,7 @@ class RollingHistory:
                 if not model_path.is_file():
                     model_path.write_bytes(zstd.ZstdCompressor(level=3).compress(depth))
                     row["bytes"] += model_path.stat().st_size
-            write_snapshot(self.directory / "index.json", self._index())
+            self._publish_index()
 
     def _write_result(self, event):
         packet, ready_time_s = event
@@ -733,7 +779,7 @@ class RollingHistory:
         header = json.loads(packet[4 : 4 + n])
         header["tracking_ready_time_s"] = ready_time_s
         with locked(self.directory, exclusive=True):
-            row = next((r for r in self.rows if r["frame"] == header["frame"]), None)
+            row = self.by_frame.get(header["frame"])
             if row is None:
                 return  # The camera frame expired or was not retained.
             path = self.directory / f"{row['frame']:010d}.overlay.json"
@@ -753,7 +799,7 @@ class RollingHistory:
             }
             row["tracking_ready_time_s"] = ready_time_s
             row["bytes"] += path.stat().st_size - before
-            write_snapshot(self.directory / "index.json", self._index())
+            self._publish_index()
 
     def _run(self):
         while True:
@@ -790,9 +836,13 @@ class RollingHistory:
         self.closed = True
         self.queue.put(None)
         self.thread.join()
+        if self.journal and self.error:
+            raise RuntimeError(self.error)
 
     def clear(self):
         """Discard the rolling recording; future frames continue normally."""
+        if self.seconds is None:
+            raise ValueError("An applied run retains its complete camera history")
         done = Event()
         self.queue.put(("clear", done))
         done.wait()
@@ -803,6 +853,7 @@ class RollingHistory:
                 # safe-destruct: clear only generated frames in the requested rolling buffer.
                 self._remove_frame(row["frame"])
             self.rows = []
+            self.by_frame = {}
             self.dropped = 0
             self.error = None
             write_snapshot(self.directory / "index.json", self._index())

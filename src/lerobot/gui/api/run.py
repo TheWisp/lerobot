@@ -490,7 +490,30 @@ def is_run_active() -> bool:
     return _active_process is not None and _active_process.returncode is None
 
 
-async def _read_stream(stream: asyncio.StreamReader, prefix: str = "") -> None:
+_output_log_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-output-log")
+
+
+async def _save_output_line(path: Path | None, text: str) -> bool:
+    if path is None:
+        return True
+
+    def append():
+        with path.open("a") as output:
+            output.write(text + "\n")
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(_output_log_pool, append)
+        return True
+    except OSError as exc:
+        # A full disk must not stop pipe draining and block the robot worker.
+        logger.warning("Could not save rollout console output: %s", exc)
+        _append_output(f"Could not save rollout console output: {exc}")
+        return False
+
+
+async def _read_stream(
+    stream: asyncio.StreamReader, prefix: str = "", output_log: Path | None = None
+) -> None:
     """Read lines from a subprocess stream and append to output buffer."""
     while True:
         line = await stream.readline()
@@ -498,6 +521,8 @@ async def _read_stream(stream: asyncio.StreamReader, prefix: str = "") -> None:
             break
         text = line.decode("utf-8", errors="replace").rstrip("\n\r")
         _append_output(f"{prefix}{text}")
+        if not await _save_output_line(output_log, f"{prefix}{text}"):
+            output_log = None
 
 
 _stream_tasks: list[asyncio.Task] = []
@@ -545,7 +570,7 @@ def _clear_last_failure() -> None:
     _last_failure = None
 
 
-async def _wait_for_exit() -> None:
+async def _wait_for_exit(output_log: Path | None = None) -> None:
     """Wait for the subprocess to finish, log the exit, and clean up."""
     global _active_process, _active_command, _active_config
     if _active_process is None:
@@ -565,6 +590,7 @@ async def _wait_for_exit() -> None:
             reason=_last_failure["reason"] if rc and _last_failure else None,
         )
     _append_output(f"\n--- Process exited with code {rc} ---")
+    await _save_output_line(output_log, f"\n--- Process exited with code {rc} ---")
     # Only clear if this is still the same process (not replaced by a new launch)
     if _active_process is proc:
         _active_process = None
@@ -619,7 +645,11 @@ def _set_pdeathsig_preexec() -> None:
 
 
 async def _launch_subprocess(
-    args: list[str], command: str, config: dict, extra_env: dict[str, str] | None = None
+    args: list[str],
+    command: str,
+    config: dict,
+    extra_env: dict[str, str] | None = None,
+    output_log: Path | None = None,
 ) -> None:
     """Launch a subprocess and start reading its output."""
     # TODO(gui-hardware): Manage SocketCAN interface lifecycle here before
@@ -690,6 +720,7 @@ async def _launch_subprocess(
     logger.info(f"Launching: {cmd_str}")
     _append_output(f"--- Starting {command} ---")
     _append_output(f"$ {cmd_str}\n")
+    await _save_output_line(output_log, f"--- Starting {command} ---\n$ {cmd_str}\n")
 
     # Claim ownership before the process exists, not after. A reader on another
     # thread's loop that catches the in-between state must never see the new
@@ -707,10 +738,10 @@ async def _launch_subprocess(
     )
 
     _stream_tasks = [
-        asyncio.create_task(_read_stream(_active_process.stdout)),
-        asyncio.create_task(_read_stream(_active_process.stderr, prefix="[stderr] ")),
+        asyncio.create_task(_read_stream(_active_process.stdout, output_log=output_log)),
+        asyncio.create_task(_read_stream(_active_process.stderr, prefix="[stderr] ", output_log=output_log)),
     ]
-    asyncio.create_task(_wait_for_exit())
+    asyncio.create_task(_wait_for_exit(output_log))
 
 
 async def _launch_debug_s2(config: DebugModelConfig) -> None:

@@ -12,6 +12,7 @@ async function liveRequest(path, body) {
 }
 async function showFlashLive() {
     if (typeof detachFlashEditorPreview === 'function') detachFlashEditorPreview();
+    setFlashLiveTrajectory(null);
     if (flashLive.visible) return;
     const generation = ++flashLive.generation;
     try {
@@ -142,7 +143,8 @@ function setFlashDepthSource(source,force=false) {
         button.setAttribute('aria-pressed',String(button.dataset.mode===source));
 }
 async function setFlashLiveStream(mode) {
-    if(!['raw','processed'].includes(mode) || flashLive.streamMode===mode)return;
+    if(!['raw','processed'].includes(mode))return;
+    if(flashLive.streamMode===mode){syncFlashLiveControls();return;}
     const wasPlaying=flashLive.playing;
     const selected=flashLive.historyFrames?.[Number(liveElement('history-position').value)];
     const at=flashLive.playbackTimeS ?? (selected ? flashHistoryTime(selected,flashLive.streamMode) : null);
@@ -167,7 +169,7 @@ async function setFlashLiveStream(mode) {
             flashLive.frame=null;flashLive.bitmap?.close();flashLive.bitmap=null;
             liveElement('objects').textContent='';
             liveElement('image').getContext('2d').clearRect(0,0,liveElement('image').width,liveElement('image').height);
-            liveElement('play-time').textContent=`${Math.max(0,at-(flashLive.rawFrames?.[0]?.time_s??at)).toFixed(1)} s`;
+            liveElement('play-time').textContent=`${Math.max(0,at-flashHistoryOrigin(at)).toFixed(2)} s`;
         }
         if(wasPlaying && index>=0)void playFlashHistory();
     }else void drawFlashLive();
@@ -205,6 +207,7 @@ function setFlashLiveView(mode) {
     liveElement('camera-view').hidden=mode!=='3d';
     liveElement('mask').closest('label').hidden=mode!=='2d';
     liveElement('surface').closest('label').hidden=mode==='depth';
+    liveElement('pose').closest('label').hidden=mode==='depth';
     liveElement('filled-control').hidden=mode==='2d';
     liveElement('groups').closest('.flash-group-control').hidden=mode==='depth';
     liveElement('pick').disabled=mode!=='2d' || flashLive.streamMode==='raw' || !flashLive.running || flashLive.historyActive;
@@ -219,6 +222,34 @@ function setFlashLiveView(mode) {
         });
     }
     drawFlashLive();
+}
+function syncFlashLiveControls(){
+    for(const [id,mode] of [['stream-mode',flashLive.streamMode],['view-mode',flashLive.view]]){
+        const control=liveElement(id);control.dataset.mode=mode;
+        for(const button of control.querySelectorAll('button'))button.setAttribute('aria-pressed',String(button.dataset.mode===mode));
+    }
+}
+function flashHistoryOrigin(fallback=0){return flashLive.trajectoryOriginS??flashLive.rawFrames?.[0]?.time_s??fallback;}
+function setFlashLiveTrajectory(data){
+    flashLive.trajectoryOriginS=data?.origin_s??null;
+    flashLive.trajectory?.dispose();flashLive.trajectory=null;
+    flashLive.viewer?.setOverlayRenderer(null);
+    const tools=liveElement('trajectory-tools');tools.hidden=!data;
+    liveElement('trajectory').disabled=!data?.points.length;liveElement('trajectory').checked=true;
+    tools.title=data?.points.length?'Dispatched targets; waypoint times are relative to playback':'No dispatched targets in this recording';
+    if(data?.points.length)flashLive.trajectory=new FlashTrajectory(liveElement('image').parentElement,data,async time=>{
+        stopFlashHistoryPlayback();const frames=flashLive.historyFrames||[];
+        const index=frames.findLastIndex(row=>flashHistoryTime(row,flashLive.streamMode)<=time);
+        await loadFlashHistory(Math.max(0,index),time);
+    });
+    if(data&&flashLive.playbackTimeS!=null)liveElement('play-time').textContent=`${(flashLive.playbackTimeS-flashHistoryOrigin()).toFixed(2)} s`;
+    drawFlashLiveTrajectory();
+}
+function drawFlashLiveTrajectory(){
+    const depth=flashDepthPackets(flashLive).displayed;
+    flashLive.trajectory?.render({enabled:liveElement('trajectory').checked,view:flashLive.view,
+        camera:depth?.camera||flashLive.frame?.camera,time:flashLive.playbackTimeS??flashLive.frame?.time_s??0,
+        viewer:flashLive.viewer});
 }
 async function loadFlashPreviewDepth(frame) {
     const response=await fetch('/api/run/flash/tracking/preview-depth');
@@ -422,6 +453,12 @@ async function drawFlashLive() {
         overlay=state.streamMode==='processed'?state.overlay:null,
         image=state.episodePlayer ? state.episodeImage : state.bitmap;
     if(!image || !state.visible) return;
+    const resolution=liveElement('resolution-overlay');
+    const rollout=liveElement('panel').parentElement?.id==='flash-editor-preview-host' &&
+        typeof flashEditor!=='undefined' && flashEditor.mode==='rollout';
+    resolution.textContent=rollout?`${image.width} × ${image.height}`:'';
+    resolution.hidden=!resolution.textContent;
+    syncFlashLiveControls();
     const shownGroups = overlay ? flashSceneGroups(overlay.scene_group_tracks, overlay.objects,
         flashGroupMode('flash-live-groups')) : [];
     liveElement('group-count').textContent = overlay
@@ -444,20 +481,22 @@ async function drawFlashLive() {
     if(state.view==='3d' && !three)return;
     liveElement('depth-info').hidden=state.view!=='depth'||!depthPacket;
     if(state.view==='depth'){
+        drawFlashLiveTrajectory();
         const canvas=liveElement('image'),ctx=canvas.getContext('2d');
         if(depthPacket)drawFlashDepth(ctx,depthPacket,canvas);
         else {ctx.fillStyle='#101923';ctx.fillRect(0,0,canvas.width,canvas.height);}
         return;
     }
     if(three) {
-        const module=await import('/static/rgbd_scene.js?v=11');
+        const module=await import('/static/rgbd_scene.js?v=12');
         if(!state.visible || (state.episodePlayer?state.previewDepth:state.packet||state.previewDepth)!==capturedDepthPacket) return;
         state.viewer ||= module.createRgbdScene(liveElement('scene'));
+        state.viewer.setOverlayRenderer(drawFlashLiveTrajectory);
         const descriptions=[];
         for(const [role,obj] of Object.entries(overlay?.objects||{})) {
             const name=flashObjectDisplayName(role,obj);
             descriptions.push({layer:'estimate', points:obj.surface, pose:obj.pose, axisPoints:obj.axis_points,
-                color:0xffa343,label:name});
+                color:0xffa343,label:liveElement('pose').checked?name:null,surface:liveElement('surface').checked});
             const rejected=flashRejectedPoses(obj);
             if(liveElement('rejected').checked) for(const [kind, color] of [['prediction', 0x49bcff], ['fit', 0xff52d7]]) {
                 const pose=rejected[kind];
@@ -475,10 +514,10 @@ async function drawFlashLive() {
                 pose:[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]});
         state.viewer.update(depthPacket.depth,image,depthPacket.camera,descriptions,
             depthPacket.depthBeforeFilters);
-        state.viewer.setOptions({estimate:liveElement('surface').checked,
+        state.viewer.setOptions({estimate:liveElement('surface').checked||liveElement('pose').checked,
             rejectedFit:liveElement('rejected').checked,
             rejectedPrediction:liveElement('rejected').checked,
-            groups:flashGroupMode('flash-live-groups') !== 'none',axes:true,
+            groups:flashGroupMode('flash-live-groups') !== 'none',axes:liveElement('pose').checked,
             highlightFilled:liveElement('filled').checked});
         return;
     }
@@ -486,6 +525,7 @@ async function drawFlashLive() {
     canvas.width=image.width; canvas.height=image.height;
     ctx.drawImage(image,0,0);
     if(state.streamMode==='processed')drawFlashMeasuredMasks(ctx,packet,canvas.width,canvas.height);
+    drawFlashLiveTrajectory();
     if(!overlay) return;
     for(const [role,obj] of Object.entries(overlay.objects)) {
         const name=flashObjectDisplayName(role,obj);
@@ -493,8 +533,9 @@ async function drawFlashLive() {
             ctx.strokeStyle='#65dcba'; ctx.lineWidth=2;
             for(const contour of obj.contours || []) {ctx.beginPath();contour.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.stroke();}
         }
-        if(liveElement('surface').checked && obj.pose) {
-            drawFlashObjectPose(ctx,obj,overlay.camera.intrinsics,name);
+        if((liveElement('surface').checked||liveElement('pose').checked) && obj.pose) {
+            drawFlashObjectPose(ctx,obj,overlay.camera.intrinsics,name,
+                {surface:liveElement('surface').checked,pose:liveElement('pose').checked});
         }
         if(liveElement('rejected').checked)
             drawFlashRejectedPoses(ctx,obj,overlay.camera.intrinsics,name);
@@ -771,7 +812,7 @@ async function openFlashEpisode(recording) {
             flashLive.previewDepth=null;flashLive.packet=null;flashLive.episodeModelDepth=null;
             liveElement('history-position').value=displayIndex;
             const shownAt=flashLive.playbackTimeS??flashHistoryTime(row,flashLive.streamMode);
-            liveElement('play-time').textContent=`${(shownAt-flashLive.rawFrames[0].time_s).toFixed(1)} s`;
+            liveElement('play-time').textContent=`${(shownAt-flashHistoryOrigin()).toFixed(2)} s`;
             if(flashLive.streamMode==='processed')void loadFlashEpisodeProcessed(frame,recording);
             if(flashLive.view!=='2d')void loadFlashEpisodeDepth(frame);
             if(flashLive.streamMode==='processed')
@@ -869,7 +910,7 @@ async function loadFlashHistory(index,asOf=null) {
     const first=flashLive.historyFrames[0]?.time_s || row.time_s;
     const shownAt=asOf??flashHistoryTime(row,flashLive.streamMode);
     flashLive.playbackTimeS=shownAt;
-    liveElement('play-time').textContent=`${(shownAt-(flashLive.rawFrames?.[0]?.time_s??first)).toFixed(1)} s`;
+    liveElement('play-time').textContent=`${(shownAt-flashHistoryOrigin(first)).toFixed(2)} s`;
     const token=(flashLive.historyRequest||0)+1;flashLive.historyRequest=token;
     const generation=flashLive.generation;
     const recording=liveElement('recording').value;
@@ -895,6 +936,8 @@ async function loadFlashHistory(index,asOf=null) {
     } catch(error) {liveElement('history-info').textContent=error.message;}
 }
 async function selectFlashHistory(recording) {
+    setFlashLiveTrajectory(null);
+    liveElement('resolution-overlay').hidden=true;
     stopFlashHistoryPlayback();
     closeFlashEpisode();
     flashLive.episodeOverlaySource=undefined;
@@ -911,7 +954,8 @@ async function selectFlashHistory(recording) {
     if(flashLive.playing)return; // The user may start playback while the index loads.
     const last=flashLive.historyFrames.length-1;
     liveElement('history-position').value=last;
-    if(last>=0 && recording!=='recent'){
+    if(last>=0 && recording?.startsWith('rollout-'))await loadFlashHistory(0);
+    else if(last>=0 && recording!=='recent'){
         try{await openFlashEpisode(recording);}
         catch(error){liveElement('history-info').textContent=error.message;}
     }else if(last>=0)await loadFlashHistory(last);
@@ -944,7 +988,7 @@ async function playFlashHistory() {
     flashLive.playing=true;liveElement('play').textContent='Pause';
     const frames=flashLive.historyFrames;
     const shownAt=row=>flashHistoryTime(row,flashLive.streamMode);
-    const origin=flashLive.rawFrames[0].time_s;
+    const origin=flashHistoryOrigin();
     let index=Number(liveElement('history-position').value);
     if(index>=frames.length-1){
         index=-1;
@@ -972,7 +1016,8 @@ async function playFlashHistory() {
         if(!flashLive.playing || !flashLive.historyActive)return;
         const due=origin+(performance.now()-startedAt)/1000;
         flashLive.playbackTimeS=due;
-        liveElement('play-time').textContent=`${Math.max(0,due-origin).toFixed(1)} s`;
+        flashLive.trajectory?.updateTime(due);
+        liveElement('play-time').textContent=`${Math.max(0,due-origin).toFixed(2)} s`;
         let next=cursor, frameIndex=index, resultDue=false;
         while(next+1<events.length && events[next+1].time<=due){
             const event=events[++next];

@@ -188,7 +188,11 @@ async def start(req: TrackingStart) -> dict:
 
 
 async def start_worker(
-    req: TrackingStart, *, module="lerobot.policies.flash.live_surface_worker", extra=None
+    req: TrackingStart,
+    *,
+    module="lerobot.policies.flash.live_surface_worker",
+    extra=None,
+    output_directory=None,
 ):
     from . import run
 
@@ -198,20 +202,35 @@ async def start_worker(
         global _directory
 
         def prepare():
-            if _directory is not None:
+            if (
+                _directory is not None
+                and _directory.parent == Path(tempfile.gettempdir())
+                and _directory.name.startswith("lerobot-surface-debug-")
+            ):
                 # safe-destruct: our own mkdtemp snapshot directory; the previous worker has stopped.
                 shutil.rmtree(_directory, ignore_errors=True)
-            directory = Path(tempfile.mkdtemp(prefix="lerobot-surface-debug-"))
-            recent = history_root() / "recent"
+            directory = (
+                Path(output_directory)
+                if output_directory
+                else Path(tempfile.mkdtemp(prefix="lerobot-surface-debug-"))
+            )
+            recent = directory / "camera" if output_directory else history_root() / "recent"
             # The prior worker is stopped. Explicitly saved windows have their
             # own hard links and survive replacement of the rolling buffer.
-            if recent.exists():
+            if recent.exists() and not output_directory:
                 # safe-destruct: replace only this application's stopped rolling buffer.
                 shutil.rmtree(recent)
             recent.mkdir(parents=True)
             (recent / "config.json").write_text(req.model_dump_json())
             (directory / "config.json").write_text(
-                json.dumps({**req.model_dump(), "history_directory": str(recent), **(extra or {})})
+                json.dumps(
+                    {
+                        **req.model_dump(),
+                        "history_directory": str(recent),
+                        **(extra or {}),
+                        **({"history_seconds": None} if output_directory else {}),
+                    }
+                )
             )
             return directory
 
@@ -225,6 +244,7 @@ async def start_worker(
             [_python(), "-u", "-m", module, str(_directory)],
             command="flash_surface_live",
             config=req.model_dump(),
+            output_log=_directory / "output.log" if output_directory else None,
         )
         return {"status": "started"}
 
@@ -307,6 +327,10 @@ async def preview_depth():
 
 
 def _history_directory(identity):
+    if identity.startswith("rollout-"):
+        from .flash_editor import _rollout_directory
+
+        return _rollout_directory(identity) / "camera"
     if identity != "recent" and not re.fullmatch(r"saved-[0-9a-f]{32}", identity):
         raise HTTPException(404, "Unknown recording")
     directory = history_root() / identity
@@ -344,9 +368,10 @@ async def history(recording: str = "recent"):
             )
         recordings.sort(key=lambda row: row["saved_at"] or 0, reverse=True)
         recent = read_index(root / "recent")
-        index = recent if recording == "recent" else read_index(_history_directory(recording))
-        camera_file = root / recording / "episode" / "flash" / "v1" / "camera.json"
-        streams_file = root / recording / "camera_streams.json"
+        directory = root / "recent" if recording == "recent" else _history_directory(recording)
+        index = recent if recording == "recent" else read_index(directory)
+        camera_file = directory / "episode" / "flash" / "v1" / "camera.json"
+        streams_file = directory / "camera_streams.json"
         return {
             **index,
             "recording": recording,
@@ -357,7 +382,7 @@ async def history(recording: str = "recent"):
             "overlay_indices": [
                 i
                 for i, row in enumerate(index["frames"])
-                if (root / recording / f"{row['frame']:010d}.overlay.json").is_file()
+                if (directory / f"{row['frame']:010d}.overlay.json").is_file()
             ],
         }
 
@@ -446,6 +471,9 @@ async def rename_history(request: RecordingRename):
 @router.delete("/history")
 async def delete_history(recording: str):
     from . import run
+
+    if recording.startswith("rollout-"):
+        raise HTTPException(400, "Rollout evidence is retained with its run")
 
     if recording == "recent" and run._active_command == "flash_surface_live" and run.is_run_active():
         await control(TrackingControl(action="clear_history", id=f"history-{time.time_ns()}"))

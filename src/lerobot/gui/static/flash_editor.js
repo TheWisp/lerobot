@@ -1,6 +1,6 @@
 /* Demo authoring only: Run owns hardware, ChunkPlayer owns episode playback. */
 const flashEditor = {visible:false, generation:0, dataset:null, document:null, source:null,
-    player:null, frame:0, dirty:false, picking:null, reference:'world', rangeStart:null, busy:false, recording:null, mode:'live', library:{recent:null,demos:[]}, entry:null, view:'2d'};
+    player:null, frame:0, dirty:false, picking:null, reference:'world', rangeStart:null, busy:false, recording:null, mode:'live', library:{demos:[]}, rollouts:[], entry:null, view:'2d'};
 const editorElement = id => document.getElementById('flash-editor-'+id);
 async function editorRequest(url, body, method='POST') {
     const response=await fetch(url, body===undefined?{}:{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -96,7 +96,10 @@ function hideFlashEditor() {
 }
 function detachFlashEditorPreview(){
     if(!flashEditor.previewHome)return;
+    liveElement('resolution-overlay').hidden=true;
+    setFlashLiveTrajectory(null);
     flashLive.visible=false;flashLive.generation++;clearTimeout(flashLive.timer);
+    stopFlashHistoryPlayback();closeFlashEpisode();
     flashEditor.previewHome.replaceWith(liveElement('panel'));flashEditor.previewHome=null;
     editorElement('preview-host').hidden=true;
 }
@@ -104,11 +107,13 @@ async function stopFlashEditorPreview(){
     await editorRequest('/api/run/flash/editor/preview/stop',{});detachFlashEditorPreview();
 }
 function mountFlashEditorPreview(){
+    liveElement('resolution-overlay').hidden=true;
     if(!flashEditor.previewHome){
         flashEditor.previewHome=document.createComment('shared FLASH live panel');
         const panel=liveElement('panel');panel.replaceWith(flashEditor.previewHome);
         editorElement('preview-host').append(panel);
     }
+    setFlashLiveTrajectory(null);
     flashLive.visible=true;flashLive.historyActive=false;
     flashLive.bitmap?.close();flashLive.bitmap=null;flashLive.frame=null;
     flashLive.packet=null;flashLive.overlay=null;flashLive.processed=null;
@@ -135,39 +140,52 @@ async function startFlashEditorPreview(){
 async function selectFlashEditorLive(){
     if(flashEditor.dirty && !(await saveFlashDemo()))return;
     flashEditor.player?.pause();flashEditor.mode='live';flashEditor.entry=null;renderFlashEditor();
-    if(!flashEditor.recording)await startFlashEditorPreview();
+    if(flashEditor.execution?.running)mountFlashEditorPreview();
+    else if(!flashEditor.recording)await startFlashEditorPreview();
 }
 async function refreshFlashDemoLibrary(){
-    flashEditor.library=await editorRequest('/api/run/flash/editor/library');
+    [flashEditor.library,flashEditor.rollouts]=await Promise.all([
+        editorRequest('/api/run/flash/editor/library'),editorRequest('/api/run/flash/editor/rollouts')]);
     renderFlashDemoLibrary();
 }
 function renderFlashDemoLibrary(){
     const library=flashEditor.library;
-    const key=JSON.stringify([library,flashEditor.mode,flashEditor.entry?.id,flashEditor.recentSelected,!!flashEditor.recording]);
+    const key=JSON.stringify([library,flashEditor.rollouts,flashEditor.mode,flashEditor.entry?.id,!!flashEditor.recording]);
     if(flashEditor.libraryRenderKey===key)return;
     flashEditor.libraryRenderKey=key;
     editorElement('live').setAttribute('aria-current',flashEditor.mode==='live'?'page':'false');
-    editorElement('recent').disabled=!library.recent||!!flashEditor.recording;
-    editorElement('recent').setAttribute('aria-current',flashEditor.recentSelected&&flashEditor.mode==='demo'?'page':'false');
     editorElement('demos').replaceChildren();
     for(const entry of library.demos){
         const button=editorButton(entry.name,()=>openFlashDemoEntry(entry));button.className='flash-demo-nav';
-        button.setAttribute('aria-current',!flashEditor.recentSelected&&flashEditor.entry?.id===entry.id&&flashEditor.mode==='demo'?'page':'false');
+        button.setAttribute('aria-current',flashEditor.entry?.id===entry.id&&flashEditor.mode==='demo'?'page':'false');
         button.disabled=!!flashEditor.recording;
         const date=document.createElement('small');date.textContent=new Date(entry.created_at*1000).toLocaleString();button.append(date);
         editorElement('demos').append(button);
     }
-    if(!library.demos.length){const hint=document.createElement('p');hint.className='training-field-hint';hint.textContent='Saved demos appear here.';editorElement('demos').append(hint);}
+    if(!library.demos.length){const hint=document.createElement('p');hint.textContent='Record with teleop. Stop saves your demo here.';editorElement('demos').append(hint);}
+    editorElement('rollouts').replaceChildren();
+    for(const entry of flashEditor.rollouts){
+        const button=editorButton(entry.name,()=>openFlashRollout(entry));button.className='flash-demo-nav';
+        button.setAttribute('aria-current',flashEditor.entry?.id===entry.id&&flashEditor.mode==='rollout'?'page':'false');
+        button.disabled=!!flashEditor.recording;
+        const date=document.createElement('small');date.textContent=`${new Date(entry.created_at*1000).toLocaleString()}`;
+        button.append(date);editorElement('rollouts').append(button);
+    }
+    if(!flashEditor.rollouts.length){const hint=document.createElement('p');hint.textContent='Applied runs are saved here automatically.';editorElement('rollouts').append(hint);}
     const selected=editorElement('apply-demo').value;
     editorElement('apply-demo').replaceChildren(new Option('Choose a demo',''),...library.demos.map(d=>new Option(d.name,d.id)));
     editorElement('apply-demo').value=selected;
 }
-async function openFlashDemoEntry(entry,recent=false){
+async function openFlashDemoEntry(entry){
     if(!entry||flashEditor.recording)return;
     if(flashEditor.dirty && !(await saveFlashDemo()))return;
     try{
-        await stopFlashEditorPreview();
-        if(await openFlashEditorDataset(entry.root,entry.episode)){flashEditor.entry=entry;flashEditor.recentSelected=recent;renderFlashEditor();}
+        if(flashEditor.execution?.running)detachFlashEditorPreview();else await stopFlashEditorPreview();
+        if(await openFlashEditorDataset(entry.root,entry.episode)){
+            flashEditor.entry=entry;
+            if(flashEditor.document.name==='Untitled demo')flashEditor.document.name=entry.name;
+            editorElement('name').value=flashEditor.document.name;renderFlashEditor();
+        }
     }catch(error){editorStatus(error.message);}
 }
 async function keepFlashDemo(){
@@ -176,7 +194,8 @@ async function keepFlashDemo(){
         if(flashEditor.entry){
             flashEditor.library=await editorRequest('/api/run/flash/editor/library/save',{
                 id:flashEditor.entry.id,name:flashEditor.document.name||'Untitled demo'});
-            renderFlashDemoLibrary();
+            flashEditor.entry=flashEditor.library.demos.find(d=>d.id===flashEditor.entry.id);
+            renderFlashEditor();
         }
     }catch(error){editorStatus(error.message);}
 }
@@ -196,6 +215,7 @@ async function showFlashDemoViewer(){
     startObsStreamViewer();
 }
 function flashEditorName() {if(flashEditor.document){flashEditor.document.name=editorElement('name').value.trim()||'Untitled demo';editorChanged();}}
+async function renameFlashDemo(){flashEditorName();await keepFlashDemo();}
 async function openFlashEditorDataset(path,episode=0) {
     if(flashEditor.dirty && !(await saveFlashDemo()))return;
     const generation=++flashEditor.generation;
@@ -219,10 +239,13 @@ async function selectFlashEditorEpisode(episode=0) {
         const preferredCamera='observation.images.'+flashEditor.setup?.camera;
         if(!data.document.revision && data.source.cameras[preferredCamera])data.document.camera=preferredCamera;
         editorElement('name').value=data.document.name==='Untitled demo'?'':data.document.name;
-        editorElement('camera').replaceChildren(...Object.keys(data.source.cameras).map(key=>new Option(key.replace('observation.images.',''),key)));
-        editorElement('camera').value=data.document.camera;
+        const shape=data.source.cameras[data.document.camera]?.shape;
+        const resolution=editorElement('resolution');
+        resolution.textContent=shape?.[1]&&shape?.[0]?`${shape[1]} × ${shape[0]}`:'';
+        resolution.hidden=!resolution.textContent;
         editorElement('save-state').textContent='';
         renderFlashEditor();const playable=openFlashDemoPlayer();
+        void loadFlashDemoTrajectory();
         void pollFlashDemoTracking();
         if(playable)editorStatus(data.source.has_robot?'Select up to three objects, then mark keyframes.':'This replay contains no robot actions.');
         return true;
@@ -278,6 +301,31 @@ function updateFlashDemoPlaybackRange(){
         flashEditor.frame=Math.max(start,Math.min(end,flashEditor.frame));
         seekFlashDemo(flashEditor.frame);
     }
+    drawFlashDemoTrajectory();
+}
+async function loadFlashDemoTrajectory(){
+    const token=flashEditor.trajectoryRequest=(flashEditor.trajectoryRequest||0)+1;
+    const {dataset,episode,document:doc}=flashEditor,camera=doc.camera;
+    flashEditor.trajectory?.dispose();flashEditor.trajectory=null;
+    const control=editorElement('trajectory'),label=editorElement('trajectory-tools');
+    control.disabled=true;control.checked=true;label.title='Loading recorded actions…';
+    try{
+        const query=new URLSearchParams({dataset_id:dataset.id,episode,camera});
+        const data=await editorRequest('/api/run/flash/editor/trajectory?'+query);
+        if(token!==flashEditor.trajectoryRequest||flashEditor.dataset!==dataset||flashEditor.document?.camera!==camera)return;
+        control.disabled=!data.points.length;
+        label.title=data.points.length?'Demonstrated tool path; waypoint times are relative to playback':'No recorded actions';
+        flashEditor.trajectory=new FlashTrajectory(editorElement('image-host'),data,time=>seekFlashDemo(Math.round(time*flashEditor.source.fps)));
+        drawFlashDemoTrajectory();
+    }catch(error){if(token===flashEditor.trajectoryRequest)label.title=error.message;}
+}
+function drawFlashDemoTrajectory(){
+    const trajectory=flashEditor.trajectory;if(!trajectory||!flashEditor.source)return;
+    const slider=editorElement('position');
+    trajectory.render({enabled:editorElement('trajectory').checked&&!flashEditor.picking&&
+        (flashEditor.view!=='3d'||!!flashEditor.overlay?.depth),view:flashEditor.view,
+        camera:flashEditor.overlay?.camera||trajectory.data.camera,time:flashEditor.frame/flashEditor.source.fps,
+        timeRange:[Number(slider.min)/flashEditor.source.fps,Number(slider.max)/flashEditor.source.fps],viewer:flashEditor.viewer});
 }
 async function loadFlashDemoDisplay(dataset,episode,start,count,scene,signal){
     const query=new URLSearchParams({dataset_id:dataset,episode,start,count,scene});
@@ -305,16 +353,12 @@ async function setFlashDemoView(view){
     if(view!=='2d'&&!flashEditor.displaySchema)return;
     flashEditor.player?.pause();editorElement('play').textContent='Play';
     if(view==='3d'&&!flashEditor.viewer){
-        const module=await import('/static/rgbd_scene.js?v=11');
+        const module=await import('/static/rgbd_scene.js?v=12');
         flashEditor.viewer=module.createRgbdScene(editorElement('scene'));
+        flashEditor.viewer.setOverlayRenderer(drawFlashDemoTrajectory);
     }
     flashEditor.view=view;flashEditor.overlay=null;
     drawFlashDemoMarks();openFlashDemoPlayer();
-}
-function changeFlashEditorCamera(){
-    const doc=flashEditor.document;if(!doc)return;
-    if(doc.objects.length){editorElement('camera').value=doc.camera;editorStatus('Remove selected objects before changing cameras.');return;}
-    doc.camera=editorElement('camera').value;editorChanged();openFlashDemoPlayer();
 }
 function playFlashDemo(){const p=flashEditor.player;if(!p)return;const playing=p.state().playing;playing?p.pause():p.play();editorElement('play').textContent=playing?'Play':'Pause';}
 function seekFlashDemo(frame){flashEditor.player?.pause();editorElement('play').textContent='Play';flashEditor.player?.seek(frame);}
@@ -389,22 +433,26 @@ function showFlashDemoKeyframe(){
 function editorButton(text,callback){const b=document.createElement('button');b.type='button';b.textContent=text;b.onclick=callback;return b;}
 function renderFlashEditor(){
     const doc=flashEditor.document, busy=flashEditor.busy;
-    const live=flashEditor.mode==='live';
-    editorElement('live-actions').hidden=!live;editorElement('demo-actions').hidden=live;
-    editorElement('edit-view').hidden=live||!doc;
+    const live=flashEditor.mode==='live', rollout=flashEditor.mode==='rollout';
+    editorElement('execution').hidden=!live||(!flashEditor.execution?.running&&flashEditor.execution?.returncode===undefined);
+    editorElement('workspace').classList.toggle('flash-editor-rollout',rollout);
+    editorElement('live-actions').hidden=!live;editorElement('demo-actions').hidden=live||rollout;
+    editorElement('edit-view').hidden=live||rollout||!doc;
+    editorElement('run-log').hidden=!rollout;
+    editorElement('output-divider').hidden=!rollout||!editorElement('run-log').open;
     editorElement('live-host').hidden=!live||!flashEditor.recording;
-    editorElement('preview-host').hidden=!live||!flashEditor.previewHome||!!flashEditor.recording;
+    editorElement('preview-host').hidden=(!live&&!rollout)||!flashEditor.previewHome||!!flashEditor.recording;
     editorElement('empty').hidden=!live||!!flashEditor.recording||!!flashEditor.previewHome;
-    editorElement('title').textContent=live?'Live':flashEditor.entry?.name||'Last replay';
+    editorElement('title').textContent=live?'Live':flashEditor.entry?.name||'Demo';
     editorElement('record').disabled=busy||!!flashEditor.recording||(!flashEditor.setup?.robot)||(!flashEditor.setup?.teleop)||!!flashEditor.trackingPid;
-    editorElement('start').hidden=!!flashEditor.previewHome||!!flashEditor.recording;
+    editorElement('start').hidden=!!flashEditor.previewRunning||!!flashEditor.recording||!!flashEditor.execution?.running;
     editorElement('start').disabled=busy||!!flashEditor.trackingPid;
     editorElement('apply').disabled=busy||!!flashEditor.recording||!!flashEditor.trackingPid||!!flashEditor.execution?.running;
     editorElement('run-demo').disabled=editorElement('apply').disabled||!doc?.keyframes.length||!flashEditor.library.demos.some(d=>d.id===flashEditor.entry?.id);
-    editorElement('run-demo').title=flashEditor.library.demos.some(d=>d.id===flashEditor.entry?.id)?'Run this demo in the live view':'Save this replay as a demo first';
+    editorElement('run-demo').title='Apply this demo directly to the robot';
     if(flashEditor.execution?.running)editorElement('record').disabled=true;
     editorElement('save').disabled=!doc||busy;
-    editorElement('save').textContent=flashEditor.library.demos.some(d=>d.id===flashEditor.entry?.id)?'Save changes':'Save demo';
+    editorElement('save').textContent='Save changes';
     renderFlashDemoLibrary();
     editorElement('add-object').disabled=!doc||!flashEditor.player||doc.objects.length>=3||busy;
     editorElement('track').disabled=!doc||!doc.objects.length||busy||!!flashEditor.trackingPid;
@@ -454,6 +502,7 @@ function renderFlashEditor(){
 function drawFlashDemoMarks(){
     const canvas=editorElement('image'),marks=editorElement('marks'),doc=flashEditor.document;
     const view=flashEditor.view, scene=editorElement('scene'), depthCanvas=editorElement('depth');
+    drawFlashDemoTrajectory();
     for(const mode of ['2d','3d','depth']){
         const button=editorElement('view-'+mode);
         button.setAttribute('aria-pressed',String(view===mode));button.disabled=mode!=='2d'&&!flashEditor.displaySchema;
@@ -462,8 +511,8 @@ function drawFlashDemoMarks(){
     canvas.hidden=marks.hidden=view!=='2d';scene.hidden=view!=='3d';depthCanvas.hidden=view!=='depth';
     editorElement('scene-host').hidden=view!=='3d';
     editorElement('reset-view').hidden=view!=='3d';editorElement('depth-info').hidden=view!=='depth';
-    editorElement('outline').disabled=view!=='2d';
-    for(const id of ['surface','pose','rejected'])editorElement(id).disabled=view==='depth';
+    editorElement('outline').closest('label').hidden=view!=='2d';
+    for(const id of ['surface','pose','rejected'])editorElement(id).closest('label').hidden=view==='depth';
     if(marks.width!==canvas.width||marks.height!==canvas.height){marks.width=canvas.width;marks.height=canvas.height;}
     const host=editorElement('image-host').getBoundingClientRect();
     if(host.width && host.height && canvas.width && canvas.height){
@@ -562,7 +611,7 @@ async function stopFlashDemo(){
     editorElement('stop').disabled=true;
     try{
         if(flashEditor.recording){
-            editorStatus('Saving replay…');
+            editorStatus('Saving demo…');
             await editorRequest('/api/run/flash/editor/stop',{pid:flashEditor.recording.pid});
         }else{await stopFlashEditorPreview();editorStatus('Camera stopped.');}
     }catch(error){editorStatus(error.message);}
@@ -574,23 +623,27 @@ async function pollFlashDemo(){
         const data=await editorRequest('/api/run/flash/editor/recording'),status=data.run,own=data.recording;
         flashEditor.runActive=!!status.running;
         flashEditor.recording=own?.running?own:null;
+        const wasExecuting=flashEditor.execution?.running;
+        flashEditor.previewRunning=!!data.preview_running;
         flashEditor.execution=await editorRequest('/api/run/flash/editor/execution');
+        await refreshFlashDemoLibrary();
         const execution=flashEditor.execution;
         liveElement('panel').classList.toggle('flash-demo-execution',!!execution.running);
         if(editorElement('status').textContent==='Failed to fetch')editorStatus('Connected.');
-        editorElement('execution').hidden=!execution.running&&execution.returncode===undefined;
+        editorElement('execution').hidden=flashEditor.mode!=='live'||(!execution.running&&execution.returncode===undefined);
         const executionState=execution.state==='complete'?'path complete — check placement':execution.state;
         editorElement('execution').textContent=execution.running?
             `${execution.mode==='robot'?'Robot':'Test run · no motion'} · ${executionState} · ${Math.min((execution.keyframe||0)+1,execution.total||1)} / ${execution.total||'…'}`:
             (execution.returncode===0?'Run stopped.':execution.reason||'Run ended.');
-        editorElement('stop').disabled=!own?.running&&!flashEditor.previewHome;
+        if(wasExecuting&&!execution.running&&flashEditor.mode==='live')editorStatus('Rollout saved. Select it under Rollouts to inspect the run.');
+        editorElement('stop').disabled=!own?.running&&!data.preview_running&&!execution.running;
         for(const id of ['robot','teleop','setup-camera','fps','matching','matcher','depth-source','settings-save'])editorElement(id).disabled=!!status.running;
         flashEditor.settingsForm?.update();
         if(own?.running){flashEditor.mode='live';await showFlashDemoViewer();}
         else if(data.preview_running && flashEditor.visible && flashEditor.mode==='live' && !flashEditor.previewHome)mountFlashEditorPreview();
         if(own && !own.running && flashEditor.completedPid!==own.pid){
             flashEditor.completedPid=own.pid;restoreFlashDemoViewer();
-            if(own.returncode===0){await refreshFlashDemoLibrary();await openFlashDemoEntry(flashEditor.library.recent,true);}
+            if(own.returncode===0){await openFlashDemoEntry(flashEditor.library.demos.find(d=>d.id===own.id));}
             else editorStatus('Recording failed. Open Run to see the error.');
         }
         renderFlashEditor();
@@ -602,43 +655,116 @@ window.addEventListener('resize',drawFlashDemoMarks);
 async function runSelectedFlashDemo(){
     if(flashEditor.busy||!flashEditor.entry)return;
     if(flashEditor.dirty&&!(await saveFlashDemo()))return;
-    await prepareFlashDemoRun(flashEditor.entry.id);
+    await applyFlashDemo(flashEditor.entry.id);
 }
-async function prepareFlashDemoRun(id=editorElement('apply-demo').value){
-    if(!id){editorStatus('Choose a saved demo to apply.');return;}
-    flashEditor.busy=true;renderFlashEditor();editorStatus('Preparing keyframes…');
+async function applyFlashDemo(id=editorElement('apply-demo').value){
+    if(flashEditor.busy)return;
+    if(!id){editorStatus('Choose a demo to apply.');return;}
+    if(flashEditor.dirty&&!(await saveFlashDemo()))return;
+    flashEditor.busy=true;renderFlashEditor();editorStatus('Starting robot…');
     try{
-        const plan=await editorRequest('/api/run/flash/editor/prepare',{id});
+        await editorRequest('/api/run/flash/editor/run-demo',{id});
         flashEditor.player?.pause();flashEditor.mode='live';flashEditor.entry=null;renderFlashEditor();
         editorElement('apply-demo').value=id;
-        flashEditor.preparedPlan=plan;
-        editorElement('apply-title').textContent=plan.name;
-        editorElement('apply-description').textContent=`${plan.robot} · ${plan.keyframes.length} keyframes`;
-        editorElement('apply-keyframes').replaceChildren(...flashDemoKeyRanges(plan.keyframes).map(range=>{
-            const item=document.createElement('li');
-            const name=range.reference==='world'?'World':plan.objects[range.reference];
-            item.textContent=`${(range.start/plan.fps).toFixed(2)}–${(range.end/plan.fps).toFixed(2)} s · ${name} · ${range.end-range.start+1} keyframes`;
-            return item;
-        }));
-        editorElement('apply-error').textContent='';editorElement('apply-dialog').showModal();
-        editorStatus('Demo prepared.');
+        mountFlashEditorPreview();
+        editorStatus('Running robot. Rollout is being saved. Stop ends execution.');
+    }catch(error){editorStatus(error.message);}
+    finally{flashEditor.busy=false;renderFlashEditor();void pollFlashDemo();}
+}
+
+async function openFlashRollout(entry){
+    if(flashEditor.busy||flashEditor.recording)return;
+    if(flashEditor.dirty&&!(await saveFlashDemo()))return;
+    flashEditor.busy=true;
+    try{
+        if(!flashEditor.execution?.running)await stopFlashEditorPreview();
+        flashEditor.player?.pause();
+        flashEditor.mode='rollout';flashEditor.entry=entry;
+        editorElement('terminal').textContent='Loading output…';
+        mountFlashEditorPreview();renderFlashEditor();
+        flashLive.streamMode='processed';setFlashLiveView('2d');syncFlashLiveControls();
+        await selectFlashHistory(entry.id);
+        editorStatus(`Recorded ${new Date(entry.created_at*1000).toLocaleString()}`);
+        const results=await Promise.allSettled([
+            editorRequest(`/api/run/flash/editor/rollouts/${entry.id}/trajectory`),
+            editorRequest(`/api/run/flash/editor/rollouts/${entry.id}/log`)]);
+        if(!flashEditor.visible||!flashEditor.previewHome||flashEditor.mode!=='rollout'||flashEditor.entry?.id!==entry.id)return;
+        if(results[0].status==='fulfilled')setFlashLiveTrajectory(results[0].value);
+        else {liveElement('trajectory-tools').hidden=false;liveElement('trajectory').disabled=true;
+            liveElement('trajectory-tools').title=results[0].reason.message;}
+        const line=document.createElement('div');line.className='terminal-line';
+        line.textContent=results[1].status==='fulfilled'?results[1].value.text:results[1].reason.message;
+        editorElement('terminal').replaceChildren(line);
     }catch(error){editorStatus(error.message);}
     finally{flashEditor.busy=false;renderFlashEditor();}
 }
-async function startFlashDemoRun(simulate){
-    if(flashEditor.busy||!flashEditor.preparedPlan)return;
-    flashEditor.busy=true;
-    editorElement('simulate').disabled=editorElement('run-robot').disabled=true;
-    try{
-        await editorRequest('/api/run/flash/editor/apply',{plan:flashEditor.preparedPlan.plan,simulate});
-        editorElement('apply-dialog').close();flashEditor.mode='live';mountFlashEditorPreview();
-        editorStatus(simulate?'Testing with the live camera; robot motors are disconnected.':'Running demo. Stop ends execution.');
-    }catch(error){editorElement('apply-error').textContent=error.message;}
-    finally{
-        flashEditor.busy=false;editorElement('simulate').disabled=editorElement('run-robot').disabled=false;
-        void pollFlashDemo();
-    }
+
+function initFlashOutputDivider(){
+    const handle=editorElement('output-divider'),log=editorElement('run-log');
+    const panel=log.querySelector('.run-terminal-panel'),main=editorElement('main');
+    const storage='flash-editor-output-height';
+    let preferred=Number(localStorage.getItem(storage))||170;
+    panel.style.height=`${preferred}px`;
+    const resize=(height,persist=true)=>{
+        if(log.hidden||!log.open)return;
+        const viewer=liveElement('image').parentElement;
+        const maximum=Math.max(100,panel.clientHeight+viewer.clientHeight-120);
+        const value=Math.max(100,Math.min(height,maximum));
+        panel.style.height=`${value}px`;
+        handle.setAttribute('aria-valuemin','100');
+        handle.setAttribute('aria-valuemax',String(Math.round(maximum)));
+        handle.setAttribute('aria-valuenow',String(Math.round(value)));
+        if(persist){preferred=value;localStorage.setItem(storage,String(value));}
+    };
+    log.addEventListener('toggle',()=>{
+        handle.hidden=log.hidden||!log.open;
+        resize(preferred,false);
+    });
+    handle.addEventListener('pointerdown',event=>{
+        event.preventDefault();handle.setPointerCapture(event.pointerId);handle.classList.add('dragging');
+        const y=event.clientY,height=panel.clientHeight;
+        const move=e=>resize(height+y-e.clientY);
+        const finish=()=>{
+            handle.classList.remove('dragging');
+            handle.removeEventListener('pointermove',move);
+            handle.removeEventListener('pointerup',finish);handle.removeEventListener('pointercancel',finish);
+        };
+        handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',finish);handle.addEventListener('pointercancel',finish);
+    });
+    handle.addEventListener('keydown',event=>{
+        if(['ArrowUp','ArrowDown','Home','End'].includes(event.key)){
+            event.preventDefault();
+            resize(event.key==='Home'?100:event.key==='End'?Infinity:panel.clientHeight+(event.key==='ArrowUp'?20:-20));
+        }
+    });
+    new ResizeObserver(()=>resize(preferred,false)).observe(main);
 }
+
+document.addEventListener('DOMContentLoaded',()=>{
+    initFlashOutputDivider();
+    const handle=editorElement('library-divider'),section=editorElement('demo-section'),sidebar=editorElement('sidebar');
+    const resize=height=>{
+        const maximum=Math.max(100,sidebar.clientHeight-220),value=Math.max(100,Math.min(height,maximum));
+        section.style.flex=`0 0 ${value}px`;
+        handle.setAttribute('aria-valuemin','100');handle.setAttribute('aria-valuemax',String(Math.round(maximum)));
+        handle.setAttribute('aria-valuenow',String(Math.round(value)));
+        localStorage.setItem('flash-editor-demo-section-height',String(value));
+    };
+    const saved=Number(localStorage.getItem('flash-editor-demo-section-height'));
+    if(saved>0){section.style.flex=`0 0 ${saved}px`;handle.setAttribute('aria-valuemin','100');handle.setAttribute('aria-valuemax',String(Math.max(saved,100)));handle.setAttribute('aria-valuenow',String(saved));}
+    handle.addEventListener('pointerdown',event=>{
+        event.preventDefault();handle.setPointerCapture(event.pointerId);
+        const y=event.clientY,height=section.getBoundingClientRect().height;
+        const move=e=>resize(height+e.clientY-y);
+        const finish=()=>{handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',finish);handle.removeEventListener('pointercancel',finish);};
+        handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',finish);handle.addEventListener('pointercancel',finish);
+    });
+    handle.addEventListener('keydown',event=>{
+        if(['ArrowUp','ArrowDown'].includes(event.key)){
+            event.preventDefault();resize(section.getBoundingClientRect().height+(event.key==='ArrowUp'?-20:20));
+        }
+    });
+});
 
 async function trackFlashDemo(){
     if(!flashEditor.document||flashEditor.trackingPid)return;

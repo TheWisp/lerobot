@@ -191,7 +191,9 @@ async def test_editor_record_reaches_real_record_config(robot, teleop, tmp_path,
     monkeypatch.setattr(run, "_launch_subprocess", launch)
     monkeypatch.setattr(run, "_release_preview_cameras", AsyncMock())
     monkeypatch.setattr(run, "_ensure_no_active_process", lambda: None)
-    monkeypatch.setattr(run, "_active_process", SimpleNamespace(pid=42, returncode=None))
+    monkeypatch.setattr(
+        run, "_active_process", SimpleNamespace(pid=42, returncode=None, wait=AsyncMock(return_value=0))
+    )
     monkeypatch.setattr(flash_editor, "_record_process", None)
     monkeypatch.setattr(flash_editor, "_recording", None)
     response = await flash_editor.record(
@@ -243,8 +245,11 @@ def test_playback_defaults_to_keyframe_span_without_cutting_recording(gui_page, 
     page = gui_page
     page.get_by_role("button", name="FLASH", exact=True).click()
     page.get_by_role("button", name="Demo editor", exact=True).click()
-    page.locator("#flash-editor-recent").click()
+    page.locator("#flash-editor-demos button").first.click()
     page.wait_for_function("flashEditor.player?.state().lastPainted === 2")
+    expect(page.locator("#flash-editor-camera")).to_have_count(0)
+    expect(page.locator("#flash-editor-resolution")).to_have_text("96 × 64")
+    expect(page.locator("#flash-editor-resolution")).to_be_visible()
     expect(page.locator("#flash-editor-position")).to_have_attribute("min", "2")
     expect(page.locator("#flash-editor-position")).to_have_attribute("max", "7")
     expect(page.locator("#flash-editor-full-recording")).not_to_be_checked()
@@ -362,7 +367,7 @@ def test_editor_ui_edits_real_episode(gui_page, episode):
     expect(page.locator("#flash-editor-geometry")).to_contain_text("camera-to-base calibration")
     page.locator("#flash-editor-teleop").select_option("scripted_bimanual_ee")
     page.locator("#flash-editor-settings-save").click()
-    page.locator("#flash-editor-recent").click()
+    page.locator("#flash-editor-demos button").first.click()
     expect(page.locator("#flash-editor-play")).to_be_enabled(timeout=30_000)
     page.wait_for_function("document.getElementById('flash-editor-image').width === 96", timeout=30_000)
     page.get_by_label("Demo object name").fill("cube")
@@ -672,10 +677,11 @@ async def test_last_replay_and_saved_demos_survive_new_recording_and_restart(tmp
     completed("two")
     actual = await flash_editor.library()
     assert actual["recent"]["id"] == "two"
-    assert [d["name"] for d in actual["demos"]] == ["Pick cube"]
+    assert [d["id"] for d in actual["demos"]] == ["two", "one"]
+    assert actual["demos"][1]["name"] == "Pick cube"
     monkeypatch.setattr(flash_editor, "_recording", None)
     monkeypatch.setattr(flash_editor, "_record_process", None)
     assert await flash_editor.library() == actual
     renamed = await flash_editor.keep_demo(flash_editor.KeepDemo(id="one", name="Place cube"))
-    assert len(renamed["demos"]) == 1
-    assert renamed["demos"][0]["name"] == "Place cube"
+    assert len(renamed["demos"]) == 2
+    assert renamed["demos"][1]["name"] == "Place cube"

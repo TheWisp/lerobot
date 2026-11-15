@@ -19,6 +19,29 @@ class CartesianModel:
     upper_deg: tuple[float, ...]
     model_id: str = ""
 
+    @classmethod
+    def from_description(cls, description: dict, geometry: dict) -> "CartesianModel":
+        """Rebuild a recorded model without hardware or today's profile/calibration files."""
+        model_id = description["model_id"]
+        if model_id not in {"so107:left:measured-tool", "so107:right:measured-tool"}:
+            raise ValueError(f"Recorded Cartesian model is not supported: {model_id}")
+        from .kinematics import SelectedJointKinematics
+        from .so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
+        from .so107_description.joint_alignment import MOTOR_NAMES
+
+        names = tuple(name.removesuffix(".pos") for name in description["joint_names"])
+        kinematics = make_calibrated_so107_kinematics(
+            geometry,
+            arm=model_id.split(":")[1],
+            joint_limits_deg=dict(
+                zip(names, zip(description["lower_deg"], description["upper_deg"], strict=True), strict=True)
+            ),
+        )
+        return cls(
+            SelectedJointKinematics(kinematics, MOTOR_NAMES, names, {"gripper": 0.0}),
+            **{key: tuple(value) if isinstance(value, list) else value for key, value in description.items()},
+        )
+
     def description(self):
         return {
             key: list(getattr(self, key))

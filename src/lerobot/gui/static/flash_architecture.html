@@ -1441,6 +1441,34 @@
           The robot's <code>send_action</code> API does not receive Cartesian targets.
           The current IK adapter can return a joint-clipped approximation; issuing its
           actions does not prove that the tool reached the Cartesian goal.</p>
+        <p>Record with teleop, then Stop: the finished recording enters Demos automatically and can
+          be renamed. Apply to robot starts execution directly and creates a separate, persistent
+          Rollout with a snapshot of the demo, reference geometry, robot profile and pipeline settings.
+          Demos and Rollouts occupy independently scrollable sections separated by a movable divider.
+          The robot's calibrated camera is selected in Demo Settings; the editor does not offer a
+          second camera selector. Demo replay shows the saved episode's image resolution, and rollout
+          replay shows the resolution of the captured frames.</p>
+        <p>Each rollout keeps an append-only event journal: camera capture, processed depth and masks,
+          full perception results, operator controls, planning requests and published action revisions,
+          every motor tick, requested and accepted robot commands, measured readback, and lifecycle
+          transitions including failure reasons. Events share a monotonic clock and preserve source
+          frame IDs. Reset motion uses the same recorded robot interface as demo execution.</p>
+        <p>Rollout RGB-D and processed evidence use the live history format without its rolling expiry.
+          Camera capture starts before motor execution; writers drain on Stop. Queue overflow or a
+          write failure fails the recording explicitly. Opening a rollout reuses the Raw, Processed,
+          2D, 3D and Depth replay views. The Actions overlay fits a shape-preserving curve through
+          dispatched Cartesian targets. Each queued demo action carries its adapted tool pose before IK
+          and motor compensation; the dispatch receipt retains that pose even after replanning. Older
+          journals recover it from the dispatched revision’s reference transform and the saved demo.
+          Reset and approach are joint-space transitions, visualized from their requested joints before
+          compensation. Merely planned or replaced actions do not appear. Every waypoint has a signed
+          time offset from playback; selecting it seeks the replay. Demos use the same Actions overlay
+          for the measured tool poses that adaptation uses, reconstructed from observation.state with
+          the saved robot model and camera calibration. These paths describe targets and demonstrated
+          poses, not proof of physical task success. Camera-only history has no Actions control. Viewer controls sit above the image and the
+          shared playback bar below it in Live camera, demo editing and rollouts. The same camera projection is used in 2D and the orbitable 3D view. The Output field
+          uses the shared Run terminal and Copy action, with a draggable divider; new runs persist stdout and stderr. Older runs
+          expose their recorded execution messages. Saved entries show recording times without task verdicts.</p>
       </section>
       <section class="panel" id="frame-evidence">
         <h2>5. Inspect the same result from either source</h2>
@@ -1497,7 +1525,7 @@
         <a
           href="https://github.com/TheWisp/lerobot/blob/research/flash-tracker-restart/benchmarks/flash_experiment_inputs.py"
           >recorded RGB-D and mask loading</a
-        >. Robot control is outside this diagram.
+        >. Demo execution and rollout recording are described above.
       </footer>
     </main>
     <script>

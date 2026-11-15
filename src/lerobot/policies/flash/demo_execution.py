@@ -297,6 +297,7 @@ def _reference_for_range(plan, first, observations):
         "reference_frame": first["reference_frame"],
         "status": observed["status"],
         "source_time_s": observed.get("source_time_s"),
+        "source_frame_id": observed.get("source_frame_id"),
         "available_time_s": observed.get("available_time_s"),
         "base_from_reference": reference.tolist(),
     }
@@ -358,6 +359,7 @@ def plan_demo_range(plan, model, index, state, observations, now, *, fps=30.0):
                 action,
                 f"demo:{key['frame']}",
                 interval_complete=key is range_keys[-1],
+                tool_target=tuple(tuple(float(value) for value in row) for row in target),
             )
         )
     return PlannedDemoRange(

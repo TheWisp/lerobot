@@ -85,7 +85,9 @@ async def test_prepare_apply_pins_real_episode_and_uses_shared_camera_worker(pre
 
     monkeypatch.setattr(flash_tracking, "start_worker", start)
     result = await flash_editor.apply_demo(flash_editor.ApplyDemo(plan=result["plan"]))
-    assert result == {"pid": 456, "mode": "simulation"}
+    assert result["pid"] == 456
+    assert result["mode"] == "simulation"
+    assert (flash_editor.EDITOR_DIR / "rollouts" / result["rollout"] / "plan.json").exists()
     request, kwargs = calls[0]
     assert request.serial == "test"
     assert request.pipeline_settings == flash_editor.EditorSettings().pipeline_settings
@@ -172,6 +174,7 @@ async def test_apply_profile_reaches_worker_and_resets_before_waiting_for_object
     monkeypatch.setattr(robot_api, "_make_robot_from_profile", lambda _: motor_robot)
 
     def camera_run(_directory, _config, **_kwargs):
+        _kwargs["on_camera_ready"]()
         deadline = perf_counter() + 3
         while perf_counter() < deadline:
             path = directory / "execution.json"
@@ -187,22 +190,32 @@ async def test_apply_profile_reaches_worker_and_resets_before_waiting_for_object
     worker.main()
     assert len(motor_robot.sent) == 150
     assert motor_robot.sent[-1] == rest
+    events = [json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()]
+    requested = [e["requested"] for e in events if e["kind"] == "robot.command_requested"]
+    accepted = [e["accepted"] for e in events if e["kind"] == "robot.command_accepted"]
+    assert requested == motor_robot.sent == accepted
+    assert events[-1]["kind"] == "run.finished"
     motor_robot.disconnect.assert_called_once()
     assert (await flash_editor.execution())["state"] == "stopped"
 
 
 @pytest.mark.parametrize("entry_point", ["live", "demo"])
-def test_apply_dialog_sends_explicit_simulation_and_shows_execution(
+def test_apply_starts_robot_directly_and_shows_execution(
     gui_page, prepared, monkeypatch, tmp_path, entry_point
 ):
+    profile_path = robot_api.ROBOT_PROFILES_DIR / "test.json"
+    profile = json.loads(profile_path.read_text())
+    profile["rest_position"] = {"joint.pos": 0}
+    atomic_json(profile_path, profile)
+
     async def start(request, **kwargs):
-        assert kwargs["extra"]["demo_execution"]["simulate"] is True
+        assert kwargs["extra"]["demo_execution"]["simulate"] is False
         monkeypatch.setattr(run, "_active_process", SimpleNamespace(pid=456, returncode=None))
         monkeypatch.setattr(flash_tracking, "_directory", tmp_path)
         atomic_json(
             tmp_path / "execution.json",
             {
-                "mode": "simulation",
+                "mode": "robot",
                 "state": "resetting to rest position",
                 "keyframe": 0,
                 "total": 3,
@@ -224,19 +237,17 @@ def test_apply_dialog_sends_explicit_simulation_and_shows_execution(
     else:
         page.locator("#flash-editor-apply-demo").select_option("fixture")
         page.locator("#flash-editor-apply").click()
-    expect(page.locator("#flash-editor-apply-keyframes li")).to_have_count(3)
-    expect(page.locator("#flash-editor-run-robot")).to_be_visible()
-    page.locator("#flash-editor-simulate").click()
-    expect(page.locator("#flash-editor-execution")).to_contain_text("Test run · no motion")
+    expect(page.locator("#flash-editor-apply-dialog")).to_have_count(0)
+    expect(page.locator("#flash-editor-rollouts button")).to_have_count(1)
     expect(page.locator("#flash-editor-execution")).to_contain_text("resetting to rest position")
     atomic_json(
         tmp_path / "execution.json",
-        {"mode": "simulation", "state": "waiting: object_1 needs a pose", "keyframe": 0, "total": 3},
+        {"mode": "robot", "state": "waiting: object_1 needs a pose", "keyframe": 0, "total": 3},
     )
     expect(page.locator("#flash-editor-execution")).to_contain_text("waiting: object_1")
     atomic_json(
         tmp_path / "execution.json",
-        {"mode": "simulation", "state": "complete", "keyframe": 3, "total": 3},
+        {"mode": "robot", "state": "complete", "keyframe": 3, "total": 3},
     )
     expect(page.locator("#flash-editor-execution")).to_contain_text("path complete — check placement")
     assert not errors

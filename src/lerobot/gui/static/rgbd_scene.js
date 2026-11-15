@@ -153,7 +153,7 @@ export function createRgbdScene(canvas) {
     scene.add(cloud.points);
     const layers = new Map();
     const labels = [];
-    let calibration = null, aligned = true, bounds = new THREE.Box3(), sceneDepth = 1;
+    let calibration = null, aligned = true, bounds = new THREE.Box3(), sceneDepth = 1, overlayRenderer = null;
     let options = {scene: true, estimate: true, labelled: true, axes: true};
     function draw() {
         const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -182,6 +182,7 @@ export function createRgbdScene(canvas) {
             if (!label.element.hidden)
                 label.element.style.transform = `translate(${Math.round(x + 8)}px,${Math.round(y + label.offset)}px)`;
         }
+        overlayRenderer?.();
     }
     function reset() {
         aligned = true;
@@ -282,6 +283,13 @@ export function createRgbdScene(canvas) {
     const resize = new ResizeObserver(draw); resize.observe(canvas);
     reset();
     return {update, draw, reset, focus, setOptions,
+        setOverlayRenderer(callback) { overlayRenderer = callback; },
+        project(points) {
+            return points.map(([x,y,z]) => {
+                const p=new THREE.Vector3(x,-y,-z).project(camera);
+                return p.z < -1 || p.z > 1 ? null : [(p.x+1)*canvas.clientWidth/2,(1-p.y)*canvas.clientHeight/2];
+            });
+        },
         view: () => ({position: camera.position.toArray(), target: controls.target.toArray(), aligned}),
         dispose() {
             ruler.remove();

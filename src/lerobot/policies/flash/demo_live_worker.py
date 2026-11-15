@@ -22,6 +22,7 @@ from .execution import ActionQueue, MotorLoop, TimedAction
 from .geometry import transform
 from .live_surface_session import LIVE_METHOD
 from .live_surface_worker import run
+from .rollout_recording import RecordedRobot, RunJournal, finish_run
 
 
 class ExecutionLoop:
@@ -31,8 +32,9 @@ class ExecutionLoop:
     dispatch never waits for IK, camera processing, or a new target.
     """
 
-    def __init__(self, plan, robot, directory, stop, *, simulate, rest_position=None):
+    def __init__(self, plan, robot, directory, stop, *, simulate, rest_position=None, journal=None):
         self.robot, self.directory, self.stop_event = robot, directory, stop
+        self.journal = journal
         self.simulate = simulate
         self.rest_position = dict(rest_position or {})
         self.model = robot.cartesian_model()
@@ -69,6 +71,16 @@ class ExecutionLoop:
         self._motor_trace_total = 0
         self._frame_to_index = {key["frame"]: i for i, key in enumerate(plan["keyframes"])}
 
+    @property
+    def status(self):
+        return self._status
+
+    @status.setter
+    def status(self, value):
+        if value != getattr(self, "_status", None) and self.journal:
+            self.journal.emit("execution.state", state=value, keyframe=self.index)
+        self._status = value
+
     class _SimulationRobot:
         def __init__(self, state):
             self.state = dict(state)
@@ -91,6 +103,7 @@ class ExecutionLoop:
                 **object_evidence(value, LIVE_METHOD),
                 "source_time_s": frame.source_time_s,
                 "available_time_s": available,
+                "source_frame_id": frame.frame_id,
             }
             for role, value in row["objects"].items()
         }
@@ -99,6 +112,8 @@ class ExecutionLoop:
 
     def start(self):
         io = self._SimulationRobot(self.state) if self.simulate else self.robot
+        if self.journal:
+            io = RecordedRobot(io, self.journal)
         self._motor = MotorLoop(
             io,
             self._queue,
@@ -110,6 +125,8 @@ class ExecutionLoop:
         self.thread.start()
 
     def _record_motor_tick(self, tick):
+        if self.journal:
+            self.journal.emit("control.tick", tick=tick)
         self._motor_trace_total += 1
         self._motor_trace.append(
             {
@@ -169,6 +186,10 @@ class ExecutionLoop:
             observations,
             time.perf_counter(),
         )
+        if self.journal:
+            self.journal.emit(
+                "plan.requested", keyframe=self.index, state=dict(self.state), observations=observations
+            )
         if self._planned is None:
             self.status = "planning"
 
@@ -212,10 +233,19 @@ class ExecutionLoop:
                 ]
             actions = (*bridge, *remaining)
         first_tick = self._motor.metrics.ticks
-        self._queue.publish(
-            self._revision,
-            [replace(action, tick=first_tick + offset) for offset, action in enumerate(actions)],
-        )
+        published = [replace(action, tick=first_tick + offset) for offset, action in enumerate(actions)]
+        self._queue.publish(self._revision, published)
+        if self.journal:
+            self.journal.emit(
+                "plan.published",
+                revision=self._revision,
+                first_tick=first_tick,
+                keyframe=self.index,
+                evidence=planned.evidence,
+                target=planned.target,
+                actions=published,
+                replaces_revision=self._revision - 1,
+            )
         self._revision += 1
         if self._range_start_index is None:
             self._range_start_index = planned.start_index
@@ -282,6 +312,8 @@ class ExecutionLoop:
                 ),
             }
         )
+        if self.journal:
+            self.journal.emit("execution.range_finished", **self._completed_ranges[-1], observed=self.state)
         self._planned = None
         self._range_start_index = None
         self._awaiting_final_read = False
@@ -344,8 +376,8 @@ class ExecutionLoop:
                     last_status_write = time.perf_counter()
         except Exception as exc:
             self.error = exc
-            self.status = "failed"
             self.stop_event.set()
+            self._status = "failed"
         finally:
             self._planner.shutdown(wait=False, cancel_futures=True)
             try:
@@ -353,7 +385,7 @@ class ExecutionLoop:
                     self.robot.disconnect()
             finally:
                 if self.error is None:
-                    self.status = "stopped"
+                    self._status = "stopped"
                 # Startup can fail before a valid joint read. Publishing the
                 # terminal state must not require FK or delay motor cleanup.
                 atomic_json(
@@ -379,6 +411,8 @@ class ExecutionLoop:
         self.stop_event.set()
         if self.thread:
             self.thread.join(timeout=3)
+            if self.thread.is_alive():
+                raise RuntimeError("Motor worker did not finish; rollout is incomplete")
         if self.thread is None and not self.simulate and self.robot.is_connected:
             self.robot.disconnect()
 
@@ -387,23 +421,12 @@ def main():
     from lerobot.gui.api.robot import _make_robot_from_profile
 
     directory = Path(sys.argv[1])
-    config = json.loads((directory / "config.json").read_text())
-    setup = config["demo_execution"]
-    folder = Path(setup["plan_directory"])
-    plan = json.loads((folder / "plan.json").read_text())
-    load_reference(folder / "reference.npz", [obj["id"] for obj in plan["document"]["objects"]])
-    robot = _make_robot_from_profile(setup["robot"])
     stop = Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
-    motor = ExecutionLoop(
-        plan,
-        robot,
-        directory,
-        stop,
-        simulate=setup["simulate"],
-        rest_position=setup["robot"].get("rest_position"),
-    )
+    journal = RunJournal(directory)
+    motor = None
+    failure = None
 
     def session_factory(settings, source, model, kernels, pool):
         objects = plan["document"]["objects"]
@@ -421,12 +444,76 @@ def main():
         )
 
     try:
-        motor.start()
-        run(directory, config, session_factory=session_factory, on_observation=motor.observe, stop_event=stop)
+        config = json.loads((directory / "config.json").read_text())
+        setup = config["demo_execution"]
+        journal.emit(
+            "run.started", mode="simulation" if setup["simulate"] else "robot", wall_time_s=time.time()
+        )
+        folder = Path(setup["plan_directory"])
+        plan = json.loads((folder / "plan.json").read_text())
+        load_reference(folder / "reference.npz", [obj["id"] for obj in plan["document"]["objects"]])
+        robot = _make_robot_from_profile(setup["robot"])
+        motor = ExecutionLoop(
+            plan,
+            robot,
+            directory,
+            stop,
+            simulate=setup["simulate"],
+            rest_position=setup["robot"].get("rest_position"),
+            journal=journal,
+        )
+        run(
+            directory,
+            config,
+            session_factory=session_factory,
+            on_observation=motor.observe,
+            stop_event=stop,
+            journal=journal,
+            on_camera_ready=motor.start,
+        )
         if motor.error:
             raise motor.error
+    except BaseException as exc:
+        failure = exc
+        raise
     finally:
-        motor.close()
+        try:
+            if motor:
+                motor.close()
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            state = (
+                "failed"
+                if failure
+                else "complete"
+                if motor and motor.index == len(plan["keyframes"])
+                else "stopped"
+            )
+            try:
+                try:
+                    journal.emit(
+                        "run.finished",
+                        state=state,
+                        reason=str(failure) if failure else None,
+                        commands=motor.commands_sent if motor else 0,
+                        keyframe=motor.index if motor else 0,
+                    )
+                finally:
+                    journal.close()
+            except BaseException as exc:
+                failure = exc
+                state = "failed"
+                raise
+            finally:
+                finish_run(
+                    directory,
+                    state=state,
+                    reason=str(failure) if failure else None,
+                    commands=motor.commands_sent if motor else 0,
+                    keyframe=motor.index if motor else 0,
+                )
 
 
 if __name__ == "__main__":
