@@ -6,6 +6,7 @@ responsible for persisting / loading the rest-position dict.
 
 import logging
 import time
+from threading import Event
 
 from lerobot.robots.robot import Robot
 from lerobot.utils.robot_utils import precise_sleep
@@ -45,6 +46,8 @@ def move_to_rest_position(
     rest_position: dict[str, float],
     duration_s: float = 3.0,
     steps_per_second: int = 50,
+    *,
+    stop_event: Event | None = None,
 ) -> None:
     """Smoothly interpolate the robot from its current position to *rest_position*.
 
@@ -61,9 +64,13 @@ def move_to_rest_position(
         rest_position: Target ``{motor.pos: float}`` dict.
         duration_s: Total movement time in seconds (default 3).
         steps_per_second: Interpolation frequency (default 50 Hz).
+        stop_event: Optional cancellation signal. Stops issuing waypoints and
+            interrupts the wait between them; does not command the final pose.
     """
     if not rest_position:
         raise ValueError("rest_position is empty")
+    if stop_event is not None and stop_event.is_set():
+        return
 
     # Read current positions
     obs = robot.get_observation()
@@ -84,6 +91,8 @@ def move_to_rest_position(
     )
 
     for step in range(1, num_steps + 1):
+        if stop_event is not None and stop_event.is_set():
+            return
         start_t = time.perf_counter()
         alpha = step / num_steps  # ramps 1/N … 1.0
 
@@ -92,6 +101,10 @@ def move_to_rest_position(
         robot.send_action(action)
 
         elapsed = time.perf_counter() - start_t
-        precise_sleep(max(dt - elapsed, 0.0))
+        delay = max(dt - elapsed, 0.0)
+        if stop_event is None:
+            precise_sleep(delay)
+        elif stop_event.wait(delay):
+            return
 
     logger.info("Rest-position command sequence complete")

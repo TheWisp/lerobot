@@ -1,0 +1,82 @@
+{
+  "transitions": [
+    {
+      "elapsed_s": 8.187909247819334,
+      "state": "starting",
+      "keyframe": null,
+      "commands": null
+    },
+    {
+      "elapsed_s": 12.859778268961236,
+      "state": "connecting",
+      "keyframe": 0,
+      "commands": 0
+    },
+    {
+      "elapsed_s": 13.063791865017265,
+      "state": "resetting to rest position",
+      "keyframe": 0,
+      "commands": 0
+    },
+    {
+      "elapsed_s": 16.636785755865276,
+      "state": "planning",
+      "keyframe": 0,
+      "commands": 0
+    },
+    {
+      "elapsed_s": 16.94180271588266,
+      "state": "moving",
+      "keyframe": 0,
+      "commands": 7
+    },
+    {
+      "elapsed_s": 23.17291769501753,
+      "state": "ready",
+      "keyframe": 132,
+      "commands": 193
+    },
+    {
+      "elapsed_s": 23.477862421888858,
+      "state": "waiting: object_2 needs a pose",
+      "keyframe": 132,
+      "commands": 193
+    },
+    {
+      "elapsed_s": 79.57350101089105,
+      "state": "stopped",
+      "keyframe": 132,
+      "commands": 193
+    }
+  ],
+  "first_motor_tick": 0,
+  "post_reset_joint_error_deg": {
+    "shoulder_pan.pos": 0.1996155659521952,
+    "wrist_roll.pos": 0.39072039072039644,
+    "wrist_flex.pos": -0.31276495525200687,
+    "gripper.pos": 0.13717421124827922,
+    "forearm_roll.pos": -0.42102475837414977,
+    "elbow_flex.pos": -0.2637362637362628,
+    "shoulder_lift.pos": -0.21850669085085883
+  },
+  "motor_ticks_total": 1887,
+  "motor_ticks_retained": 1887,
+  "final": {
+    "mode": "robot",
+    "state": "stopped",
+    "reason": null,
+    "keyframe": 132,
+    "total": 343,
+    "commands": 193
+  },
+  "verification": {
+    "focused_tests": 56,
+    "browser_reset_status_tests": 2,
+    "shutdown_regression_test": 1,
+    "mutations_detected": [
+      "omit reset",
+      "ignore stop during reset",
+      "drop rest profile before worker"
+    ]
+  }
+}

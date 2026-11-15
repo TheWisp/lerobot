@@ -674,6 +674,8 @@ async def apply_demo(request: ApplyDemo):
         profile, _ = _profiles(setup, require_teleop=False)
         if setup.model_dump(mode="json") != source["setup"] or profile != source["profile"]:
             raise ValueError("Setup changed; prepare the demo again")
+        if not request.simulate and not profile.get("rest_position"):
+            raise ValueError("Save a rest position in the robot profile before running a demo")
         entry = source["entry"]
         dataset = LeRobotDataset(Path(entry["root"]).name, root=entry["root"])
         document, _ = load_document(dataset, entry["episode"])

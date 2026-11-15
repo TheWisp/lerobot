@@ -9,6 +9,7 @@ from concurrent.futures import Future
 from dataclasses import replace
 from threading import Event
 from time import perf_counter, sleep
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
@@ -115,6 +116,168 @@ def evidence(pose=None, status="observed_candidate", source=1.0, available=1.0):
             "available_time_s": available,
         }
     }
+
+
+@pytest.fixture
+def motor_robot(robot):
+    """Real robot geometry/IK, synthetic motor boundary with readback lag."""
+    state = ready_state(robot.cartesian_model())
+    state[robot.cartesian_model().joint_names[0]] += 10
+    io = SimpleNamespace(
+        geometry=robot.geometry,
+        cartesian_model=robot.cartesian_model,
+        action_features=robot.action_features,
+        is_connected=False,
+        state=state,
+        sent=[],
+    )
+    io.connect = Mock(side_effect=lambda **_: setattr(io, "is_connected", True))
+    io.disconnect = Mock(side_effect=lambda: setattr(io, "is_connected", False))
+    io.get_state_observation = lambda: dict(io.state)
+    io.get_observation = io.get_state_observation
+
+    def send(action):
+        io.sent.append(dict(action))
+        # Deliberately imperfect arrival: subsequent planning must use readback.
+        io.state.update({name: value + 0.01 for name, value in action.items()})
+        return dict(action)
+
+    io.send_action = send
+    return io
+
+
+def test_every_robot_run_resets_before_planning_from_readback(motor_robot, tmp_path, monkeypatch):
+    from lerobot.policies.flash import demo_live_worker as worker
+
+    plan = plan_for(motor_robot, reference="world")
+    rest = ready_state(motor_robot.cartesian_model())
+    original_plan = worker.plan_demo_range
+    planning_states = []
+    reset_states = []
+
+    def plan_from_readback(*args):
+        planning_states.append(dict(args[3]))
+        reset_states.append(list(motor_robot.sent))
+        return original_plan(*args)
+
+    monkeypatch.setattr(worker, "plan_demo_range", plan_from_readback)
+    for attempt in range(2):
+        motor_robot.sent.clear()
+        motor_robot.state[next(iter(rest))] += 5
+        initial = dict(motor_robot.state)
+        stop = Event()
+        monkeypatch.setattr(stop, "wait", lambda _, stop=stop: stop.is_set())
+        loop = ExecutionLoop(
+            plan, motor_robot, tmp_path / str(attempt), stop, simulate=False, rest_position=rest
+        )
+        send = motor_robot.send_action
+
+        def check_reset_status(action, loop=loop, send=send):
+            if not motor_robot.sent:
+                status = json.loads((loop.directory / "execution.json").read_text())
+                assert status["state"] == "resetting to rest position"
+                assert status["commands"] == 0
+            return send(action)
+
+        monkeypatch.setattr(motor_robot, "send_action", check_reset_status)
+        try:
+            loop.start()
+            deadline = perf_counter() + 5
+            while loop.status not in {"complete", "failed"} and perf_counter() < deadline:
+                sleep(0.01)
+            assert loop.status == "complete", loop.error
+            assert loop.commands_sent > 0
+        finally:
+            loop.close()
+            monkeypatch.setattr(motor_robot, "send_action", send)
+        reset = reset_states[-1]
+        assert len(reset) == 150
+        assert reset[-1] == rest
+        assert reset[0] != initial and reset[0] != rest
+        assert planning_states[-1] == {name: value + 0.01 for name, value in rest.items()}
+        assert not motor_robot.is_connected
+    assert len(planning_states) == 2
+    assert motor_robot.connect.call_count == motor_robot.disconnect.call_count == 2
+
+
+@pytest.mark.parametrize("failure", ["stop", "write", "read", "missing", "unknown", "already_stopped"])
+def test_interrupted_or_invalid_reset_never_dispatches_demo(motor_robot, tmp_path, monkeypatch, failure):
+    rest = ready_state(motor_robot.cartesian_model())
+    stop = Event()
+    monkeypatch.setattr(stop, "wait", lambda _: stop.is_set())
+    if failure == "missing":
+        rest = {}
+    elif failure == "unknown":
+        rest["unknown.pos"] = 0
+    elif failure == "already_stopped":
+        stop.set()
+    elif failure == "read":
+        monkeypatch.setattr(motor_robot, "get_state_observation", lambda: {})
+    send = motor_robot.send_action
+
+    def interrupt(action):
+        if failure == "write":
+            raise RuntimeError("motor write failed")
+        result = send(action)
+        if failure == "stop" and len(motor_robot.sent) == 3:
+            stop.set()
+        return result
+
+    monkeypatch.setattr(motor_robot, "send_action", interrupt)
+    loop = ExecutionLoop(
+        plan_for(motor_robot, reference="world"),
+        motor_robot,
+        tmp_path,
+        stop,
+        simulate=False,
+        rest_position=rest,
+    )
+    try:
+        loop.start()
+        loop.thread.join(2)
+        assert not loop.thread.is_alive()
+    finally:
+        loop.close()
+    assert loop.commands_sent == 0
+    assert loop.index == 0
+    assert len(motor_robot.sent) == (3 if failure == "stop" else 0)
+    assert not motor_robot.is_connected
+    status = json.loads((tmp_path / "execution.json").read_text())
+    assert status["state"] == ("stopped" if failure in {"stop", "already_stopped"} else "failed")
+    if failure in {"missing", "already_stopped"}:
+        motor_robot.connect.assert_not_called()
+    else:
+        motor_robot.disconnect.assert_called_once()
+
+
+def test_saved_rest_is_simulated_without_physical_access(robot, tmp_path, monkeypatch):
+    from lerobot.policies.flash import demo_live_worker as worker
+
+    plan = plan_for(robot, reference="world")
+    rest = ready_state(robot.cartesian_model())
+    rest[robot.cartesian_model().joint_names[0]] += 5
+    stop = Event()
+    monkeypatch.setattr(stop, "wait", lambda _: stop.is_set())
+    planned_from = []
+    original_plan = worker.plan_demo_range
+
+    def plan_after_reset(*args):
+        planned_from.append(dict(args[3]))
+        return original_plan(*args)
+
+    monkeypatch.setattr(worker, "plan_demo_range", plan_after_reset)
+    loop = ExecutionLoop(plan, robot, tmp_path, stop, simulate=True, rest_position=rest)
+    try:
+        loop.start()
+        deadline = perf_counter() + 5
+        while loop.status not in {"complete", "failed"} and perf_counter() < deadline:
+            sleep(0.01)
+        assert loop.status == "complete", loop.error
+    finally:
+        loop.close()
+    assert planned_from == [rest]
+    robot.connect.assert_not_called()
+    robot.send_action.assert_not_called()
 
 
 def test_live_moved_reference_retargets_real_ik_without_connecting(robot, tmp_path):
@@ -590,11 +753,12 @@ def test_range_finishes_through_occlusion_then_waits_for_new_reference(robot, tm
     robot.send_action.assert_not_called()
 
 
-def test_motor_disconnect_is_independent_of_perception_shutdown(robot, tmp_path):
+def test_motor_disconnect_is_independent_of_perception_shutdown(robot, tmp_path, monkeypatch):
     """The real dispatch branch owns a fake I/O boundary, never a serial port."""
 
     class IO:
         geometry = robot.geometry
+        action_features = robot.action_features
 
         def __init__(self):
             self.is_connected = False
@@ -613,6 +777,9 @@ def test_motor_disconnect_is_independent_of_perception_shutdown(robot, tmp_path)
         def get_state_observation(self):
             return self.state.copy()
 
+        def get_observation(self):
+            return self.get_state_observation()
+
         def send_action(self, action):
             self.calls += 1
             self.state.update(action)
@@ -624,10 +791,22 @@ def test_motor_disconnect_is_independent_of_perception_shutdown(robot, tmp_path)
 
     boundary = IO()
     stop = Event()
-    loop = ExecutionLoop(plan_for(robot, reference="world"), boundary, tmp_path, stop, simulate=False)
+    monkeypatch.setattr(stop, "wait", lambda _: stop.is_set())
+    loop = ExecutionLoop(
+        plan_for(robot, reference="world"),
+        boundary,
+        tmp_path,
+        stop,
+        simulate=False,
+        rest_position=ready_state(robot.cartesian_model()),
+    )
     try:
         loop.start()
         assert boundary.sent.wait(2)
+        deadline = perf_counter() + 2
+        while loop.commands_sent == 0 and perf_counter() < deadline:
+            sleep(0.01)
+        assert loop.commands_sent > 0, loop.error
         stop.set()  # Same event as camera worker SIGINT/EOF; no need to wait for history flush.
         assert boundary.disconnected.wait(1)
         commands = boundary.calls

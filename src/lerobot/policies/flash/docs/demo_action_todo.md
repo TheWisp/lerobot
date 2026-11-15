@@ -6,12 +6,6 @@ keyframes, but the gamepad ended beside the ring. Completion of the command
 queue is not evidence of task success. The [run record](../../../../../docs/proofs/flash-demo-editor/real-run-20261115/ui-run/README.md)
 contains the final image and compressed plan and motor trace.
 
-- [ ] **Return the robot to its saved rest position.** The action worker now
-      connects, reads current joints, sends the demo path, and disconnects. It does
-      not reset the arm before or after a run. Use the existing robot rest-position
-      capability to make reset available in the demo workflow, including after a
-      stopped or completed run. Make its state visible; do not call a disconnect a
-      reset.
 - [ ] **Get one verified physical placement.** The last UI run ended beside the
       ring. Inspect the gamepad, ring, gripper, and commanded tool path together and
       verify the object actually rests on the ring before calling the action path

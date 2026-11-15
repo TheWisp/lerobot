@@ -29,6 +29,15 @@ it does not establish that the tool reached the goal or the manipulation succeed
 
 The remaining demo-action work is tracked in [demo action follow-ups](docs/demo_action_todo.md).
 
+Each demo action run first moves to the rest position saved in the selected robot
+profile, using the shared three-second rest-position ramp. The live status shows
+`resetting to rest position`; Stop interrupts the ramp and prevents demo dispatch.
+Planning starts from joint readback after the ramp. Robot runs require a saved
+rest position. Test runs simulate the same reset when one is saved, without
+connecting to robot motors. Stopping or completing a run does not reset the arm;
+an explicit return-to-rest action after a run is tracked in
+[#273](https://github.com/TheWisp/lerobot/issues/273).
+
 Start with:
 
 - [Pipeline and limitations](docs/tracking_pipeline.md): data flow, geometry,

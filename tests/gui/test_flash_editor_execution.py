@@ -2,6 +2,8 @@
 
 import json
 import shutil
+from threading import Event
+from time import perf_counter, sleep
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,7 +13,12 @@ from playwright.sync_api import expect
 
 from lerobot.gui.api import flash_editor, flash_tracking, robot as robot_api, run
 from lerobot.policies.flash.demo_document import atomic_json, document_path, save_document
-from tests.policies.flash.test_demo_execution import make_annotated_demo, robot  # noqa: F401
+from tests.policies.flash.test_demo_execution import (  # noqa: F401
+    make_annotated_demo,
+    motor_robot,
+    ready_state,
+    robot,
+)
 
 
 @pytest.fixture
@@ -122,6 +129,68 @@ async def test_apply_rejects_old_execution_rules_before_camera_or_motors(prepare
     launch.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_robot_apply_requires_saved_rest_before_launch(prepared, monkeypatch):
+    result = await flash_editor.prepare_demo(flash_editor.PrepareDemo(id="fixture"))
+    launch = AsyncMock()
+    monkeypatch.setattr(flash_tracking, "start_worker", launch)
+    with pytest.raises(HTTPException, match="Save a rest position"):
+        await flash_editor.apply_demo(flash_editor.ApplyDemo(plan=result["plan"], simulate=False))
+    launch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_profile_reaches_worker_and_resets_before_waiting_for_objects(
+    prepared,
+    motor_robot,  # noqa: F811
+    monkeypatch,
+    tmp_path,
+):
+    from lerobot.policies.flash import demo_live_worker as worker
+
+    rest = ready_state(motor_robot.cartesian_model())
+    profile_path = robot_api.ROBOT_PROFILES_DIR / "test.json"
+    profile = json.loads(profile_path.read_text())
+    profile["rest_position"] = rest
+    atomic_json(profile_path, profile)
+    result = await flash_editor.prepare_demo(flash_editor.PrepareDemo(id="fixture"))
+    directory = tmp_path / "worker"
+
+    async def launch(request, **kwargs):
+        # Serialize exactly what Apply gives the real subprocess.
+        atomic_json(directory / "config.json", {**request.model_dump(), **kwargs["extra"]})
+        monkeypatch.setattr(run, "_active_process", SimpleNamespace(pid=456, returncode=None))
+        monkeypatch.setattr(flash_tracking, "_directory", directory)
+
+    monkeypatch.setattr(flash_tracking, "start_worker", launch)
+    await flash_editor.apply_demo(flash_editor.ApplyDemo(plan=result["plan"], simulate=False))
+    stop = Event()
+    monkeypatch.setattr(stop, "wait", lambda _: stop.is_set())
+    monkeypatch.setattr(worker, "Event", lambda: stop)
+    monkeypatch.setattr(worker.signal, "signal", lambda *_: None)
+    monkeypatch.setattr(worker.sys, "argv", ["demo_live_worker", str(directory)])
+    monkeypatch.setattr(robot_api, "_make_robot_from_profile", lambda _: motor_robot)
+
+    def camera_run(_directory, _config, **_kwargs):
+        deadline = perf_counter() + 3
+        while perf_counter() < deadline:
+            path = directory / "execution.json"
+            status = json.loads(path.read_text()) if path.exists() else {}
+            if str(status.get("state")).startswith("waiting:"):
+                assert status["commands"] == 0
+                return
+            assert status.get("state") != "failed", status
+            sleep(0.01)
+        pytest.fail("Worker never finished reset and reached the live-reference wait")
+
+    monkeypatch.setattr(worker, "run", camera_run)
+    worker.main()
+    assert len(motor_robot.sent) == 150
+    assert motor_robot.sent[-1] == rest
+    motor_robot.disconnect.assert_called_once()
+    assert (await flash_editor.execution())["state"] == "stopped"
+
+
 @pytest.mark.parametrize("entry_point", ["live", "demo"])
 def test_apply_dialog_sends_explicit_simulation_and_shows_execution(
     gui_page, prepared, monkeypatch, tmp_path, entry_point
@@ -134,7 +203,7 @@ def test_apply_dialog_sends_explicit_simulation_and_shows_execution(
             tmp_path / "execution.json",
             {
                 "mode": "simulation",
-                "state": "waiting: object_1 needs a current accepted pose",
+                "state": "resetting to rest position",
                 "keyframe": 0,
                 "total": 3,
             },
@@ -159,6 +228,11 @@ def test_apply_dialog_sends_explicit_simulation_and_shows_execution(
     expect(page.locator("#flash-editor-run-robot")).to_be_visible()
     page.locator("#flash-editor-simulate").click()
     expect(page.locator("#flash-editor-execution")).to_contain_text("Test run · no motion")
+    expect(page.locator("#flash-editor-execution")).to_contain_text("resetting to rest position")
+    atomic_json(
+        tmp_path / "execution.json",
+        {"mode": "simulation", "state": "waiting: object_1 needs a pose", "keyframe": 0, "total": 3},
+    )
     expect(page.locator("#flash-editor-execution")).to_contain_text("waiting: object_1")
     atomic_json(
         tmp_path / "execution.json",

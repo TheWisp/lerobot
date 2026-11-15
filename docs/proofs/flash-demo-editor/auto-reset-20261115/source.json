@@ -1,0 +1,15 @@
+{
+  "branch": "research/flash-tracker-restart",
+  "base_commit": "d84be15e767065ae053b4b50a41e306b884007f8",
+  "working_tree_sha256": {
+    "src/lerobot/policies/flash/demo_live_worker.py": "d5ea943d1f8bcfed6bbf89a21eb2000243258164f3e45d095906291ac65cef64",
+    "src/lerobot/robots/rest_position.py": "7742b1192c3848d7dcf05009b0d61d4380df6d219a771b25bb1a1a9caed34f4f",
+    "src/lerobot/gui/api/flash_editor.py": "a0177f0e890567e01f598bd86f86e3bf7f8a6167eb6fd9d31cfde461522368a6",
+    "src/lerobot/policies/flash/planner.py": "faf0a29218839a9a63c69b6ecef878953372ad211725e0e2a1247ff922f79104"
+  },
+  "server": "http://127.0.0.1:9102",
+  "server_pid": 3572310,
+  "worker_pid": 3573448,
+  "worker_directory": "/tmp/lerobot-surface-debug-swolubtg",
+  "note": "The running checkout includes the auto-reset working changes and a pre-existing planner.py edit."
+}

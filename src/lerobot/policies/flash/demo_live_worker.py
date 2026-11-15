@@ -13,6 +13,7 @@ from threading import Event, Lock, Thread
 import numpy as np
 
 from lerobot.gui.flash_live_scene import object_evidence
+from lerobot.robots.rest_position import move_to_rest_position
 
 from .appearance import Sam3MaskSource
 from .demo_document import atomic_json
@@ -24,15 +25,16 @@ from .live_surface_worker import run
 
 
 class ExecutionLoop:
-    """The editor produces robot actions; MotorLoop alone owns motor I/O.
+    """One worker owns the initial rest move and subsequent MotorLoop dispatch.
 
     A changed object target rebuilds and replaces the unissued queue. Motor
     dispatch never waits for IK, camera processing, or a new target.
     """
 
-    def __init__(self, plan, robot, directory, stop, *, simulate):
+    def __init__(self, plan, robot, directory, stop, *, simulate, rest_position=None):
         self.robot, self.directory, self.stop_event = robot, directory, stop
         self.simulate = simulate
+        self.rest_position = dict(rest_position or {})
         self.model = robot.cartesian_model()
         if (
             robot.geometry.to_dict() != plan["robot_geometry"]
@@ -69,10 +71,14 @@ class ExecutionLoop:
 
     class _SimulationRobot:
         def __init__(self, state):
-            self.state = state
+            self.state = dict(state)
+            self.action_features = dict.fromkeys(state, float)
 
         def get_state_observation(self):
             return self.state.copy()
+
+        def get_observation(self):
+            return self.get_state_observation()
 
         def send_action(self, action):
             self.state.update(action)
@@ -92,9 +98,6 @@ class ExecutionLoop:
             self.observations = values
 
     def start(self):
-        if not self.simulate:
-            self.robot.connect(calibrate=False)
-            self.state = self.robot.get_state_observation()
         io = self._SimulationRobot(self.state) if self.simulate else self.robot
         self._motor = MotorLoop(
             io,
@@ -245,6 +248,7 @@ class ExecutionLoop:
             {
                 "mode": "simulation" if self.simulate else "robot",
                 "state": self.status,
+                "reason": str(self.error) if self.error else None,
                 "keyframe": self.index,
                 "total": len(self.plan["keyframes"]),
                 "commands": self.commands_sent,
@@ -289,6 +293,25 @@ class ExecutionLoop:
 
     def _run(self):
         try:
+            if self.stop_event.is_set():
+                return
+            if not self.simulate:
+                if not self.rest_position:
+                    raise ValueError("Save a rest position in the robot profile before running a demo")
+                self.status = "connecting"
+                self._record_status(time.perf_counter())
+                self.robot.connect(calibrate=False)
+            self.state = self._motor.robot.get_state_observation()
+            if self.rest_position and not self.stop_event.is_set():
+                self.status = "resetting to rest position"
+                self._record_status(time.perf_counter())
+                move_to_rest_position(self._motor.robot, self.rest_position, stop_event=self.stop_event)
+                # Plan the approach from measured joints, including any lag or
+                # clipping during reset, never from the requested rest target.
+                self.state = self._motor.robot.get_state_observation()
+            if self.stop_event.is_set():
+                return
+            self.status = "ready"
             self._motor.start()
             last_status_write = 0.0
             while not self.stop_event.is_set():
@@ -322,23 +345,38 @@ class ExecutionLoop:
         except Exception as exc:
             self.error = exc
             self.status = "failed"
-            atomic_json(self.directory / "execution.json", {"state": "failed", "reason": str(exc)})
             self.stop_event.set()
         finally:
             self._planner.shutdown(wait=False, cancel_futures=True)
-            if not self.simulate and self.robot.is_connected:
-                self.robot.disconnect()
-            atomic_json(
-                self.directory / "motor_trace.json",
-                {
-                    "total_ticks": self._motor_trace_total,
-                    "samples": list(self._motor_trace),
-                },
-            )
+            try:
+                if not self.simulate and self.robot.is_connected:
+                    self.robot.disconnect()
+            finally:
+                if self.error is None:
+                    self.status = "stopped"
+                # Startup can fail before a valid joint read. Publishing the
+                # terminal state must not require FK or delay motor cleanup.
+                atomic_json(
+                    self.directory / "execution.json",
+                    {
+                        "mode": "simulation" if self.simulate else "robot",
+                        "state": self.status,
+                        "reason": str(self.error) if self.error else None,
+                        "keyframe": self.index,
+                        "total": len(self.plan["keyframes"]),
+                        "commands": self.commands_sent,
+                    },
+                )
+                atomic_json(
+                    self.directory / "motor_trace.json",
+                    {
+                        "total_ticks": self._motor_trace_total,
+                        "samples": list(self._motor_trace),
+                    },
+                )
 
     def close(self):
         self.stop_event.set()
-        self.status = "stopped"
         if self.thread:
             self.thread.join(timeout=3)
         if self.thread is None and not self.simulate and self.robot.is_connected:
@@ -358,7 +396,14 @@ def main():
     stop = Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
-    motor = ExecutionLoop(plan, robot, directory, stop, simulate=setup["simulate"])
+    motor = ExecutionLoop(
+        plan,
+        robot,
+        directory,
+        stop,
+        simulate=setup["simulate"],
+        rest_position=setup["robot"].get("rest_position"),
+    )
 
     def session_factory(settings, source, model, kernels, pool):
         objects = plan["document"]["objects"]
