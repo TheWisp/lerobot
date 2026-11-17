@@ -873,3 +873,24 @@ def test_hidden_landmarks_survive_more_than_thirty_seconds_and_rejoin():
 
 def test_old_hidden_expiry_setting_is_ignored_when_loading_recorded_settings():
     assert GroupConfig.from_dict({"max_hidden_s": 0.01}) == GroupConfig()
+
+
+def test_rejected_depth_is_displayed_as_a_group_prediction():
+    from types import SimpleNamespace
+
+    points = cloud(16)
+    group = SimpleNamespace(
+        id=4,
+        ids=np.arange(16),
+        base_xyz=points,
+        measured=np.array([False] + [True] * 15),
+        confirmed=True,
+        supported=True,
+        residual_m=0.0,
+    )
+    measured = scene(0, points)
+    measured.base_xyz[0] += [0.03, 0, 0]
+    record = scene_group_record(SimpleNamespace(groups={4: group}), measured, frame(0))[0]
+    assert 0 not in record["ids"]
+    assert 0 in record["predicted_ids"]
+    assert len(record["predicted_pixels"]) == 1

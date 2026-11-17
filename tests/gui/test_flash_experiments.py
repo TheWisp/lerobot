@@ -850,6 +850,9 @@ def test_growing_method_does_not_show_matches_from_a_different_source_frame(
                 "ids": [1, 2, 3],
                 "pixels": [[20, 20], [30, 20], [20, 30]],
                 "camera_xyz": [[0, 0, 1], [0.01, 0, 1], [0, 0.01, 1]],
+                "predicted_ids": [4],
+                "predicted_pixels": [[25, 25]],
+                "predicted_camera_xyz": [[0.005, 0.005, 1]],
                 "supported": True,
             },
             {
@@ -857,6 +860,9 @@ def test_growing_method_does_not_show_matches_from_a_different_source_frame(
                 "ids": [100, 101, 102],
                 "pixels": [[40, 40], [50, 40], [40, 50]],
                 "camera_xyz": [[0.02, 0.02, 1], [0.03, 0.02, 1], [0.02, 0.03, 1]],
+                "predicted_ids": [103],
+                "predicted_pixels": [[45, 45]],
+                "predicted_camera_xyz": [[0.025, 0.025, 1]],
                 "supported": True,
             },
         ]
@@ -871,6 +877,7 @@ def test_growing_method_does_not_show_matches_from_a_different_source_frame(
     for frame in saved["frames"]:
         for group in frame["scene_group_tracks"]:
             group["links"] = [[0, 1], [1, 2], [2, 0]]
+            group["predicted_links"] = [[0, 3], [1, 3]]
     overlays.write_text(json.dumps(saved))
     monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(root))
     page = gui_page
@@ -914,52 +921,54 @@ def test_growing_method_does_not_show_matches_from_a_different_source_frame(
         def rendered_groups():
             return page.evaluate(
                 """method => {
-                let count = 0;
-                const ctx = new Proxy({}, {get: (_, key) => () => {if (key === 'arc') count++;}, set: () => true});
+                const lines = [0, 0];
+                const state = {globalAlpha: 1};
+                const ctx = new Proxy(state, {get: (target, key) => (...args) => {
+                    if (key === 'lineTo') lines[target.globalAlpha < 1 ? 1 : 0]++;
+                    if (key === 'fillRect' || key === 'arc') throw Error('Point marks are not wireframe');
+                }, set: (target, key, value) => {target[key] = value; return true;}});
                 drawFlashGroupTracks(ctx, flashExperiments.data, 2, method, 1);
-                return count;
+                return lines;
             }""",
                 method,
             )
 
         page.locator('#flash-experiment-groups button[data-mode="objects"]').click()
-        assert rendered_groups() == 3
+        assert rendered_groups() == [3, 2]
         assert page.locator("#flash-experiment-group-count").inner_text() == "2 groups · 1 shown"
         page.evaluate("setFlashGroupMode('flash-live-groups', 'all')")
         assert (
             page.locator('#flash-live-groups button[data-mode="all"]').get_attribute("aria-pressed") == "true"
         )
         page.locator('#flash-experiment-groups button[data-mode="all"]').click()
-        assert rendered_groups() == 6
+        assert rendered_groups() == [6, 4]
         assert page.locator("#flash-experiment-group-count").inner_text() == "2 groups · 2 shown"
         assert (
             page.locator('#flash-experiment-groups button[data-mode="all"]').get_attribute("aria-pressed")
             == "true"
         )
         page.locator('#flash-experiment-groups button[data-mode="none"]').click()
-        assert rendered_groups() == 0
+        assert rendered_groups() == [0, 0]
         assert page.locator("#flash-experiment-group-count").inner_text() == "2 groups · 0 shown"
         page.locator('#flash-experiment-groups button[data-mode="objects"]').click()
         page.get_by_role("button", name="3D scene", exact=True).click()
         page.wait_for_selector(f'#flash-experiment-scene[data-frame="2"][data-method="{method}"]')
         assert len(page.evaluate("flashSceneState.packet.scene_group_tracks")) == 2
-        assert (
-            page.evaluate("""() => {
+        assert page.evaluate("""() => {
             const viewer = flashSceneState.viewer, update = viewer.update;
             let layers;
             viewer.update = (...args) => {layers = args[3].filter(item => item.layer === 'groups'); return update(...args);};
             try { drawFlashExperimentScene(true); } finally {viewer.update = update;}
-            return layers.length;
-        }""")
-            == 1
-        )
+            return layers.map(layer => [layer.points.length, layer.links.length, layer.opacity ?? 0.9]);
+        }""") == [[3, 3, 0.9], [4, 2, 0.35]]
         page.locator('#flash-experiment-groups button[data-mode="all"]').click()
         assert page.evaluate("""() => {
             const viewer = flashSceneState.viewer, update = viewer.update;
             let layers;
             viewer.update = (...args) => {layers = args[3].filter(item => item.layer === 'groups'); return update(...args);};
             try { drawFlashExperimentScene(true); } finally {viewer.update = update;}
-            return layers.length === 2 && layers[0].color !== layers[1].color;
+            return layers.length === 4 && layers[0].color === layers[1].color &&
+                layers[2].color === layers[3].color && layers[0].color !== layers[2].color;
         }""")
 
 
@@ -1779,7 +1788,7 @@ def test_browser_surface_matcher_edits_rerun_without_relabeling_recorded_result(
     results = page.locator("#flash-experiment-results")
     assert "Surface matcher: SciPy (retired)" in results.inner_text()
     page.get_by_role("button", name="Pipeline settings", exact=True).click()
-    matcher = page.get_by_label("Surface matcher", exact=True)
+    matcher = page.get_by_role("dialog").get_by_label("Surface matcher", exact=True)
     assert page.locator(".flash-pipeline-settings textarea").count() == 0
     matcher.select_option("small_gicp")
     page.get_by_label("Iterations per resolution", exact=True).fill("11")

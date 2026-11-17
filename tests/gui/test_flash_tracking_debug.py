@@ -336,12 +336,19 @@ def test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_process
                 }
             },
             "scene_group_tracks": [
-                {"id": 7, "ids": [1], "pixels": [[25, 25]], "links": [], "camera_xyz": [[0, 0, 1]]},
+                {
+                    "id": 7,
+                    "ids": [1, 3],
+                    "pixels": [[25, 25], [35, 25]],
+                    "links": [[0, 1]],
+                    "camera_xyz": [[0, 0, 1], [0.01, 0, 1]],
+                },
                 {
                     "id": 9,
                     "ids": [2],
                     "pixels": [[75, 25]],
                     "links": [],
+                    "predicted_links": [[0, 1]],
                     "camera_xyz": [[0.1, 0, 1]],
                     "predicted_pixels": [[80, 25]],
                     "predicted_camera_xyz": [[0.15, 0, 1]],
@@ -358,16 +365,18 @@ def test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_process
     assert page.evaluate("flashLive.frame.frame_id") == 43
     assert page.evaluate("flashLive.packet.frame") == 43
     assert page.locator("#flash-live-group-count").inner_text() == "2 groups · 1 shown"
-    # Isolated measured tracks remain in the group record, but are not drawn
-    # as dangling wireframe dots. The saved video viewer uses this same helper.
+    # Measured group wireframe is drawn without point marks.
     assert page.evaluate(
         "Array.from(document.getElementById('flash-live-image').getContext('2d').getImageData(25,25,1,1).data)"
-    ) == [70, 70, 70, 255]
+    ) != [70, 70, 70, 255]
     page.locator('#flash-live-groups button[data-mode="all"]').click()
     assert page.locator("#flash-live-group-count").inner_text() == "2 groups · 2 shown"
     assert page.evaluate(
-        "Array.from(document.getElementById('flash-live-image').getContext('2d').getImageData(80,25,1,1).data)"
-    ) == [70, 70, 70, 255]
+        "Array.from(document.getElementById('flash-live-image').getContext('2d').getImageData(78,25,1,1).data)"
+    ) != [70, 70, 70, 255]  # The hidden member stays in its faint wireframe.
+    assert page.evaluate(
+        "Array.from(document.getElementById('flash-live-image').getContext('2d').getImageData(78,23,1,1).data)"
+    ) == [70, 70, 70, 255]  # No standalone square point marker.
     assert (
         "block: lost — Fit protrudes into measured empty space"
         in page.locator("#flash-live-objects").inner_text()

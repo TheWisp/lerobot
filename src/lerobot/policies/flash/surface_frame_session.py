@@ -50,14 +50,19 @@ class MotionChain:
 
 
 def scene_group_record(snapshot, scene, frame):
-    """All measured scene points, preserving the identities used by the wireframe."""
+    """Measured scene points and predicted members for the group display."""
     visible = {int(point_id): index for index, point_id in enumerate(scene.ids)}
     camera_from_base = np.linalg.inv(frame.base_from_camera)
     record = []
     for group in snapshot.groups.values():
-        measured = [int(point_id) for point_id in group.ids if int(point_id) in visible]
+        measured = [
+            int(point_id)
+            for point_id, accepted in zip(group.ids, group.measured, strict=True)
+            if accepted and int(point_id) in visible
+        ]
         indices = [visible[point_id] for point_id in measured]
         hidden = group.base_xyz[~group.measured]
+        hidden_ids = group.ids[~group.measured]
         predicted_xyz = move(hidden, camera_from_base)
         z = predicted_xyz[:, 2] if len(predicted_xyz) else np.empty(0)
         valid = z > 0
@@ -84,6 +89,7 @@ def scene_group_record(snapshot, scene, frame):
                 "ids": measured,
                 "pixels": np.rint(scene.xy[indices]).astype(int).tolist(),
                 "camera_xyz": np.round(move(scene.base_xyz[indices], camera_from_base), 4).tolist(),
+                "predicted_ids": hidden_ids[valid].astype(int).tolist(),
                 "predicted_pixels": np.rint(pixels).astype(int).tolist(),
                 "predicted_camera_xyz": np.round(predicted_xyz, 4).tolist(),
             }

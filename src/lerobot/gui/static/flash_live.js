@@ -463,7 +463,7 @@ async function drawFlashLive() {
         flashGroupMode('flash-live-groups')) : [];
     liveElement('group-count').textContent = overlay
         ? `${overlay.scene_group_tracks?.length || 0} groups · ${shownGroups.length} shown` : '';
-    liveElement('groups').title = 'Connected measured points; group predictions remain in the recording.';
+    liveElement('groups').title = 'Group wireframe: solid links have measured endpoints; faint links include hidden members.';
     // Saved episodes decode RGB and depth separately. An older live packet
     // must never override the depth for the episode frame on screen.
     const {captured:capturedDepthPacket,displayed:depthPacket}=flashDepthPackets(state);
@@ -507,11 +507,7 @@ async function drawFlashLive() {
             }
         }
         const displayGroups=overlay?flashSceneGroups(overlay.scene_group_tracks, overlay.objects, flashGroupMode('flash-live-groups')):[];
-        for(const group of displayGroups)
-            descriptions.push({layer:'groups', points:flashGroupWirePoints(group).map(index =>
-                (group.camera_xyz || group.display_camera_xyz || [])[index]),
-                axes:false, pointSize:3, color:flashGroupHex(group.id || 0),
-                pose:[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]});
+        descriptions.push(...flashGroupSceneDescriptions(displayGroups));
         state.viewer.update(depthPacket.depth,image,depthPacket.camera,descriptions,
             depthPacket.depthBeforeFilters);
         state.viewer.setOptions({estimate:liveElement('surface').checked||liveElement('pose').checked,
@@ -540,16 +536,7 @@ async function drawFlashLive() {
         if(liveElement('rejected').checked)
             drawFlashRejectedPoses(ctx,obj,overlay.camera.intrinsics,name);
     }
-    for(const group of shownGroups) {
-        const pixels=group.pixels || group.display_pixels || [];
-        ctx.strokeStyle=flashGroupColor(group.id || 0);ctx.fillStyle=ctx.strokeStyle;
-        ctx.lineWidth=1.5;ctx.beginPath();
-        for(const [a,b] of flashGroupLinks(group)) if(pixels[a]&&pixels[b]){ctx.moveTo(...pixels[a]);ctx.lineTo(...pixels[b]);}
-        ctx.stroke();
-        for(const index of flashGroupWirePoints(group)) {
-            const [x,y]=pixels[index];ctx.beginPath();ctx.arc(x,y,2,0,2*Math.PI);ctx.fill();
-        }
-    }
+    drawFlashGroups2D(ctx,shownGroups);
 }
 async function pollFlashLive() {
     clearTimeout(flashLive.timer);

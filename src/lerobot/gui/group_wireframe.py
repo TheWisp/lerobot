@@ -170,15 +170,29 @@ class Wireframe:
         self._lut_set = np.zeros(0, np.int64)  # the numbers set in it
         self._frames = 0
 
-    def update(self, tracks: np.ndarray, uv: np.ndarray, xyz: np.ndarray, group: np.ndarray) -> Mesh:
+    def update(
+        self,
+        tracks: np.ndarray,
+        uv: np.ndarray,
+        xyz: np.ndarray,
+        group: np.ndarray,
+        *,
+        eligible_new: np.ndarray | None = None,
+    ) -> Mesh:
         """This frame's wireframe from its placed, grouped tracks: ``tracks`` (N,) their numbers, distinct, the same for
         a track all its life, dense from 0 (the tracker's own list indices: a lookup table that long is kept); ``uv``
-        (N, 2) px; ``xyz`` (N, 3) camera frame, m; ``group`` (N,) their groups."""
+        (N, 2) px; ``xyz`` (N, 3) camera frame, m; ``group`` (N,) their groups. ``eligible_new`` lets predicted
+        positions keep existing links without creating new links from unmeasured geometry."""
         tracks = np.asarray(tracks, np.int64).reshape(-1)
         uv = np.asarray(uv, float).reshape(-1, 2)
         xyz = np.asarray(xyz, float).reshape(-1, 3)
         group = np.asarray(group, np.int64).reshape(-1)
         n = len(tracks)
+        eligible_new = (
+            np.ones(n, bool) if eligible_new is None else np.asarray(eligible_new, bool).reshape(-1)
+        )
+        if len(eligible_new) != n:
+            raise ValueError("Wireframe link eligibility and tracks disagree")
         z = xyz[:, 2] * 1000.0
         ok = np.isfinite(z) & (z > 0) & np.isfinite(uv).all(axis=1)
         depth = self._smooth(tracks, z, ok)
@@ -214,7 +228,7 @@ class Wireframe:
         links = self._kept_links(index, pos, group)
         links = self._unfold(index, links, uv)
         if self._frames % ADD_EVERY == 0:  # new links and triangles: looked for every ADD_EVERY frames
-            tri = self._triangles(uv, ok, group)
+            tri = self._triangles(uv, ok & eligible_new, group)
             links = self._uncross(tri, links, tracks, uv)
             self._looks += 1
             links = self._new_links(tri, links, tracks, pos, uv, group)

@@ -831,7 +831,7 @@
           <article><small>Object-side query</small><strong>Associated group → H[t]</strong><p>Measured object IDs establish an association (12 by default; separate setting from group formation). Once established, a supported group can predict through full occlusion. Measured separation can end the association with one visible point after the group's split time; hidden IDs alone cannot restore it.</p></article>
           <article><small>Object pose decision</small><strong>Surface fit → Kalman → pose</strong><p>Depth and mask check the fit. Kalman belongs to the object pose estimator, not the group tracker. The pose can be observed, predicted or lost.</p></article>
         </div>
-        <p class="intro"><a href="#metric-motion">Group support metric</a> → <a href="#metric-kalman">pose update metric</a> → <a href="#pose-flow">pose decision paths</a>. Display modes: None hides groups; Objects shows groups associated with tracked objects; All shows every scene group. These display choices do not affect pose estimation.</p>
+        <p class="intro"><a href="#metric-motion">Group support metric</a> → <a href="#metric-kalman">pose update metric</a> → <a href="#pose-flow">pose decision paths</a>. Display modes: None hides groups; Objects shows groups associated with tracked objects; All shows every scene group. Measured members and predicted members share one wireframe; edges involving predicted members have lower opacity. Live and replay views use the same drawing functions. These display choices do not affect pose estimation.</p>
       </section>
 
       <section>

@@ -89,6 +89,7 @@ function setFlashGroupMode(id, mode) {
     for (const button of control.querySelectorAll('button'))
         button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
     if (id === 'flash-live-groups') drawFlashLive();
+    else if (id === 'flash-editor-groups') drawFlashDemoMarks();
     else changeFlashGroupDisplay();
 }
 
@@ -402,7 +403,7 @@ function drawFlashExperiment() {
         ' White points: depth measured in the first usable image, moved by the estimated pose.';
     document.getElementById('flash-experiment-explanation').textContent = flashMethodExplanation(method) +
         (showPose ? surfaceDescription : '') +
-        (groupMode !== 'none' ? ' Group colors identify independent scene groups; lines connect measured points.' : '');
+        (groupMode !== 'none' ? ' Group colors identify independent scene groups; faint wireframe links contain hidden members.' : '');
     const lost = [], predicted = [];
     for (const [role, object] of Object.entries(row.objects)) {
         if (showMask) {
@@ -496,13 +497,9 @@ function flashGroupLinks(group) {
     return group.links || [];
 }
 
-function flashGroupWirePoints(group) {
-    // A wireframe point without an edge looks like a separate motion track.
-    // Keep the measured group record intact; only the wireframe drawing omits it.
-    const connected = new Set();
-    for (const [a, b] of flashGroupLinks(group)) { connected.add(a); connected.add(b); }
-    return [...connected].sort((a, b) => a - b);
-}
+// A retained wireframe edge remains in the same group while either endpoint
+// hides; its lower opacity distinguishes prediction from measurement.
+const FLASH_HIDDEN_GROUP_OPACITY = 0.35;
 
 function flashGroupColor(id) {
     return `hsl(${(id * 137.508 + 278) % 360} 92% 68%)`;
@@ -538,26 +535,46 @@ function changeFlashGroupDisplay() {
     if (flashSceneState.enabled) drawFlashExperimentScene(true);
 }
 
-function drawFlashGroupTracks(context, data, index, method, displayScale) {
-    const frame = data.frames[index];
-    const mode = flashGroupMode('flash-experiment-groups');
+function drawFlashGroups2D(context, groups, displayScale = 1) {
     const scale = Math.max(displayScale, 0.1);
-    for (const group of flashSceneGroups(frame.scene_group_tracks, frame.objects, mode, method)) {
-        if (!group.pixels?.length) continue;
+    for (const group of groups) {
+        const measured = group.pixels || group.display_pixels || [];
+        const pixels = [...measured, ...(group.predicted_pixels || [])];
         context.save(); context.strokeStyle = flashGroupColor(group.id || 0);
-        context.fillStyle = context.strokeStyle;
         context.lineWidth = 1.5 / scale;
-        context.beginPath();
-        for (const [a, b] of flashGroupLinks(group)) {
-            context.moveTo(...group.pixels[a]); context.lineTo(...group.pixels[b]);
-        }
-        context.stroke();
-        for (const index of flashGroupWirePoints(group)) {
-            const [x, y] = group.pixels[index];
-            context.beginPath(); context.arc(x, y, 1.6 / scale, 0, Math.PI * 2); context.fill();
+        for (const [links, opacity] of [[flashGroupLinks(group), 1], [group.predicted_links || [], FLASH_HIDDEN_GROUP_OPACITY]]) {
+            context.globalAlpha = opacity;
+            context.beginPath();
+            for (const [a, b] of links) {
+                if (pixels[a] && pixels[b]) {
+                    context.moveTo(...pixels[a]); context.lineTo(...pixels[b]);
+                }
+            }
+            context.stroke();
         }
         context.restore();
     }
+}
+
+function flashGroupSceneDescriptions(groups) {
+    const pose = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+    const descriptions = [];
+    for (const group of groups) {
+        const measured = group.camera_xyz || group.display_camera_xyz || [];
+        const common = {layer: 'groups', color: flashGroupHex(group.id || 0), pose, axes: false};
+        if (flashGroupLinks(group).length)
+            descriptions.push({...common, points: measured, links: flashGroupLinks(group)});
+        if (group.predicted_links?.length)
+            descriptions.push({...common, points: [...measured, ...(group.predicted_camera_xyz || [])],
+                links: group.predicted_links, opacity: FLASH_HIDDEN_GROUP_OPACITY});
+    }
+    return descriptions;
+}
+
+function drawFlashGroupTracks(context, data, index, method, displayScale) {
+    const frame = data.frames[index];
+    drawFlashGroups2D(context, flashSceneGroups(frame.scene_group_tracks, frame.objects,
+        flashGroupMode('flash-experiment-groups'), method), displayScale);
 }
 
 function flashExperimentPair(object, method) {
@@ -914,9 +931,7 @@ function drawFlashExperimentScene(rebuild = false) {
         }
         const mode = flashGroupMode('flash-experiment-groups');
         const groups = flashSceneGroups(state.packet.scene_group_tracks, state.packet.objects, mode);
-        for (const group of groups) descriptions.push({layer: 'groups', color: flashGroupHex(group.id || 0),
-            points: flashGroupWirePoints(group).map(index => (group.camera_xyz || group.display_camera_xyz || [])[index]),
-            pose: [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], axes: false, pointSize: 3});
+        descriptions.push(...flashGroupSceneDescriptions(groups));
         state.viewer.update(state.packet.depth, state.bitmap, state.packet.camera, descriptions);
     }
     state.viewer.setOptions({scene: document.getElementById('flash-scene-context').checked,
@@ -953,6 +968,9 @@ async function requestFlashExperimentScene() {
         const packet = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, headerLength)));
         if (packet.frame !== frame || packet.method !== method)
             throw new Error('3D response belongs to another frame or tracking method');
+        // The exported 2D overlay owns the persistent display wireframe.
+        // The RGB-D endpoint only supplies raw tracking evidence and pixels.
+        packet.scene_group_tracks = flashExperiments.data.frames[frame]?.scene_group_tracks || packet.scene_group_tracks;
         const depthStart = 4 + headerLength;
         packet.depth = new Float32Array(buffer.slice(depthStart, depthStart + packet.depth_bytes));
         const bitmap = await createImageBitmap(new Blob([buffer.slice(depthStart + packet.depth_bytes)], {type: 'image/png'}));

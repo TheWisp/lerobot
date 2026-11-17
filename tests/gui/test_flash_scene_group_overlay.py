@@ -39,6 +39,48 @@ def test_scene_group_links_persist_through_reordering_and_new_points():
     assert len(before & after) >= 0.7 * len(before)
 
 
+def test_hidden_group_members_keep_their_wireframe_without_new_predicted_links():
+    overlay = SceneGroupOverlay()
+    locations = np.array([(x, y) for y in range(5) for x in range(6)], float)
+    ids = list(range(len(locations)))
+
+    def record(measured_ids):
+        hidden_ids = [point_id for point_id in ids if point_id not in measured_ids]
+
+        def points(selected):
+            xy = locations[selected]
+            return (xy * 14 + 100).tolist(), np.column_stack(
+                (xy * 0.012, np.full(len(selected), 0.5))
+            ).tolist()
+
+        uv, xyz = points(measured_ids)
+        predicted_uv, predicted_xyz = points(hidden_ids)
+        return {
+            "id": 7,
+            "ids": measured_ids,
+            "pixels": uv,
+            "camera_xyz": xyz,
+            "predicted_ids": hidden_ids,
+            "predicted_pixels": predicted_uv,
+            "predicted_camera_xyz": predicted_xyz,
+        }
+
+    for _ in range(12):
+        hidden_first = overlay.update([record([])])[0]
+        assert hidden_first["links"] == hidden_first["predicted_links"] == []
+    for _ in range(12):
+        overlay.update([record(ids)])
+    half_visible = record(ids[::2])
+    drawn = overlay.update([half_visible])[0]
+    assert drawn["predicted_links"]
+    assert all(
+        0 <= index < len(drawn["ids"]) + len(drawn["predicted_ids"])
+        for edge in drawn["predicted_links"]
+        for index in edge
+    )
+    assert all(a >= len(drawn["ids"]) or b >= len(drawn["ids"]) for a, b in drawn["predicted_links"])
+
+
 def test_scene_group_links_never_connect_different_groups():
     overlay = SceneGroupOverlay()
     a = {
@@ -92,3 +134,21 @@ def test_large_stationary_group_draws_local_geometry_not_scene_spanning_lines():
     assert len(lengths) > 100
     assert max(lengths) < 0.1  # No line should span a large fraction of this 0.5 m tray.
     assert max(pixel_lengths) <= 48  # The 480 px image's local-link display bound.
+
+
+def test_old_saved_groups_without_predicted_ids_still_export_measured_wireframe():
+    overlay = SceneGroupOverlay()
+    xy = np.array([(x, y) for y in range(5) for x in range(6)], float)
+    record = {
+        "id": 0,
+        "ids": list(range(len(xy))),
+        "pixels": (xy * 14 + 100).tolist(),
+        "camera_xyz": np.column_stack((xy * 0.012, np.full(len(xy), 0.5))).tolist(),
+        "predicted_pixels": [[120, 120]],
+        "predicted_camera_xyz": [[0.02, 0.02, 0.5]],
+    }
+    for _ in range(12):
+        drawn = overlay.update([record])[0]
+    assert drawn["links"]
+    assert drawn["predicted_links"] == []
+    assert drawn["predicted_pixels"] == record["predicted_pixels"]
