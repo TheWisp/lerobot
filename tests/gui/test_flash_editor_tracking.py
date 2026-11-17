@@ -59,6 +59,7 @@ def test_tracked_episode_overlay_and_keyframe_edits(gui_page, rgbd_episode, tmp_
     page.locator("#flash-editor-position").fill("2")
     page.wait_for_function("flashEditor.overlay?.frame === 2")
     assert page.evaluate("flashEditor.overlay.objects.object_1.pose !== null")
+    assert page.evaluate("flashEditor.overlay.scene_group_tracks.length > 0")
     assert page.evaluate(
         "Array.from(document.getElementById('flash-editor-marks').getContext('2d').getImageData(0,0,128,96).data).some((v,i)=>i%4===3 && v>0)"
     )
@@ -72,7 +73,25 @@ def test_tracked_episode_overlay_and_keyframe_edits(gui_page, rgbd_episode, tmp_
     page.wait_for_function("flashEditor.overlay?.frame === 2")
     page.locator("#flash-editor-outline").uncheck()
     page.locator("#flash-editor-pose").uncheck()
+    # The tiny four-frame tracking fixture does not establish wireframe links.
+    # Supply one measured and one carried edge to verify the editor renderer.
+    page.evaluate("""() => {
+        flashEditor.overlay.scene_group_tracks = [{id:7, pixels:[[20,20],[30,20]],
+            camera_xyz:[[0,0,1],[0.01,0,1]], links:[[0,1]],
+            predicted_pixels:[[30,30]], predicted_camera_xyz:[[0.01,0.01,1]],
+            predicted_links:[[1,2]]}];
+        flashEditor.overlay.objects.object_1.group_tracks = {group_id:7};
+        drawFlashDemoMarks();
+    }""")
+    assert page.evaluate(
+        "document.getElementById('flash-editor-marks').getContext('2d').getImageData(0,0,128,96).data.some((v,i)=>i%4===3&&v>0)"
+    )
+    page.locator('#flash-editor-groups button[data-mode="none"]').click()
     assert not page.evaluate(
+        "document.getElementById('flash-editor-marks').getContext('2d').getImageData(0,0,128,96).data.some((v,i)=>i%4===3&&v>0)"
+    )
+    page.locator('#flash-editor-groups button[data-mode="objects"]').click()
+    assert page.evaluate(
         "document.getElementById('flash-editor-marks').getContext('2d').getImageData(0,0,128,96).data.some((v,i)=>i%4===3&&v>0)"
     )
     page.locator("#flash-editor-pose").check()

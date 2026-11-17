@@ -540,11 +540,7 @@ async def display_frames(
                 if result:
                     result = {key: value for key, value in result.items() if key != "objects"} | {
                         "objects": {
-                            role: {
-                                key: value
-                                for key, value in obj.items()
-                                if key not in {"diagnostics", "group_tracks"}
-                            }
+                            role: {key: value for key, value in obj.items() if key != "diagnostics"}
                             for role, obj in result["objects"].items()
                         }
                     }

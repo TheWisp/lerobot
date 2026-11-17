@@ -105,6 +105,11 @@ def test_editor_uses_actual_decoded_depth_and_live_session(rgbd_episode, tmp_pat
             assert header["frame"] == current.frame_id
             assert header["objects"] == saved["objects"]
             assert header["camera"] == saved["camera"]
+            assert header["scene_group_tracks"] == saved["scene_group_tracks"]
+            assert [
+                {key: value for key, value in group.items() if key not in {"links", "predicted_links"}}
+                for group in header["scene_group_tracks"]
+            ] == row["scene_group_tracks"]
             assert (
                 len(packet) == 4 + header_size + header["depth_bytes"]
             )  # RGB uses the existing episode video.
@@ -116,6 +121,7 @@ def test_editor_uses_actual_decoded_depth_and_live_session(rgbd_episode, tmp_pat
                 np.testing.assert_allclose(
                     saved["objects"][role]["surface"], live.engine.candidates[LIVE_METHOD][role].store.points
                 )
+        assert json.loads((output / "frames" / "000003.json").read_text())["scene_group_tracks"]
         assert json.loads((output / "status.json").read_text())["state"] == "complete"
         with np.load(output / "surfaces.npz") as surfaces:
             assert set(surfaces.files) == {"object_1", "object_2"}

@@ -523,6 +523,8 @@ function drawFlashDemoMarks(){
     Object.assign(marks.style,{width:rect.width+'px',height:rect.height+'px',left:(rect.left-host.left)+'px',top:(rect.top-host.top)+'px'});
     const ctx=marks.getContext('2d');ctx.clearRect(0,0,marks.width,marks.height);
     const overlay=doc&&flashEditor.overlaySelection===flashDemoSelection(doc)&&flashEditor.overlay?.frame===flashEditor.frame?flashEditor.overlay:null;
+    const groups=overlay?flashSceneGroups(overlay.scene_group_tracks,overlay.objects,
+        flashGroupMode('flash-editor-groups')):[];
     for(const state of editorElement('objects').querySelectorAll('[data-object-state]')){
         const evidence=overlay?.objects[state.dataset.objectState];
         state.textContent=evidence?' · '+(evidence.status==='observed_candidate'?'observed':evidence.status):'';
@@ -547,9 +549,11 @@ function drawFlashDemoMarks(){
                     axes:false,color:kind==='fit'?0xff52d7:0x49bcff,label:`${object.name} (rejected ${kind})`});
             }
         }
+        descriptions.push(...flashGroupSceneDescriptions(groups));
         flashEditor.viewer.update(overlay.depth,canvas,overlay.camera,descriptions);
         flashEditor.viewer.setOptions({scene:true,estimate:editorElement('surface').checked||editorElement('pose').checked,
-            axes:editorElement('pose').checked,rejectedFit:editorElement('rejected').checked,rejectedPrediction:editorElement('rejected').checked,groups:false});
+            axes:editorElement('pose').checked,rejectedFit:editorElement('rejected').checked,
+            rejectedPrediction:editorElement('rejected').checked,groups:flashGroupMode('flash-editor-groups')!=='none'});
         return;
     }
     if(overlay){
@@ -570,6 +574,7 @@ function drawFlashDemoMarks(){
             drawFlashObjectPose(ctx,evidence,intrinsics,object.name,{color,surface:editorElement('surface').checked,pose:editorElement('pose').checked});
             if(editorElement('rejected').checked)drawFlashRejectedPoses(ctx,evidence,intrinsics,object.name);
         }
+        drawFlashGroups2D(ctx,groups);
     }
     if(!doc||flashEditor.frame!==doc.reference_frame)return;
     for(const object of doc.objects){if(!object.point)continue;const [x,y]=object.point;

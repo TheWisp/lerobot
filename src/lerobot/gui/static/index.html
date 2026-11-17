@@ -500,6 +500,7 @@
                             <label><input id="flash-editor-surface" type="checkbox" onchange="drawFlashDemoMarks()"> Surface</label>
                             <label><input id="flash-editor-pose" type="checkbox" checked onchange="drawFlashDemoMarks()"> Pose + axes</label>
                             <label><input id="flash-editor-rejected" type="checkbox" onchange="drawFlashDemoMarks()"> Rejected poses</label>
+                            <div class="flash-group-control">Groups <div id="flash-editor-groups" class="flash-group-modes" data-mode="objects" role="group" aria-label="Demo group display"><button type="button" data-mode="none" aria-pressed="false" onclick="setFlashGroupMode('flash-editor-groups','none')">None</button><button type="button" data-mode="objects" aria-pressed="true" onclick="setFlashGroupMode('flash-editor-groups','objects')">Objects</button><button type="button" data-mode="all" aria-pressed="false" onclick="setFlashGroupMode('flash-editor-groups','all')">All</button></div></div>
                             <label id="flash-editor-trajectory-tools" title="Demonstrated tool path; waypoint times are relative to playback"><input id="flash-editor-trajectory" type="checkbox" checked disabled onchange="drawFlashDemoTrajectory()">Actions</label>
                         </div>
                         <div id="flash-editor-image-host" class="flash-viewer-canvas"><canvas id="flash-editor-image" aria-label="Demo image; choose Pick on an object to select its location" onclick="pickFlashDemoObject(event)"></canvas><canvas id="flash-editor-marks"></canvas><div id="flash-editor-scene-host" hidden><canvas id="flash-editor-scene" aria-label="Demo 3D scene" hidden></canvas></div><canvas id="flash-editor-depth" aria-label="Demo processed depth" hidden></canvas><span id="flash-editor-depth-info" hidden></span><span id="flash-editor-resolution" class="flash-replay-resolution" aria-label="Recorded image resolution" hidden></span></div>
@@ -1062,7 +1063,7 @@ nebius iam auth-public-key generate \
     <script src="/static/flash_pipeline_settings.js?v=2"></script>
     <script src="/static/flash_trajectory.js?v=5"></script>
     <script src="/static/flash_live.js?v=54"></script>
-    <script src="/static/flash_editor.js?v=13"></script>
+    <script src="/static/flash_editor.js?v=14"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>

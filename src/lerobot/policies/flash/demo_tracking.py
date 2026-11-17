@@ -118,6 +118,7 @@ def track_demo(
     ``mask_source`` is also used by deterministic RGB-D tests, while production
     uses the same Sam3MaskSource as live camera inspection.
     """
+    from lerobot.gui.flash_group_overlay import SceneGroupOverlay
     from lerobot.gui.flash_live_scene import live_scene_packet
 
     from .appearance import Sam3MaskSource
@@ -145,6 +146,7 @@ def track_demo(
     )
     depth_model = make_depth_source(depth_source)
     session = LiveSurfaceSession(settings, source)
+    group_overlay = SceneGroupOverlay()
     metadata = {"total": frames.length - document.reference_frame, "done": 0}
     atomic_json(destination / "status.json", {**metadata, "state": "running"})
     previous_time = None
@@ -175,7 +177,15 @@ def track_demo(
             # Use the same display evidence as live inspection. RGB stays in
             # the LeRobot video; the sidecar preserves exact processed depth
             # and this frame's surface, never the final surface back-projected.
-            packet = live_scene_packet(frame, session, row, masks, depth_source=depth_source, encoded_rgb=b"")
+            packet = live_scene_packet(
+                frame,
+                session,
+                row,
+                masks,
+                group_overlay=group_overlay,
+                depth_source=depth_source,
+                encoded_rgb=b"",
+            )
             header_size = struct.unpack("<I", packet[:4])[0]
             evidence = json.loads(packet[4 : 4 + header_size])
             scenes = destination / "scenes"
@@ -190,6 +200,7 @@ def track_demo(
                 "shape": list(frames.shape),
                 "camera": evidence["camera"],
                 "objects": evidence["objects"],
+                "scene_group_tracks": evidence["scene_group_tracks"],
                 "masks_rle": evidence["masks_rle"],
             }
             atomic_json(destination / "frames" / f"{frame.frame_id:06d}.json", result)
