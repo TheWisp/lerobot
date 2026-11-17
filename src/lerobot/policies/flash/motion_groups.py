@@ -1,7 +1,7 @@
 """Scene-wide rigid motion groups from timestamped 3D point identities.
 
-Each frame: fit visible members, separate inconsistent measurements, discover
-new groups, merge sustained co-movement, then expose measured/predicted points.
+Each frame: fit visible members, confirm coherent splits, discover new groups,
+merge sustained co-movement, then expose measured/predicted points.
 """
 
 from collections import deque
@@ -11,6 +11,7 @@ from types import MappingProxyType
 
 import numpy as np
 from scipy.spatial import cKDTree
+from scipy.spatial.distance import cdist
 
 from .registration import DegenerateRegistrationError, rigid_fit
 from .surface_observation import move
@@ -58,7 +59,8 @@ class GroupConfig:
 
     @classmethod
     def from_dict(cls, values):
-        # Accept the retired field in recorded settings without expiring hidden identities.
+        # Old recordings may carry this retired setting. It no longer changes
+        # retention: a hidden member remains until a real split or capacity eviction.
         values = dict(values)
         values.pop("max_hidden_s", None)
         return cls(**values)
@@ -85,6 +87,9 @@ class GroupView:
     current_measured: np.ndarray
     from_time_s: float | None
     time_s: float
+    # Confirmed motion departures from this group, retained while the IDs are
+    # alive. Missing measurements and memory eviction are not departures.
+    departed_ids: frozenset[int] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,9 @@ class GroupFrame:
     time_s: float
     groups: Mapping[int, GroupView]
     point_count: int
+    # Old group ID -> (surviving group ID, surviving_group_from_old_group).
+    # This is scene-only coordinate lineage for downstream consumers.
+    merges: Mapping[int, tuple[int, np.ndarray]] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass
@@ -106,6 +114,7 @@ class _Group:
     residual: float = float("inf")
     last_supported: float = 0.0
     inliers: set[int] = field(default_factory=set)
+    departed_ids: set[int] = field(default_factory=set)
 
 
 def fit_point_motion(source, target, config, *, min_points=None, threshold_m=None, robust_tolerance_m=None):
@@ -145,22 +154,17 @@ def fit_point_motion(source, target, config, *, min_points=None, threshold_m=Non
             np.einsum("hij,nj->hni", rotations, source) + shifts[:, None] - target, axis=2
         )
         valid = singular[:, 1] > 1e-12
-        if robust_tolerance_m is None:
-            votes = (errors <= threshold).sum(axis=1)
-            votes[~valid] = 0
-            best = int(votes.argmax())
-            if votes[best] > keep.sum():
-                keep = errors[best] <= threshold
-        else:
-            # Truncated error lets a coherent majority outvote a small body
-            # even when a compromise fit places both within the split limit.
-            limit_sq = robust_tolerance_m**2
-            scores = np.minimum(errors**2, limit_sq).sum(axis=1)
-            scores[~valid] = np.inf
-            best = int(scores.argmin())
-            baseline = np.minimum(residual**2, limit_sq).sum()
-            if scores[best] < baseline:
-                keep = errors[best] <= threshold
+        # Counting inliers alone can prefer a compromise fit across two equal
+        # rigid bodies: it captures a few more points just inside the limit,
+        # while neither body actually follows that motion. Truncated residual
+        # rewards a coherent body and still bounds the influence of outliers.
+        limit_sq = (robust_tolerance_m if robust_tolerance_m is not None else threshold) ** 2
+        scores = np.minimum(errors**2, limit_sq).sum(axis=1)
+        scores[~valid] = np.inf
+        best = int(scores.argmin())
+        baseline = np.minimum(residual**2, limit_sq).sum()
+        if scores[best] < baseline:
+            keep = errors[best] <= threshold
     if keep.sum() < minimum:
         return None
     try:
@@ -183,8 +187,10 @@ class SceneMotionGroups:
         self._merge_since = {}
         self._departing = {}
         self._joining = {}
-        self._banned_from = {}
         self._free_since = {}
+        # Last group coordinates of measured departures. This is scene-only
+        # lineage: it lets a measured split carry nearby hidden point IDs.
+        self._departed_from = {}
         self._history = deque()
         self._next_id = 0
         self._time = None
@@ -218,12 +224,11 @@ class SceneMotionGroups:
             if visible:
                 group_points[group.id] = cKDTree(np.asarray(visible))
         for i in free:
-            banned_gid, banned_until = self._banned_from.get(i, (None, -float("inf")))
             pending = self._joining.get(i)
             if pending is not None:
                 gid, anchor, since = pending
                 group = self._groups.get(gid)
-                if group is not None and group.supported and not (gid == banned_gid and time < banned_until):
+                if group is not None and group.supported:
                     error = np.linalg.norm(move(anchor[None], group.pose)[0] - current[i])
                     if error <= self.config.merge_tolerance_m:
                         eligible.add(i)
@@ -238,8 +243,6 @@ class SceneMotionGroups:
                 continue
             choices = []
             for gid, tree in group_points.items():
-                if gid == banned_gid and time < banned_until:
-                    continue
                 group = self._groups[gid]
                 delta = group.pose @ np.linalg.inv(previous_poses[gid])
                 predicted = move(self._previous[i][None], delta)[0]
@@ -306,11 +309,239 @@ class SceneMotionGroups:
                     np.array([current[int(i)] for i in selected]),
                 )
             anchors = {int(i): earliest[int(i)].copy() for i in selected}
-            group = self._new(anchors, pose, time)
+            # A measured branch of a confirmed body is already an established
+            # set of point identities. Keep that confirmation when every
+            # founding point departed the same confirmed parent; independent
+            # births still need their own support window.
+            parents = {self._departed_from.get(int(i), (None,))[0] for i in selected}
+            parent = self._groups.get(next(iter(parents))) if len(parents) == 1 else None
+            group = self._new(anchors, pose, time, confirmed=parent is not None and parent.confirmed)
             group.residual = float(np.sqrt(np.mean(residual[keep] ** 2)))
+            if parent is not None and parent.confirmed:
+                self._absorb_rigid_parent_members(parent, group, earliest, current)
             for i in selected:
                 self._free_since.pop(int(i), None)
             ready = [i for i in ready if i not in group.anchors]
+
+    def _absorb_rigid_parent_members(self, parent, branch, earliest, current):
+        """Move measured parent points whose relative geometry follows a new branch.
+
+        A point near a rotation pivot can fit the old group's pose while its
+        distances to the moving branch remain more consistent. Compare the
+        measured pair distances, not object masks or fitted object poses.
+        """
+        candidates = sorted(parent.anchors.keys() & earliest.keys() & current.keys())
+        core = sorted(parent.inliers & earliest.keys() & current.keys())
+        branch_ids = sorted(branch.inliers & earliest.keys() & current.keys())
+        if len(core) < self.config.min_motion_points or len(branch_ids) < self.config.min_motion_points:
+            return
+        old_core = np.array([parent.anchors[i] for i in core])
+        now_core = np.array([current[i] for i in core])
+        old_branch = np.array([self._departed_from[i][1] for i in branch_ids])
+        now_branch = np.array([current[i] for i in branch_ids])
+        try:
+            parent_to_branch = rigid_fit(old_branch, np.array([branch.anchors[i] for i in branch_ids]))
+        except DegenerateRegistrationError:
+            return
+        chosen = []
+        for start in range(0, len(candidates), 128):
+            batch = candidates[start : start + 128]
+            old = np.array([parent.anchors[i] for i in batch])
+            now = np.array([current[i] for i in batch])
+            to_parent = np.median(np.abs(cdist(old, old_core) - cdist(now, now_core)), axis=1)
+            to_branch = np.median(np.abs(cdist(old, old_branch) - cdist(now, now_branch)), axis=1)
+            chosen.extend(
+                i
+                for i, parent_error, branch_error in zip(batch, to_parent, to_branch, strict=True)
+                if branch_error < parent_error and branch_error <= self.config.split_tolerance_m
+            )
+        if not chosen:
+            return
+        ids = sorted(branch.anchors.keys() | set(chosen))
+        # A branch founded from free measurements may use a different local
+        # frame from its parent. Convert each absorbed anchor into that frame
+        # before fitting; never substitute a later sensor measurement for it.
+        source = np.array(
+            [
+                branch.anchors[i]
+                if i in branch.anchors
+                else move(parent.anchors[i][None], parent_to_branch)[0]
+                for i in ids
+            ]
+        )
+        target = np.array([current[i] for i in ids])
+        fitted = fit_point_motion(
+            source,
+            target,
+            self.config,
+            min_points=self.config.min_motion_points,
+            robust_tolerance_m=self.config.split_tolerance_m,
+        )
+        if fitted is None:
+            return
+        pose, keep, residual = fitted
+        branch.pose = pose
+        branch.inliers = {i for i, accepted in zip(ids, keep, strict=True) if accepted}
+        branch.residual = float(np.sqrt(np.mean(residual[keep] ** 2)))
+        for i in set(chosen) & branch.inliers:
+            parent_anchor = parent.anchors.pop(i)
+            parent.inliers.discard(i)
+            parent.departed_ids.add(i)
+            self._departed_from[i] = (parent.id, parent_anchor)
+            self._departing.pop(i, None)
+            branch.anchors[i] = move(parent_anchor[None], parent_to_branch)[0]
+        parent.supported = len(parent.inliers) >= self.config.min_motion_points
+        if parent.supported:
+            ids = sorted(parent.inliers)
+            source = np.array([parent.anchors[i] for i in ids])
+            target = np.array([current[i] for i in ids])
+            error = np.linalg.norm(move(source, parent.pose) - target, axis=1)
+            parent.residual = float(np.sqrt(np.mean(error**2)))
+
+    def _split_confirmed(self, current, time):
+        """Move established IDs only when a measured cohort forms another body.
+
+        A lone inconsistent measurement remains an unmeasured prediction in
+        its old group. It cannot become a departure merely by lasting longer.
+        """
+        earliest = self._history[0][1]
+        for parent in list(self._groups.values()):
+            if not parent.supported:
+                continue
+            ready = sorted(
+                i
+                for i in parent.anchors.keys() & current.keys() & earliest.keys()
+                if i in self._departing
+                and time - self._departing[i] + 1e-9 >= self.config.split_confirmation_s
+            )
+            # A point can miss a global rigid fit because of depth noise or
+            # rotation while still moving with its nearby group members.
+            # Only locally unsupported outliers can seed another body.
+            core = sorted(parent.inliers & current.keys())
+            if core and ready:
+                neighbors = cKDTree(np.array([parent.anchors[i] for i in core])).query(
+                    np.array([parent.anchors[i] for i in ready]), k=min(8, len(core))
+                )[1]
+                neighbor_rows = np.atleast_2d(neighbors)
+                if len(core) == 1:
+                    neighbor_rows = neighbor_rows.T
+                local_error = []
+                for i, row in zip(ready, neighbor_rows, strict=True):
+                    nearby = [core[int(j)] for j in np.atleast_1d(row)]
+                    displacement = current[i] - parent.anchors[i]
+                    nearby_displacement = np.array([current[j] - parent.anchors[j] for j in nearby])
+                    local_error.append(np.median(np.linalg.norm(nearby_displacement - displacement, axis=1)))
+                ready = [
+                    i
+                    for i, error in zip(ready, local_error, strict=True)
+                    if error > self.config.split_tolerance_m
+                ]
+            while len(ready) >= self.config.min_inliers:
+                source = np.array([parent.anchors[i] for i in ready])
+                target = np.array([current[i] for i in ready])
+                fitted = fit_point_motion(
+                    source,
+                    target,
+                    self.config,
+                    robust_tolerance_m=self.config.split_tolerance_m,
+                )
+                if fitted is None:
+                    break
+                pose, keep, residual = fitted
+                # A cluster of depth residuals can fit another rigid pose
+                # without representing distinguishable body motion. Require
+                # the two fitted motions to differ beyond the same metric
+                # error admitted by the point fit.
+                separation = np.linalg.norm(
+                    move(source[keep], pose) - move(source[keep], parent.pose), axis=1
+                )
+                if np.median(separation) <= max(self.config.fit_threshold_m, self.config.split_tolerance_m):
+                    break
+                selected = np.asarray(ready)[keep]
+                # These identities must also agree at an independently
+                # measured point in the confirmation window.
+                if len(self._history) > 2:
+                    midpoint = self._history[len(self._history) // 2][1]
+                    common = [int(i) for i in selected if int(i) in midpoint]
+                    if len(common) < self.config.min_inliers:
+                        break
+                    mid_fit = fit_point_motion(
+                        np.array([earliest[i] for i in common]),
+                        np.array([midpoint[i] for i in common]),
+                        self.config,
+                    )
+                    if mid_fit is None:
+                        break
+                    selected = np.asarray(common)[mid_fit[1]]
+                    if len(selected) < self.config.min_inliers:
+                        break
+                    pose = rigid_fit(
+                        np.array([parent.anchors[int(i)] for i in selected]),
+                        np.array([current[int(i)] for i in selected]),
+                    )
+                if len(self._groups) >= self.config.max_groups:
+                    break
+                anchors = {int(i): parent.anchors.pop(int(i)) for i in selected}
+                branch = self._new(anchors, pose, time, confirmed=parent.confirmed)
+                branch.residual = float(np.sqrt(np.mean(residual[keep] ** 2)))
+                for i in selected:
+                    i = int(i)
+                    parent.inliers.discard(i)
+                    parent.departed_ids.add(i)
+                    self._departed_from[i] = (parent.id, anchors[i].copy())
+                    self._departing.pop(i, None)
+                    self._free_since.pop(i, None)
+                self._absorb_rigid_parent_members(parent, branch, earliest, current)
+                ready = [i for i in ready if i in parent.anchors]
+
+    def _carry_uncertain(self):
+        """Uncertain members follow their nearest measured pre-split neighbor.
+
+        Only measured departures that now belong to another measured body can
+        establish a branch. Distances are in the former shared group frame,
+        never between already separated bodies or between predicted points.
+        Objects, masks and downstream pose estimates are not inputs.
+        """
+        branches = {}
+        for target in self._groups.values():
+            for i in sorted(target.inliers):
+                origin = self._departed_from.get(i)
+                if origin is not None and origin[0] != target.id and origin[0] in self._groups:
+                    branches.setdefault(origin[0], {}).setdefault(target.id, []).append(i)
+        for parent_id, destinations in sorted(branches.items()):
+            parent = self._groups[parent_id]
+            # An isolated noisy measurement is no better evidence of body
+            # membership than a missing one. Both retain their physical ID
+            # and follow the nearest reliable neighbor after a real split.
+            uncertain = sorted(parent.anchors.keys() - parent.inliers)
+            if not uncertain:
+                continue
+            voters = [parent.anchors[i] for i in sorted(parent.inliers)]
+            labels = [parent_id] * len(voters)
+            transforms = {}
+            for target_id, ids in sorted(destinations.items()):
+                target = self._groups[target_id]
+                source = np.array([self._departed_from[i][1] for i in ids])
+                local = np.array([target.anchors[i] for i in ids])
+                fitted = fit_point_motion(
+                    source, local, self.config, min_points=self.config.min_motion_points
+                )
+                if fitted is None:
+                    continue
+                transforms[target_id] = fitted[0]
+                voters.extend(source[fitted[1]])
+                labels.extend([target_id] * int(fitted[1].sum()))
+            if not transforms:
+                continue
+            nearest = cKDTree(np.asarray(voters)).query(np.array([parent.anchors[i] for i in uncertain]))[1]
+            for i, neighbor in zip(uncertain, nearest, strict=True):
+                target_id = labels[neighbor]
+                if target_id == parent_id:
+                    continue
+                anchor = parent.anchors.pop(i)
+                self._groups[target_id].anchors[i] = move(anchor[None], transforms[target_id])[0]
+                parent.departed_ids.add(i)
+                self._departed_from[i] = (parent_id, anchor)
 
     def update(self, scene):
         time = float(scene.source_time_s)
@@ -373,12 +604,12 @@ class SceneMotionGroups:
                     self._departing.pop(i, None)
                     group.inliers.add(i)
                 else:
-                    since = self._departing.setdefault(i, time)
-                    if time - since + 1e-9 >= self.config.split_confirmation_s:
-                        del group.anchors[i]
-                        del self._departing[i]
-                        self._free_since[i] = since
-                        self._banned_from[i] = (group.id, time + self.config.merge_confirmation_s)
+                    self._departing.setdefault(i, time)
+
+        # Existing measured branches get first claim on uncertain neighbors;
+        # otherwise the same body can be rediscovered as another new group.
+        self._carry_uncertain()
+        self._split_confirmed(current, time)
 
         # Existing groups need enough members to measure motion; only birth
         # requires the larger new-group consensus above.
@@ -394,16 +625,15 @@ class SceneMotionGroups:
         for i in unexplained:
             self._free_since.setdefault(i, time)
         self._birth_from_history(unexplained, current, time)
+        self._carry_uncertain()
         self._joining = {i: candidate for i, candidate in self._joining.items() if i in current}
-        self._banned_from = {
-            i: entry for i, entry in self._banned_from.items() if i in self._seen and time < entry[1]
-        }
         self._free_since = {i: since for i, since in self._free_since.items() if i in current}
         self._departing = {i: since for i, since in self._departing.items() if i in self._seen}
 
         # Compare relative motion at the joining body's actual points. Testing
         # its noisy rotation across the entire distant scene invents motion.
         merge_next = {}
+        merges = {}
         keys = sorted(self._groups)
         for ai, aid in enumerate(keys):
             if aid not in self._groups:
@@ -438,12 +668,22 @@ class SceneMotionGroups:
                     a.anchors.update(dict(zip(b.anchors, moved, strict=True)))
                     a.inliers.update(b.inliers)
                     a.confirmed |= b.confirmed
+                    merges[bid] = (aid, _readonly(relative))
                     del self._groups[bid]
                 else:
                     merge_next[(aid, bid)] = (baseline, relative.copy(), since)
         self._merge_since = merge_next
+        self._departed_from = {
+            i: origin
+            for i, origin in self._departed_from.items()
+            if i in self._seen and origin[0] in self._groups and i not in self._groups[origin[0]].anchors
+        }
         views = {}
         for gid, group in self._groups.items():
+            # Diagnostic provenance only: it never participates in fitting,
+            # joining, splitting or merging. Rejoining supersedes departure.
+            group.departed_ids.intersection_update(self._seen)
+            group.departed_ids.difference_update(group.anchors)
             member_ids = np.array(sorted(group.anchors), dtype=np.int64)
             if not len(member_ids):
                 continue
@@ -466,7 +706,10 @@ class SceneMotionGroups:
                 _readonly(np.array([current[i] for i in pairs]).reshape(-1, 3)),
                 self._time,
                 time,
+                frozenset(group.departed_ids),
             )
         self._previous, self._time = current, time
-        self.frame = GroupFrame(scene.frame_id, time, MappingProxyType(views), len(self._seen))
+        self.frame = GroupFrame(
+            scene.frame_id, time, MappingProxyType(views), len(self._seen), MappingProxyType(merges)
+        )
         return self.frame

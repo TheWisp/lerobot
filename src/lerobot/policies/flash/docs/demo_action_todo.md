@@ -1,47 +1,10 @@
-# FLASH demo action follow-ups
+# FLASH demo action: open work
 
-This is the branch's open action-system work after the 2026-11-15 UI-initiated
-gamepad-on-ring run. The run dispatched 423 commands and completed 343 marked
-keyframes, but the gamepad ended beside the ring. Completion of the command
-queue is not evidence of task success. The [run record](../../../../../docs/proofs/flash-demo-editor/real-run-20261115/ui-run/README.md)
-contains the final image and compressed plan and motor trace.
+Open work beyond the group update and display changes. The running design is in the [architecture diagram](../../../gui/static/flash_architecture.html); recorded group regressions live in [the tests](../../../../../tests/policies/flash/test_live_static_ring_groups.py).
 
-- [ ] **Get one verified physical placement.** The last UI run ended beside the
-      ring. Inspect the gamepad, ring, gripper, and commanded tool path together and
-      verify the object actually rests on the ring before calling the action path
-      successful.
-- [ ] **Stabilize the placement reference.** Two accepted ring poses 1.63 s
-      apart moved the computed final tool target by 61.9 mm, although the fitted
-      ring surface centre moved about 10 mm. Determine whether the ring's coordinate
-      frame changed under symmetry or the object moved; test the selected live
-      target against the recorded scene, including through occlusion.
-- [ ] **Use the actual held-object relation.** The gamepad was carried, but its
-      grasp relative to the gripper differed from the demonstration. Track or
-      measure that relation, use robot pose as an independent source while the
-      gamepad is hidden, and handle release or slip. Keep this separate from scene
-      group tracking.
-- [ ] **Inspect placement contact.** An earlier interrupted placement moved the
-      ring. Align camera frames with robot readback to identify first contact and
-      distinguish a bad pose target from a collision or grasp error.
-- [ ] **Save and replay every applied run.** The editor's “Last replay” currently
-      opens the teleoperated demonstration. The applied run was visible only while
-      Live was open, and rolling camera history expired before Stop. Preserve raw
-      and processed camera frames, tracker results, motor commands, readback, and
-      timestamps in one replayable run.
-- [ ] **Measure end-to-end speed against the demo.** Retained motor ticks were
-      near 30 Hz and placement travel was roughly 1× over 0.33 s samples, but the
-      run had a 2.67 s command gap. The pickup and placement keyframe ranges took
-      longer than their marked-frame spans. Report both local end-effector speed and
-      whole-action elapsed time, including approach, pauses, and readback lag.
-- [ ] **Make progress and failure visible.** Show the current target, arm pose,
-      active reference, and reason for waiting or stopping in the shared live view.
-      Separate “all commands issued” from measured arrival and object placement.
-      The no-motion test view should draw the simulated arm and tool target; its
-      completion alone cannot establish grasp or contact success.
-- [ ] **Review demo-to-live object identity after a successful run.** Decide how
-      demo objects are initialized and bound to live objects, including unnamed
-      objects selected by clicking, and show that binding for each keyframe.
-- [ ] **Measure causal pose age.** Record capture, depth/mask completion, pose
-      publication, planning, and command dispatch times so the action system uses
-      and displays the actual age of its reference. Investigate actuator lag or
-      blocked motion without restarting the command path from each joint readback.
+- [ ] **Medium:** bound group memory without silently losing useful hidden identities. The 4,096-point and 32-group capacities can still erase established state without measured separation.
+- [ ] Investigate the two deferred pose changes independently: which current observations contribute Kalman information, and when a group hint can skip object fitting or reset the pose filter. Neither is required for the group-only regression.
+- [ ] Prevent stale scene-group predictions from steering a reappearing held object. Verify measured object evidence and the gripper-to-object relation during grasp, release, and slip.
+- [ ] Verify one physical placement end to end: stable ring reference, demo-to-live object identity, commanded versus measured tool path, capture-to-command latency, contact, IK limits, and actual object-on-ring outcome. Queue completion alone is insufficient.
+- [ ] Stamp every saved tracking result with a monotonically increasing integer pipeline version. Increment it when group or pose behavior changes; detect version mismatches and rebuild stale demo, rollout, live-history, and example results from retained inputs before presenting them as current.
+- [ ] Validate group membership and carried positions across more recordings with independent physical evidence, including new-point joining and genuine object separation. Benchmark full replay/live latency and memory on the target hardware; the recorded group-core benchmark does not cover camera capture or object pose fitting.

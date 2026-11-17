@@ -50,6 +50,16 @@ class ObjectGroupAssociation:
     def query(self, snapshot, frame, scene, mask, reference_frame, *, object_usable=None):
         if snapshot.frame_id != frame.frame_id or snapshot.time_s != frame.source_time_s:
             raise ValueError("group source requires this frame's scene update")
+        # The scene tracker knows the exact coordinate change when one group
+        # joins another. Carry the fixed object relation through that change;
+        # re-fitting it from a small visible patch would invent a pose jump.
+        merged_from = None
+        if self._group is not None and self._group not in snapshot.groups:
+            merger = snapshot.merges.get(self._group)
+            if merger is not None and self._group_from_reference is not None:
+                merged_from = self._group
+                self._group, from_old = merger
+                self._group_from_reference = from_old @ self._group_from_reference
         details = {
             "source": None,
             "group_id": self._group if self._group in snapshot.groups else None,
@@ -57,6 +67,8 @@ class ObjectGroupAssociation:
             "environment_inliers": 0,
             "group_count": len(snapshot.groups),
         }
+        if merged_from is not None:
+            details["merged_from_group"] = merged_from
         alive = {int(i) for g in snapshot.groups.values() for i in g.ids} | set(scene.ids.tolist())
         self.anchors = {i: p for i, p in self.anchors.items() if i in alive}
         if self.reference is None or str(reference_frame) != str(self.reference_frame):
@@ -65,45 +77,50 @@ class ObjectGroupAssociation:
         if object_usable is not None:
             keep &= inside(scene, object_usable)
         own_now = set(scene.ids[keep].tolist())
-        measured_known_own = own_now & self.anchors.keys()
         candidates = []
         for gid, group in snapshot.groups.items():
-            if not group.confirmed or not group.supported:
-                continue
             known = [j for j, i in enumerate(group.ids) if int(i) in self.anchors]
             # Both coordinate frames stay fixed while the group ID survives.
             # Re-fitting this relation from whichever few points happen to be
             # visible would move the object even when the group did not move.
             relation = self._group_from_reference if gid == self._group else None
-            # A new relation requires measured identities on the object now.
-            # Once established, its fixed transform can survive full occlusion.
-            visible_known = [j for j in known if group.measured[j] and int(group.ids[j]) in own_now]
-            minimum = self.min_association_points
-            # Measured membership that has separated contradicts the old
-            # relation even when only a small part of the object is visible.
-            # The scene group already required sustained 3D disagreement before
-            # releasing each point. With none measured, retain the relation
-            # for occlusion instead of treating hidden points as new evidence.
-            if measured_known_own and 2 * len(visible_known) < len(measured_known_own):
-                if gid == self._group:
-                    self._group = self._group_from_reference = None
-                    details["group_id"] = None
-                    details["association_contradiction"] = "visible_object_points_separated"
-                continue
-            if relation is None and len(visible_known) >= minimum:
-                a = np.array([self.anchors[int(group.ids[j])] for j in visible_known])
-                b = group.local_xyz[visible_known]
-                fitted = fit_point_motion(a, b, self.config)
+            # Membership belongs to the scene layer. Hidden identities remain
+            # part of the object, while ungrouped IDs cannot vote to disconnect
+            # it. A split/merge changes the carrier through those same IDs.
+            measured_known = [j for j in known if group.measured[j]]
+            first_binding = self._group is None
+            fitting = measured_known if first_binding else known
+            minimum = self.min_association_points if first_binding else self.config.min_motion_points
+            if relation is None and len(fitting) >= minimum:
+                a = np.array([self.anchors[int(group.ids[j])] for j in fitting])
+                b = group.local_xyz[fitting]
+                fitted = fit_point_motion(a, b, self.config, min_points=minimum)
                 if fitted is not None:
                     relation = fitted[0]
             if relation is None:
                 continue
-            visible_own = sum(int(group.ids[j]) in own_now for j in known)
-            candidates.append((visible_own, gid == self._group, len(known), -gid, group, relation))
+            candidates.append((len(known), gid == self._group, len(measured_known), -gid, group, relation))
         if not candidates:
             return None, details
         _, _, _, _, group, relation = max(candidates, key=lambda c: c[:4])
         self._group, self._group_from_reference = group.id, relation.copy()
+        known = np.array([int(i) in self.anchors for i in group.ids])
+        details.update(
+            group_id=group.id,
+            association_check={
+                "group_id": group.id,
+                "persistent_members": int(known.sum()),
+                "measured_members": int((known & group.measured).sum()),
+                "predicted_members": int((known & ~group.measured).sum()),
+                "unassigned_points": len(
+                    self.anchors.keys() - {int(i) for g in snapshot.groups.values() for i in g.ids}
+                ),
+            },
+        )
+        # An association persists through an unsupported/unconfirmed group;
+        # absence of measured group motion only withholds this frame's hint.
+        if not group.confirmed or not group.supported:
+            return None, details
         # Add fresh object tracks in established group coordinates; a fitted
         # object pose does not move these anchors on subsequent frames.
         for i, local in zip(group.ids, group.local_xyz, strict=True):

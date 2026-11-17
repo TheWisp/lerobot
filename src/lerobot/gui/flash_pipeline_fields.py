@@ -178,7 +178,7 @@ def pipeline_fields():
                     "group_experiment.min_motion_points",
                     "Existing group motion points",
                     "int",
-                    "Measured members needed to update group motion; a single disagreeing point can still leave.",
+                    "Measured members needed to update group motion; isolated disagreeing readings remain predicted.",
                     {"min": 3, "step": 1},
                 ),
                 (
