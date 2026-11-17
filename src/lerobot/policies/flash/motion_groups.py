@@ -26,7 +26,6 @@ class GroupConfig:
     split_confirmation_s: float = 0.2
     merge_tolerance_m: float = 0.003
     merge_confirmation_s: float = 0.8
-    max_hidden_s: float = 30.0
     max_points: int = 4096
     max_groups: int = 32
     motion_hypotheses: int = 48
@@ -46,7 +45,7 @@ class GroupConfig:
             raise ValueError("max_points must accommodate min_inliers")
         if self.min_motion_points > self.min_inliers:
             raise ValueError("min_motion_points cannot exceed new-group min_inliers")
-        for name in ("fit_threshold_m", "split_tolerance_m", "merge_tolerance_m", "max_hidden_s"):
+        for name in ("fit_threshold_m", "split_tolerance_m", "merge_tolerance_m"):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be finite and positive")
         for name in (
@@ -59,6 +58,9 @@ class GroupConfig:
 
     @classmethod
     def from_dict(cls, values):
+        # Accept the retired field in recorded settings without expiring hidden identities.
+        values = dict(values)
+        values.pop("max_hidden_s", None)
         return cls(**values)
 
 
@@ -329,7 +331,7 @@ class SceneMotionGroups:
             self._history.popleft()
         self._seen.update(dict.fromkeys(current, time))
         survivors = sorted(self._seen, key=lambda i: (-self._seen[i], i))[: self.config.max_points]
-        self._seen = {i: self._seen[i] for i in survivors if time - self._seen[i] <= self.config.max_hidden_s}
+        self._seen = {i: self._seen[i] for i in survivors}
         for group in list(self._groups.values()):
             group.anchors = {i: p for i, p in group.anchors.items() if i in self._seen}
             if not group.anchors:

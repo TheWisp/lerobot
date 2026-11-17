@@ -384,10 +384,8 @@ def test_new_ids_join_but_do_not_reuse_a_disappeared_points_identity():
     assert len(result.groups) == 1
 
 
-def test_memory_is_bounded_and_expiration_is_same_for_all_points():
-    tracker = SceneMotionGroups(
-        GroupConfig(max_points=100, max_groups=4, max_hidden_s=0.4, support_confirmation_s=0)
-    )
+def test_memory_is_bounded_by_capacity():
+    tracker = SceneMotionGroups(GroupConfig(max_points=100, max_groups=4, support_confirmation_s=0))
     points = cloud(40)
     for i in range(24):
         result = tracker.update(scene(i, points, np.arange(40) + 40 * (i // 3)))
@@ -589,7 +587,6 @@ def test_one_measured_object_point_that_left_its_group_breaks_stale_association(
         ("max_points", 0),
         ("max_groups", 0),
         ("motion_hypotheses", 0),
-        ("max_hidden_s", 0),
         ("support_confirmation_s", -1),
         ("split_confirmation_s", -1),
         ("merge_confirmation_s", -1),
@@ -846,3 +843,33 @@ def test_merge_tolerance_controls_when_two_measured_motions_count_as_one():
             tracker.update(scene(index, measured))
     assert len(strict.frame.groups) == 2
     assert len(permissive.frame.groups) == 1
+
+
+def test_hidden_landmarks_survive_more_than_thirty_seconds_and_rejoin():
+    points = cloud()
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
+    tracker.update(scene(0, points))
+    first = tracker.update(scene(1, points))
+    gid = memberships(first)[0]
+
+    displacement = np.array([0.02, 0.0, 0.0])
+    hidden_ids = np.arange(16)
+    for index, fraction in ((2, 0.5), (310, 1.0)):
+        snapshot = tracker.update(scene(index, points[16:] + fraction * displacement, np.arange(16, 80)))
+        group = snapshot.groups[gid]
+        rows = {int(point_id): row for row, point_id in enumerate(group.ids)}
+        assert all(int(point_id) in rows for point_id in hidden_ids)
+        assert not group.measured[[rows[int(point_id)] for point_id in hidden_ids]].any()
+        np.testing.assert_allclose(
+            group.base_xyz[[rows[int(point_id)] for point_id in hidden_ids]],
+            points[:16] + fraction * displacement,
+            atol=1e-9,
+        )
+
+    returned = tracker.update(scene(311, points + displacement))
+    assert all(memberships(returned)[int(point_id)] == gid for point_id in hidden_ids)
+    assert returned.groups[gid].measured.sum() == len(points)
+
+
+def test_old_hidden_expiry_setting_is_ignored_when_loading_recorded_settings():
+    assert GroupConfig.from_dict({"max_hidden_s": 0.01}) == GroupConfig()

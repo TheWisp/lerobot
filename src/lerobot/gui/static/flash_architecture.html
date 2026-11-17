@@ -1256,11 +1256,11 @@
             <p><b>Gate:</b> four visible members can update an existing group's motion; forming a new group needs twelve agreeing measured point pairs. These are current default settings, not fixed mathematical requirements.
               A point leaves after its measured disagreement persists for the split duration;
               points or groups join only after the longer co-motion duration.
-              Missing points retain predicted positions, but do not measure motion.</p>
+              Missing points retain predicted positions until capacity eviction, but do not measure motion.</p>
             <p><b>Tune:</b> <code>fit_threshold_m</code>, <code>min_inliers</code>, <code>min_motion_points</code>,
               <code>split_tolerance_m</code>, <code>split_confirmation_s</code>,
               <code>merge_tolerance_m</code>, <code>merge_confirmation_s</code>,
-              <code>support_confirmation_s</code>, <code>max_hidden_s</code>,
+              <code>support_confirmation_s</code>,
               <code>max_points</code>, <code>max_groups</code>, <code>motion_hypotheses</code>.</p>
           </article>
           <article id="metric-fit">
