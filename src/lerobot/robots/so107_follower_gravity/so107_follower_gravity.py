@@ -101,7 +101,11 @@ class SO107FollowerGravity(SO107Follower):
         )
 
     def units_per_motor_degree(self, motor: str) -> float:
-        """Action units per motor degree: 1 in degrees mode, calibration-range based otherwise."""
+        """Action units per alignment degree: 1 for the gripper or degrees mode."""
+        # The gripper always uses RANGE_0_100, and its alignment was measured
+        # in those action units. It does not switch to the body's -100..100 mode.
+        if motor == "gripper":
+            return 1.0
         if self.config.use_degrees:
             return 1.0
         cal = self.calibration[motor]

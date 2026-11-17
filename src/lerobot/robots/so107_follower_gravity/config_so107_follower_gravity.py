@@ -34,6 +34,8 @@ class SO107FollowerGravityRobotConfig(RobotConfig, SOFollowerConfig):
     3.9 mm max (``so107_description/docs/gravity_sag.md``).
     """
 
+    required_extras = (*SOFollowerConfig.required_extras, "pink-dep")
+
     # Which arm this is: the feed-forward and the kinematics take that arm's motor->URDF alignment.
     arm: str = "left"
     # Servo loop gains written at connect: Feetech's factory P, no integral term (it winds up, gravity_sag.md).

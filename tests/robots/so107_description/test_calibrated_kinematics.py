@@ -33,6 +33,44 @@ def test_measured_tool_and_joint_zeros_recover_recorded_demo_fk():
     assert np.linalg.norm(nominal.forward_kinematics(joints)[:3, 3] - recorded_tip_m) > 0.1
 
 
+@pytest.mark.parametrize("arm", ["left", "right"])
+def test_folded_pose_matches_unclamped_dynamics_frame_and_remains_solvable(arm):
+    """The insertion recording starts with S2 below the CAD export's -pi limit.
+
+    Compare the public calibrated FK/IK to raw Pinocchio frame placement so
+    clipping the observation and then solving that clipped target cannot pass.
+    """
+    pin = pytest.importorskip("pinocchio")
+    from lerobot.robots.so107_description import get_gravity_urdf_path
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES, RIGHT_ARM_ALIGNMENT
+
+    alignment = LEFT_ARM_ALIGNMENT if arm == "left" else RIGHT_ARM_ALIGNMENT
+    calibration = {
+        "tool_point": {"offset_m": [-0.00732108362056063, -0.08923142140583068, 0.004925306681653079]},
+        "joint_zero_deg": {"shoulder_lift": 5.279106382223435, "elbow_flex": 7.003265671991713},
+    }
+    # First-frame motor state from the regular LeRobot insertion recording.
+    joints = np.array([-2.8571, -98.0220, 88.5714, 14.9451, -58.3297, -13.8462, 79.5610])
+    q = np.deg2rad(
+        [
+            alignment[name].sign * (value + calibration["joint_zero_deg"].get(name, 0.0))
+            + alignment[name].offset_deg
+            for name, value in zip(MOTOR_NAMES, joints, strict=True)
+        ]
+    )
+    assert q[1] < -np.pi
+    dynamics = pin.buildModelFromUrdf(str(get_gravity_urdf_path()))
+    data = dynamics.createData()
+    pin.framesForwardKinematics(dynamics, data, q)
+    tool = np.eye(4)
+    tool[:3, 3] = calibration["tool_point"]["offset_m"]
+    expected = data.oMf[dynamics.getFrameId("L6_1")].homogeneous @ tool
+    kin = make_calibrated_so107_kinematics(calibration, arm=arm)
+    np.testing.assert_allclose(kin.forward_kinematics(joints), expected, atol=1e-12)
+    solved = kin.inverse_kinematics(joints, expected)
+    np.testing.assert_allclose(solved[:6], joints[:6], atol=1e-5)
+
+
 def test_recorded_stack_exit_reaches_target_without_exceeding_wrist_limit():
     """Frame 778 stalled after 339 keys: the unconstrained IK crossed the limit.
 

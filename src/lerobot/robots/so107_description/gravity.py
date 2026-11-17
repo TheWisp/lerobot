@@ -23,8 +23,10 @@ is the servo's compliance at the gains in use. The compensation is the
 arms: shift the goal by the droop the load will cause, so the joint settles on
 the desired angle instead of below it.
 
-``tau_g`` comes from pinocchio's generalized-gravity term on the vendored URDF
-(masses set by link role; see the note at the top of ``SO107.urdf``). ``alpha``
+``tau_g`` comes from pinocchio's generalized-gravity term on the dedicated
+``SO107_gravity.urdf`` (masses set by link role). The shared ``SO107.urdf``
+retains CAD dynamics for visualization and kinematics; both models use the
+research branch's physical joint ranges. ``alpha``
 is measured, not modelled — one number for all joints, since every joint is
 the same servo at the same gain. It scales with 1/P.
 """
@@ -53,13 +55,13 @@ class GravityFeedForward:
     def __init__(self, alpha_deg_per_nm: float, alignment: Mapping[str, JointAlignment]) -> None:
         import pinocchio as pin
 
-        from . import get_urdf_path
+        from . import get_gravity_urdf_path
 
         assert alpha_deg_per_nm >= 0.0, "alpha is a compliance, never negative"
         missing = [m for m in MOTOR_NAMES if m not in alignment]
         assert not missing, f"alignment lacks {missing}"
         self.alpha = float(alpha_deg_per_nm)
-        self._model = pin.buildModelFromUrdf(str(get_urdf_path()))
+        self._model = pin.buildModelFromUrdf(str(get_gravity_urdf_path()))
         self._data = self._model.createData()
         names = [self._model.names[i] for i in range(1, self._model.njoints)]
         assert tuple(names) == tuple(URDF_JOINT_NAMES), f"URDF joint order {names} != {URDF_JOINT_NAMES}"
