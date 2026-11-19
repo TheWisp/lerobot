@@ -1,10 +1,10 @@
 # FLASH tracking pipeline
 
-**Terminology:** [tracking glossary with definitions and code citations](glossary.html).
-In particular, distinguish [point track IDs](glossary.html#point-track-id),
-[local surface fitting](glossary.html#surface-fitting),
-[object point anchors](glossary.html#object-anchor), and
-[Kalman pose updates](glossary.html#kalman-update).
+**Terminology:** [tracking glossary with definitions and code citations](glossary.md).
+In particular, distinguish [point track IDs](glossary.md#point-track-id),
+[local surface fitting](glossary.md#local-surface-fitting),
+[object point anchors](glossary.md#object-point-anchor), and
+[Kalman pose updates](glossary.md#kalman-pose-update).
 
 **Current code path:** [rendered architecture diagram](../../../gui/static/flash_architecture.html).
 Update that diagram when changing the per-frame data flow or publication rules.

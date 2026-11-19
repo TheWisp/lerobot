@@ -1,18 +1,18 @@
 # Recovery regression and first experiments
 
-Use the [tracking glossary](../../../src/lerobot/policies/flash/docs/glossary.html)
-for exact definitions and code citations. Earlier “image identity” means
-[point track ID](../../../src/lerobot/policies/flash/docs/glossary.html#point-track-id);
-“local 3D alignment” means
-[local surface fitting](../../../src/lerobot/policies/flash/docs/glossary.html#surface-fitting);
-“object anchor” means
-[object point anchor](../../../src/lerobot/policies/flash/docs/glossary.html#object-anchor).
-“Smoothing” referred to the
-[Kalman pose update](../../../src/lerobot/policies/flash/docs/glossary.html#kalman-update).
+This regression checks [tracking loss and recovery](../../../src/lerobot/policies/flash/docs/glossary.md#tracking-loss-and-recovery):
+obtaining a new accepted object observation after tracking fails. A carried
+[pose prediction](../../../src/lerobot/policies/flash/docs/glossary.md#pose-prediction--prior)
+does not count as recovery. Definitions and code citations live in the
+[Markdown glossary](../../../src/lerobot/policies/flash/docs/glossary.md).
 
 The compact regression replays eleven real RGB-D observations through
-`LiveSurfaceSession`: real image matching, scene groups, surface preparation,
-registration, Kalman updates, accepted-image changes and map growth. SAM and
+`LiveSurfaceSession`: real [image matching](../../../src/lerobot/policies/flash/docs/glossary.md#image-match--2d-correspondence),
+[motion groups](../../../src/lerobot/policies/flash/docs/glossary.md#motion-group),
+[local surface fitting](../../../src/lerobot/policies/flash/docs/glossary.md#local-surface-fitting),
+[Kalman pose updates](../../../src/lerobot/policies/flash/docs/glossary.md#kalman-pose-update),
+[accepted-observation](../../../src/lerobot/policies/flash/docs/glossary.md#accepted-observation--reference-image)
+changes and [surface-map](../../../src/lerobot/policies/flash/docs/glossary.md#stored-surface--surface-map) updates. SAM and
 learned depth are frozen at their recorded outputs. The test archive is 6.4 MiB;
 it requires neither the original video nor the camera.
 
@@ -24,6 +24,26 @@ view and cannot be established from RGB appearance alone.
 The screenshots use the original full history. The short regression starts
 fresh and reproduces the corresponding surface-fitting and Kalman-update failures;
 it does not restore or fake the original accumulated map/group state.
+
+## Current regression cases
+
+| Case                                                              | Required behavior                                                                                                                                                            | Result at `41e1ff35c`                                                           |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Cube, frame 2741; pointer, frame 3000                             | Accept the moved object's observation and continue tracking subsequent frames                                                                                                | Pass                                                                            |
+| Cube, frame 2747; pointer, frame 3008 after a missing observation | Recover without surviving [point track IDs](../../../src/lerobot/policies/flash/docs/glossary.md#point-track-id), the integer labels connecting tracked pixels across frames | Pass                                                                            |
+| Cube followed by actual ring observations                         | Reject the wrong object and leave the accepted image and surface map unchanged                                                                                               | Pass                                                                            |
+| Ring, frame 4759                                                  | Keep a geometry-compatible result through the Kalman pose update                                                                                                             | Known failure: the fitted pose passes, but the fused pose fails the depth check |
+
+The recovery assertions check the published location against independently reviewed RGB regions,
+check its depth, require a newly accepted observation, and require the surface map to advance.
+The missing observation must leave the accepted image and map unchanged. These checks establish
+visible location and state updates, not exact 6D pose accuracy.
+
+The five [camera comparisons](index.html) retain the original pre-fix evidence. Their explanations
+link the same definitions: point track IDs, local surface fitting,
+[object point anchors](../../../src/lerobot/policies/flash/docs/glossary.md#object-point-anchor)
+and motion groups, Kalman pose updates, and
+[usable 3D pairs](../../../src/lerobot/policies/flash/docs/glossary.md#usable-and-validated-3d-pairs).
 
 ## Implemented translation initialization
 

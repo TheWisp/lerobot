@@ -768,10 +768,13 @@
           <span>
             <code>S[&lt;t]</code> is the combined grown surface in fixed object
             coordinates; fitting changes its candidate pose, not the stored
-            surface. The initial pose is the motion of object image points since
+            surface. The motion proposal is the motion of object image points since
             the last accepted view applied to that view's pose. If those matches
             are unavailable, use the associated group's predicted pose; if that
-            is unavailable, use the previous pose. LK/UFM and group point
+            is unavailable, use the previous pose. Keep the proposed rotation and
+            compare its translation with one aligning the stored and current surface
+            centres; start the one solve from the lower geometry-cost option.
+            LK/UFM and group point
             correspondences then guide the fit. Current mask and depth
             <code>O[t]</code> decide whether the resulting pose is allowed.
             Fresh sessions use small_gicp with shared LK image matching;

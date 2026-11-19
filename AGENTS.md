@@ -33,14 +33,15 @@ pre-commit run --all-files                           # Lint + format (ruff, typo
 too specific to guess. Each is a `SKILL.md` meant to be read in full before
 doing the thing it names, not skimmed afterwards.
 
-| Skill               | Read before                                                             |
-| ------------------- | ----------------------------------------------------------------------- |
-| `pull-request`      | opening a PR, rewriting a body, or preparing a branch for review        |
-| `verifying-changes` | writing tests for a fix, auditing a branch, or calling something proven |
-| `design-doc`        | writing or reviewing a design document                                  |
-| `gui-async-hygiene` | changing anything under `src/lerobot/gui`                               |
-| `remote-rig`        | running training, inference or the GUI on another machine               |
-| `openarm2`          | OpenArm2 hardware, CAN faults, gripper configuration                    |
+| Skill               | Read before                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| `pull-request`      | opening a PR, rewriting a body, or preparing a branch for review                         |
+| `verifying-changes` | writing tests for a fix, auditing a branch, or calling something proven                  |
+| `flash-terminology` | using, explaining, or introducing FLASH tracking terminology in any response or artifact |
+| `design-doc`        | writing or reviewing a design document                                                   |
+| `gui-async-hygiene` | changing anything under `src/lerobot/gui`                                                |
+| `remote-rig`        | running training, inference or the GUI on another machine                                |
+| `openarm2`          | OpenArm2 hardware, CAN faults, gripper configuration                                     |
 
 **Agents do not find these the same way, and one of them does not find them
 at all.** Claude Code reads `.claude/skills/`, which symlinks here, and offers
@@ -141,15 +142,12 @@ how several defects went unnoticed for months.
 
 ## Architecture (`src/lerobot/`)
 
-- **FLASH terminology:** use the [tracking glossary](src/lerobot/policies/flash/docs/glossary.html)
-  for explanations and reports, and hyperlink the first use of each technical term
-  to its definition. Add a precise definition and code citation before introducing
-  a new term. Distinguish point track IDs, object identity, and coordinate frames;
-  do not use “identity,” “reference,” or “alignment” without qualifying them.
-  Explain terms inline as well: the user accesses remotely and cannot rely on
-  localhost or local-file links. State whether a point is 2D or 3D and which
-  coordinates it uses. Report position differences in distance units and rotation
-  differences in degrees separately; never describe a pose as merely “too far away.”
+- **FLASH terminology:** every AI agent must read and follow
+  [the terminology skill](.agents/skills/flash-terminology/SKILL.md) before using,
+  explaining, or introducing tracking terms in conversation or repository work.
+  Consult the [Markdown glossary](src/lerobot/policies/flash/docs/glossary.md)
+  for the definitions; read the skill directly even if your agent does not
+  automatically discover repository skills.
 - **FLASH perception:** [`src/lerobot/gui/static/flash_architecture.html`](src/lerobot/gui/static/flash_architecture.html)
   is the canonical diagram of the running frame path. Update it in the same
   change when altering frame inputs, group evidence, fitting, pose publication,

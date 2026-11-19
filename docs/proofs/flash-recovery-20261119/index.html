@@ -12,18 +12,18 @@ table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{pad
 </style>
 <main>
 <h1>FLASH recovery: what failed, and what helps</h1>
-<p><strong>Regression: 11 lossless frames, 6.4 MiB.</strong> Real <a href="../../../src/lerobot/policies/flash/docs/glossary.html#image-match">image matching</a>, <a href="../../../src/lerobot/policies/flash/docs/glossary.html#motion-group">motion groups</a>, <a href="../../../src/lerobot/policies/flash/docs/glossary.html#surface-fitting">surface fitting</a>, <a href="../../../src/lerobot/policies/flash/docs/glossary.html#kalman-update">Kalman pose updates</a> and <a href="../../../src/lerobot/policies/flash/docs/glossary.html#surface-map">surface map</a> updates. Saved SAM masks and model depth; no video needed.</p>
+<p><strong>Regression: 11 lossless frames, 6.4 MiB.</strong> Real <a href="../../../src/lerobot/policies/flash/docs/glossary.md#image-match--2d-correspondence">image matching</a>, <a href="../../../src/lerobot/policies/flash/docs/glossary.md#motion-group">motion groups</a>, <a href="../../../src/lerobot/policies/flash/docs/glossary.md#local-surface-fitting">surface fitting</a>, <a href="../../../src/lerobot/policies/flash/docs/glossary.md#kalman-pose-update">Kalman pose updates</a> and <a href="../../../src/lerobot/policies/flash/docs/glossary.md#stored-surface--surface-map">surface map</a> updates. Saved SAM masks and model depth; no video needed.</p>
 <p class="note"><strong>Production translation initialization is now implemented.</strong> Cube and pointer recovery pass, including complete loss of image tracks and the wrong-object control. The fitter compares the original translation with one aligning the measured surface centres and uses the lower geometry cost for one solve. The separate ring Kalman-fusion failure remains. The live server was not restarted.</p>
 <p class="note">The screenshots and experiment table below describe the original implementation at <code>9ff25cf80</code>. The updated full-history replay observes 315 of 400 updates; this measures availability, not pose accuracy. <a href="translation-initialization-results.json">Implementation verification</a>.</p>
-<p><a href="../../../src/lerobot/policies/flash/docs/glossary.html">Tracking glossary — definitions and code citations</a></p>
+<p><a href="README.md#current-regression-cases">Current regression cases and results (Markdown)</a> · <a href="../../../src/lerobot/policies/flash/docs/glossary.md">Tracking glossary — definitions and code citations (Markdown)</a></p>
 <nav aria-label="Choose a failure explanation">
 <button aria-pressed="true" data-file="01-lost-identities.png">1 · Lost point tracks</button>
-<button aria-pressed="false" data-file="02-local-alignment.png">2 · Surface fitting</button>
-<button aria-pressed="false" data-file="03-stale-group.png">3 · Stale group pose</button>
-<button aria-pressed="false" data-file="04-filter-rejection.png">4 · Kalman update</button>
+<button aria-pressed="false" data-file="02-local-alignment.png">2 · Local surface fitting</button>
+<button aria-pressed="false" data-file="03-stale-group.png">3 · Motion group and pose prediction</button>
+<button aria-pressed="false" data-file="04-filter-rejection.png">4 · Kalman pose update</button>
 <button aria-pressed="false" data-file="05-depth-pairs.png">5 · Usable 3D pairs</button>
 </nav>
-<p id="explanation" aria-live="polite">A <a href="../../../src/lerobot/policies/flash/docs/glossary.html#point-track-id">point track ID</a> labels one tracked image point. Here the object is visible, but no old IDs connect the last accepted image to the current image.</p>
+<p id="explanation" aria-live="polite">A <a href="../../../src/lerobot/policies/flash/docs/glossary.md#point-track-id">point track ID</a> labels one tracked image point. Here the object is visible, but no old IDs connect the last accepted image to the current image.</p>
 <figure><a id="full" href="01-lost-identities.png" target="_blank"><img id="evidence" src="01-lost-identities.png" alt="Lost point tracks: last accepted image and visible current object with new short tracks"></a>
 <figcaption>Click the image to open it at full size. These are actual camera frames with replay-derived overlays. Screenshots use the original full history; compact tests initialize freshly.</figcaption></figure>
 <details open><summary>Original experiments before the production translation fix</summary>
@@ -36,7 +36,7 @@ table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{pad
 </tbody></table>
 <p>The complete-loss experiment deliberately supplies one black image with empty mask/depth. The original recording is kept separate. Both recovered location and subsequent reference/map updates are checked.</p>
 <p><strong>Longer replay:</strong> all 404 original statuses reproduce on the baseline. Across 400 subsequent updates, the baseline observes 216; the LK surface-recovery experiment observes 400; UFM rematching observes 399 and predicts once. These are availability counts, not pose-accuracy scores.</p>
-<p class="note">Exact 6D orientation remains unlabelled. UFM frame 3491 still rejects its <a href="../../../src/lerobot/policies/flash/docs/glossary.html#kalman-update">fused pose</a> and retains a compatible <a href="../../../src/lerobot/policies/flash/docs/glossary.html#pose-prediction">prediction</a>. A general fix needs broader checks for wrong objects and ambiguous poses before adoption.</p>
+<p class="note">Exact 6D orientation remains unlabelled. UFM frame 3491 still rejects its <a href="../../../src/lerobot/policies/flash/docs/glossary.md#kalman-pose-update">fused pose</a> and retains a compatible <a href="../../../src/lerobot/policies/flash/docs/glossary.md#pose-prediction--prior">prediction</a>. A general fix needs broader checks for wrong objects and ambiguous poses before adoption.</p>
 </details>
 <p class="note"><a href="README.md">Scope, commands and verification</a> · <a href="experiment-results.json">Measured experiment results</a> · <a href="experiment-trace.jsonl">Frame traces</a></p>
 </main>
@@ -47,14 +47,14 @@ const descriptions={
 '03-stale-group.png':'Background group remains measured while its stored object points have no current measurements and its predicted object pose is stale',
 '04-filter-rejection.png':'Ring: geometry-compatible fit and rejected Kalman-fused pose on the same camera image',
 '05-depth-pairs.png':'Matched endpoints: twelve survive image tracking but only three have acceptable depth support'};
-const glossary='../../../src/lerobot/policies/flash/docs/glossary.html';
+const glossary='../../../src/lerobot/policies/flash/docs/glossary.md';
 const term=(id,label)=>`<a href="${glossary}#${id}">${label}</a>`;
 const explanations={
-'01-lost-identities.png':`A ${term('point-track-id','point track ID')} labels one tracked image point. Here the object is visible, but no old IDs connect the ${term('accepted-observation','last accepted image')} to the current image.`,
-'02-local-alignment.png':`${term('surface-fitting','Surface fitting')} moves and rotates stored 3D points to match current depth. The original implementation omitted initialization from the current surface centre; that defect is now corrected. A controlled replay aligned the centres by changing only the initial translation (43.4 mm), with 0° change to the starting rotation: the same fit and checks accepted the result. The picture below compares the original starting estimate and recovered fit. <a href="center-initialization-ablation.json">Controlled trial evidence</a>.`,
-'03-stale-group.png':`An ${term('object-anchor','object point anchor')} remembers a 3D position relative to the object, indexed by an image track’s ID. A ${term('motion-group','motion group')} is a collection of 3D points assumed to move together rigidly. Here the group still has measured background points, but its established object points have no current measurements. Predicting the object’s position from that group gives a stale result.`,
-'04-filter-rejection.png':`The ${term('kalman-update','Kalman pose update')} combines the old prediction with the new surface fit. This is what “smoothing” meant. The resulting pose fails a depth check even though the new fit passed.`,
-'05-depth-pairs.png':`An ${term('image-match','image match')} supplies two pixels. A ${term('3d-pair','usable 3D pair')} also needs acceptable depth at both pixels. Here only three pairs survive those checks; the motion fit needs at least six.`};
+'01-lost-identities.png':`A ${term('point-track-id','point track ID')} labels one tracked image point. Here the object is visible, but no old IDs connect the ${term('accepted-observation--reference-image','last accepted image')} to the current image.`,
+'02-local-alignment.png':`${term('local-surface-fitting','Surface fitting')} moves and rotates stored 3D points to match current depth. The original implementation omitted initialization from the current surface centre; that defect is now corrected. A controlled replay aligned the centres by changing only the initial translation (43.4 mm), with 0° change to the starting rotation: the same fit and checks accepted the result. The picture below compares the original starting estimate and recovered fit. <a href="center-initialization-ablation.json">Controlled trial evidence</a>.`,
+'03-stale-group.png':`An ${term('object-point-anchor','object point anchor')} remembers a 3D position relative to the object, indexed by an image track’s ID. A ${term('motion-group','motion group')} is a collection of 3D points assumed to move together rigidly. Here the group still has measured background points, but its established object points have no current measurements. Predicting the object’s position from that group gives a stale result.`,
+'04-filter-rejection.png':`The ${term('kalman-pose-update','Kalman pose update')} combines the old prediction with the new surface fit. The resulting pose fails a depth check even though the new fit passed.`,
+'05-depth-pairs.png':`An ${term('image-match--2d-correspondence','image match')} supplies two pixels. A ${term('usable-and-validated-3d-pairs','usable 3D pair')} also needs acceptable depth at both pixels. Here only three pairs survive those checks; the motion fit needs at least six.`};
 document.querySelectorAll('button[data-file]').forEach(button=>button.addEventListener('click',()=>{
  document.querySelectorAll('button[data-file]').forEach(other=>other.setAttribute('aria-pressed',String(other===button)));
  const file=button.dataset.file;document.getElementById('evidence').src=file;

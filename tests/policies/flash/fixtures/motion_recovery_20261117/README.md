@@ -1,5 +1,9 @@
 # Sparse motion and reacquisition regression
 
+Terminology follows the [tracking glossary](../../../../../src/lerobot/policies/flash/docs/glossary.md).
+Here [recovery](../../../../../src/lerobot/policies/flash/docs/glossary.md#tracking-loss-and-recovery)
+requires a newly accepted object observation; a predicted pose alone does not pass.
+
 Eleven lossless camera observations (6.4 MiB, stored in Git LFS) extracted from
 `saved-747dd29b27a745418524e2744ac29cb5`, recorded by the 9103 inspector on
 2026-11-17 at commit `efdc380a5`. The archive stores PNG RGB bytes, original
@@ -11,8 +15,8 @@ test inputs.
 
 | Sequence     | Frames                 | Reproduced baseline failure                         |
 | ------------ | ---------------------- | --------------------------------------------------- |
-| Cube         | 2735, 2741, 2747, 2752 | No compatible local alignment after motion          |
-| Pointer head | 2992, 3000, 3008       | No compatible local alignment after motion          |
+| Cube         | 2735, 2741, 2747, 2752 | Local surface fitting fails after motion            |
+| Pointer head | 2992, 3000, 3008       | Local surface fitting fails after motion            |
 | Ring         | 4740, 4750, 4759, 4765 | Compatible fit rejected after Kalman fusion at 4759 |
 
 The tracker initializes freshly at each sequence's first frame. These compact
@@ -30,7 +34,8 @@ later frames enter the estimator.
 
 The complete-loss test replaces one intermediate observation with black RGB,
 zero depth and an empty mask. This is a controlled input intervention, not a
-claim that the recorded frame was black. It destroys the image-identity chain,
+claim that the recorded frame was black. It removes all surviving
+[point track IDs](../../../../../src/lerobot/policies/flash/docs/glossary.md#point-track-id),
 checks that the map/reference are not updated without measurements, and then
 tests reacquisition and its continuation from real subsequent observations.
 A negative control initializes on the cube, then deliberately supplies the
