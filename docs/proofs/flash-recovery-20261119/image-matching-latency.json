@@ -1,0 +1,354 @@
+{
+  "recording": "saved-747dd29b27a745418524e2744ac29cb5",
+  "code_commit": "5fd257ac75c93301917f42e1df578cc5b447c565",
+  "benchmark_sha256": "4b9e8d50b4213d541757c1aa96663cc47a5edc89c0804597f99c8d02077c05c2",
+  "scope": "Warmed one-frame shared tracker updates from identical LK-produced source snapshots. Both backends receive the same source/target RGB, query coordinates, masks and depth. Alternating backend order per pair and round; source restoration and disk reads excluded. CUDA synchronized before/after each timed update. Matching includes RGB-to-gray conversion for LK, or model inference, CPU/GPU transfers and point sampling for UFM. Remaining update includes resizing, depth support, point replenishment and depth lifting. Excludes scene groups, object fitting, SAM, depth inference, camera IO and model startup. This is latency, not a tracking-quality or full-pipeline FPS benchmark. Other processes are not stopped.",
+  "hardware": {
+    "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "gpu_before": "NVIDIA GeForce RTX 5090, 3976 MiB, 6 %",
+    "gpu_after": "NVIDIA GeForce RTX 5090, 7450 MiB, 64 %"
+  },
+  "runtime": {
+    "python": "3.12.13",
+    "torch": "2.10.0+cu128",
+    "cuda": "12.8",
+    "opencv": "4.13.0",
+    "numpy": "2.2.6",
+    "opencv_threads": 1,
+    "torch_threads": 16
+  },
+  "ufm": {
+    "checkpoint": "infinity1096/UFM-Base-DINOv2L-init",
+    "revision": "980825b59331413bb51e5773f9272bfce525bce2",
+    "inference_resolution_wh": [
+      [
+        560,
+        420
+      ]
+    ],
+    "model_load_s": 3.4562262049876153,
+    "peak_torch_allocated_mib": 2382.40966796875
+  },
+  "matching_image_wh": [
+    640,
+    362
+  ],
+  "rounds": 12,
+  "warmup_rounds": 2,
+  "pairs": [
+    {
+      "source": 5372,
+      "target": 5381,
+      "queries": 815
+    },
+    {
+      "source": 5381,
+      "target": 5387,
+      "queries": 812
+    },
+    {
+      "source": 5387,
+      "target": 5395,
+      "queries": 817
+    },
+    {
+      "source": 5395,
+      "target": 5401,
+      "queries": 817
+    },
+    {
+      "source": 5401,
+      "target": 5410,
+      "queries": 824
+    },
+    {
+      "source": 5458,
+      "target": 5467,
+      "queries": 829
+    },
+    {
+      "source": 5467,
+      "target": 5475,
+      "queries": 833
+    },
+    {
+      "source": 5505,
+      "target": 5512,
+      "queries": 831
+    }
+  ],
+  "summary_ms": {
+    "lk": {
+      "matching_ms": {
+        "median": 8.38598795235157,
+        "p95": 9.552397998049855
+      },
+      "shared_update_ms": {
+        "median": 13.645616010762751,
+        "p95": 15.073614136781543
+      },
+      "remaining_update_ms": {
+        "median": 5.102635594084859,
+        "p95": 5.53132826462388
+      }
+    },
+    "ufm": {
+      "matching_ms": {
+        "median": 33.09054905548692,
+        "p95": 33.49968389375135
+      },
+      "shared_update_ms": {
+        "median": 38.201429531909525,
+        "p95": 38.876450329553336
+      },
+      "remaining_update_ms": {
+        "median": 5.071651889011264,
+        "p95": 5.5201578652486205
+      }
+    }
+  },
+  "per_pair_ms": {
+    "5381": {
+      "lk": {
+        "matching_ms": {
+          "median": 8.92797694541514,
+          "p95": 8.974719943944365
+        },
+        "shared_update_ms": {
+          "median": 14.002109412103891,
+          "p95": 14.106919593177736
+        },
+        "remaining_update_ms": {
+          "median": 5.069628939963877,
+          "p95": 5.153445107862353
+        }
+      },
+      "ufm": {
+        "matching_ms": {
+          "median": 33.04430306889117,
+          "p95": 33.44753412529826
+        },
+        "shared_update_ms": {
+          "median": 38.10975339729339,
+          "p95": 38.75081830192357
+        },
+        "remaining_update_ms": {
+          "median": 5.026863538660109,
+          "p95": 5.28816687874496
+        }
+      }
+    },
+    "5387": {
+      "lk": {
+        "matching_ms": {
+          "median": 7.459097425453365,
+          "p95": 7.4930216069333255
+        },
+        "shared_update_ms": {
+          "median": 12.338787433691323,
+          "p95": 12.454648572020233
+        },
+        "remaining_update_ms": {
+          "median": 4.923581378534436,
+          "p95": 4.962999222334474
+        }
+      },
+      "ufm": {
+        "matching_ms": {
+          "median": 33.21342752315104,
+          "p95": 33.48769475705922
+        },
+        "shared_update_ms": {
+          "median": 38.15673105418682,
+          "p95": 38.85005650809035
+        },
+        "remaining_update_ms": {
+          "median": 5.02124906051904,
+          "p95": 5.3623617510311306
+        }
+      }
+    },
+    "5395": {
+      "lk": {
+        "matching_ms": {
+          "median": 7.2950320318341255,
+          "p95": 7.347214815672487
+        },
+        "shared_update_ms": {
+          "median": 12.09084561560303,
+          "p95": 12.18325337395072
+        },
+        "remaining_update_ms": {
+          "median": 4.761680029332638,
+          "p95": 4.881974647287279
+        }
+      },
+      "ufm": {
+        "matching_ms": {
+          "median": 32.999195042066276,
+          "p95": 33.347411861177534
+        },
+        "shared_update_ms": {
+          "median": 37.90720098186284,
+          "p95": 38.55505739338696
+        },
+        "remaining_update_ms": {
+          "median": 4.885711008682847,
+          "p95": 5.314434063620865
+        }
+      }
+    },
+    "5401": {
+      "lk": {
+        "matching_ms": {
+          "median": 7.567905355244875,
+          "p95": 7.5897670816630125
+        },
+        "shared_update_ms": {
+          "median": 12.666473048739135,
+          "p95": 12.809716223273426
+        },
+        "remaining_update_ms": {
+          "median": 5.102269584313035,
+          "p95": 5.239208322018385
+        }
+      },
+      "ufm": {
+        "matching_ms": {
+          "median": 33.059937064535916,
+          "p95": 33.34468643879518
+        },
+        "shared_update_ms": {
+          "median": 38.08213793672621,
+          "p95": 38.66958465659991
+        },
+        "remaining_update_ms": {
+          "median": 5.054840934462845,
+          "p95": 5.428964388556778
+        }
+      }
+    },
+    "5410": {
+      "lk": {
+        "matching_ms": {
+          "median": 8.427285589277744,
+          "p95": 8.534292120020837
+        },
+        "shared_update_ms": {
+          "median": 13.866877881810069,
+          "p95": 14.023156091570854
+        },
+        "remaining_update_ms": {
+          "median": 5.440980428829789,
+          "p95": 5.532665248028934
+        }
+      },
+      "ufm": {
+        "matching_ms": {
+          "median": 33.164192107506096,
+          "p95": 33.57281439239159
+        },
+        "shared_update_ms": {
+          "median": 38.28763996716589,
+          "p95": 38.94063807092607
+        },
+        "remaining_update_ms": {
+          "median": 5.084410891868174,
+          "p95": 5.437943001743406
+        }
+      }
+    },
+    "5467": {
+      "lk": {
+        "matching_ms": {
+          "median": 8.6324920412153,
+          "p95": 8.693697233684361
+        },
+        "shared_update_ms": {
+          "median": 13.91023863106966,
+          "p95": 14.01076203910634
+        },
+        "remaining_update_ms": {
+          "median": 5.269019980914891,
+          "p95": 5.344176851212978
+        }
+      },
+      "ufm": {
+        "matching_ms": {
+          "median": 33.08635693974793,
+          "p95": 33.49215511698276
+        },
+        "shared_update_ms": {
+          "median": 38.429750013165176,
+          "p95": 38.88195730978623
+        },
+        "remaining_update_ms": {
+          "median": 5.231910850852728,
+          "p95": 5.566580721642822
+        }
+      }
+    },
+    "5475": {
+      "lk": {
+        "matching_ms": {
+          "median": 9.5418804557994,
+          "p95": 9.620711847674102
+        },
+        "shared_update_ms": {
+          "median": 15.04805136937648,
+          "p95": 15.209531644359231
+        },
+        "remaining_update_ms": {
+          "median": 5.506602465175092,
+          "p95": 5.622644489631057
+        }
+      },
+      "ufm": {
+        "matching_ms": {
+          "median": 33.15519948955625,
+          "p95": 33.43541428912431
+        },
+        "shared_update_ms": {
+          "median": 38.416991010308266,
+          "p95": 39.21280746581033
+        },
+        "remaining_update_ms": {
+          "median": 5.215090001001954,
+          "p95": 5.9798294212669125
+        }
+      }
+    },
+    "5512": {
+      "lk": {
+        "matching_ms": {
+          "median": 7.83250795211643,
+          "p95": 8.15478793811053
+        },
+        "shared_update_ms": {
+          "median": 12.880461406894028,
+          "p95": 13.274037092924118
+        },
+        "remaining_update_ms": {
+          "median": 5.038109957240522,
+          "p95": 5.18905307399109
+        }
+      },
+      "ufm": {
+        "matching_ms": {
+          "median": 33.15197839401662,
+          "p95": 33.35758170578629
+        },
+        "shared_update_ms": {
+          "median": 37.99762099515647,
+          "p95": 38.57208814006299
+        },
+        "remaining_update_ms": {
+          "median": 4.871489945799112,
+          "p95": 5.291218240745366
+        }
+      }
+    }
+  },
+  "samples": "image-matching-latency.samples.jsonl"
+}

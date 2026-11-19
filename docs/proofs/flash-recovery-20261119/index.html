@@ -37,6 +37,7 @@ table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{pad
 <tr><td>UFM + fresh matching + filter reset</td><td>Recovers both</td><td>Recovers both</td><td>Recovers</td></tr>
 </tbody></table>
 <p>The complete-loss experiment deliberately supplies one black image with empty mask/depth. The original recording is kept separate. Both recovered location and subsequent reference/map updates are checked.</p>
+<p><strong>Measured matching speed:</strong> LK 8.4 ms versus UFM 33.1 ms median on this Ryzen 9950X / RTX 5090. Including point selection and depth lifting: 13.6 versus 38.2 ms. Same recorded inputs and query points; excludes SAM, depth inference, groups and object fitting. <a href="README.md#measured-lk-and-ufm-latency">Method and full timing results</a>.</p>
 <p><strong>Longer replay:</strong> all 404 original statuses reproduce on the baseline. Across 400 subsequent updates, the baseline observes 216; the LK surface-recovery experiment observes 400; UFM rematching observes 399 and predicts once. These are availability counts, not pose-accuracy scores.</p>
 <p class="note">Exact 6D orientation remains unlabelled. UFM frame 3491 still rejects its <a href="../../../src/lerobot/policies/flash/docs/glossary.md#kalman-pose-update">fused pose</a> and retains a compatible <a href="../../../src/lerobot/policies/flash/docs/glossary.md#pose-prediction--prior">prediction</a>. A general fix needs broader checks for wrong objects and ambiguous poses before adoption.</p>
 </details>

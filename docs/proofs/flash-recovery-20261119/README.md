@@ -363,6 +363,48 @@ the cube and checks rejection. Visible-location assertions use reviewed image
 regions. These checks do not provide exact 6D ground truth or a general
 lookalike-object guarantee.
 
+## Measured LK and UFM latency
+
+Measured on the current code path with a Ryzen 9 9950X and RTX 5090. Both
+[image-matching backends](../../../src/lerobot/policies/flash/docs/glossary.md#image-match--2d-correspondence)
+receive identical recorded image pairs and 812–833 query pixels. The shared
+matching image is 640×362; the UFM checkpoint internally resizes to 560×420.
+LK uses one OpenCV CPU thread. UFM uses the cached DINOv2-L checkpoint at revision
+`980825b59331413bb51e5773f9272bfce525bce2`, with its default inference settings.
+
+| Timed work                                                         |  LK median / p95 | UFM median / p95 |
+| ------------------------------------------------------------------ | ---------------: | ---------------: |
+| Image matching                                                     |   8.39 / 9.55 ms | 33.09 / 33.50 ms |
+| Shared image tracking, including point selection and depth lifting | 13.65 / 15.07 ms | 38.20 / 38.88 ms |
+
+In this workload UFM matching takes **3.95× as long**, adding about **24.6 ms**
+to the complete shared update. Its 38.2 ms shared update already exceeds a
+33.3 ms budget for serial 30 Hz updates. These measurements exclude SAM, depth
+inference, scene motion groups, object fitting, camera IO, and model startup;
+they do not establish full-pipeline frame rate or comparative tracking quality.
+An extra fresh UFM match during recovery would require another model call and
+is not included here. LK performs sparse point queries; UFM computes a dense
+field and then samples the query points.
+
+Method: eight recorded transitions from the cube sequence, with source states
+obtained by replaying the shared LK tracker from frame 5118. Restore the same
+source state before each backend call. Alternate backend order per pair and
+round. Discard two full warmup rounds and measure twelve rounds, giving 96
+updates per backend. State copies and file reads are outside the timed region;
+CUDA is synchronized before and after the shared update. GPU transfers and
+CPU output conversion are included. Other processes were not stopped, so these
+are local measurements rather than an isolated hardware benchmark.
+
+[Timing summary and per-pair results](image-matching-latency.json) ·
+[Individual timing samples](image-matching-latency.samples.jsonl).
+
+Reproduce with an environment containing the cached UFM dependencies:
+
+```sh
+HF_HUB_OFFLINE=1 PYTHONPATH=src:. python -m benchmarks.flash_matching_latency \
+  /path/to/saved-recording /tmp/image-matching-latency.json
+```
+
 ## Original longer-history check
 
 All 404 retained results from the four selections were replayed from their
