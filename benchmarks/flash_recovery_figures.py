@@ -103,12 +103,17 @@ def main(recording, evidence, output):
         dots(ax[0], 2741, "seed", AMBER, "Original starting pose")
         dots(ax[1], 2741, "alternative_center", CYAN, "Alternative fitted surface")
 
+    start, recovered = data["seed_2741"], data["alternative_center_2741"]
+    center = data["reference_2741"].mean(axis=0, keepdims=True)
+    position_mm = 1000 * float(np.linalg.norm(move(center, recovered) - move(center, start)))
+    rotation = recovered[:3, :3] @ start[:3, :3].T
+    rotation_deg = float(np.rad2deg(np.arccos(np.clip((np.trace(rotation) - 1) / 2, -1, 1))))
     figure(
-        "2 · SAM found the cube; surface fitting started too far away",
+        "2 · Cube: compare the starting estimate with the recovered fit",
         [
-            "Both panels show the SAME frame 2741 and the SAME mask/depth. Yellow outlines the selected cube.",
-            "Orange dots: stored surface at the original starting pose. Cyan dots: fitted surface after changing the starting pose.",
-            "Changing the starting pose helps this fit. Passing geometry checks does not prove the pose or the selected object is correct.",
+            "Same frame 2741 and mask/depth. Yellow: SAM mask. Orange: starting surface position. Cyan: recovered fit.",
+            f"From orange to cyan: stored surface centre moves {position_mm:.1f} mm; orientation changes {rotation_deg:.1f}°.",
+            "These compare two estimates, not errors against ground truth. This trial does not isolate position from rotation effects.",
         ],
         "02-local-alignment.png",
         two,

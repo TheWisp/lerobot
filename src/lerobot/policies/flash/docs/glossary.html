@@ -29,7 +29,9 @@
     system stores or computes; they do not certify that an estimate is correct.</p>
   <p><strong>Writing convention:</strong> use the names below and link their first use
     in an explanation or report. Qualify “identity,” “reference,” and “alignment.”
-    Define a new term here before introducing it elsewhere.</p>
+    Define a new term here before introducing it elsewhere. Explanations must also
+    stand on their own for remote readers who cannot open local links. Specify 2D
+    or 3D, the coordinate system, and separate position from rotation differences.</p>
   <p class="scope">Checked against production source at <code>9ff25cf80</code> and the
     recovery experiments at <code>77becade1</code>. Experimental recovery is explicitly
     identified below; it is not the production default.</p>
@@ -134,19 +136,25 @@
 
   <section id="surface-fitting">
     <h2>Local surface fitting</h2>
-    <p><strong>Adjusting an initial object pose so the stored surface agrees with
-      the current measured surface.</strong> This is also called surface registration.
-      The <strong>starting pose</strong> is the initial rotation and translation
-      passed to that numerical solver.</p>
-    <p>“Local” describes the optimisation: it refines a starting estimate using
-      nearby surface correspondences and a bounded number of iterations. It does
-      not exhaustively search every possible pose. In this replay, the solver is
-      <code>small_gicp</code>; its surface correspondence distance is limited.</p>
-    <p><strong>Earlier wording:</strong> “local 3D alignment” meant this fitting step.
-      SAM can correctly select the cube while fitting still fails: placing the
-      stored surface too far from the measured cube can prevent the solver from
-      finding useful correspondences. The failure is in pose fitting, even when
-      segmentation is correct. See <a href="../../../../../docs/proofs/flash-recovery-20261119/02-local-alignment.png">the cube example</a>.</p>
+    <p><strong>Moving and rotating stored 3D surface points to agree with the
+      object's currently measured 3D surface points.</strong> This is also called
+      surface registration. The starting estimate has two distinct parts:
+      <strong>position</strong> (where the object is) and <strong>orientation</strong>
+      (how it is rotated).</p>
+    <p>“Local” means the solver improves an initial estimate using spatially nearby
+      3D points and a limited number of iterations, rather than searching every
+      possible position and rotation. A wrong starting position, a wrong starting
+      rotation, or both can prevent a successful fit. A rotation can move surface
+      points away from their corresponding measured points even if the object's
+      centre stays in the same place.</p>
+    <p><strong>Earlier wording:</strong> “too far away” failed to distinguish those
+      cases. In cube frame 2741, comparing the original starting estimate with the
+      recovered fit, the mean position of the same stored surface points changes
+      by <strong>44.9 mm</strong>, and orientation changes by <strong>2.7°</strong>.
+      These compare two estimates, not errors against a known correct pose. Changing
+      the starting estimate helps this example; it does not isolate the separate
+      causal effects of position and rotation. The SAM mask and depth are identical
+      in both trials. See <a href="../../../../../docs/proofs/flash-recovery-20261119/02-local-alignment.png">the measured comparison</a>.</p>
     <p class="source">Code: <a href="../experimental_surface_session.py#L851"><code>GrowingSurfaceSession.update</code></a>
       chooses the starting pose; <a href="../surface_grounding.py#L784"><code>WholeSurfaceFit._solve</code></a>
       and <a href="../surface_grounding.py#L798"><code>fit_once</code></a> run one bounded fit;
@@ -156,18 +164,29 @@
 
   <section id="object-anchor">
     <h2>Object point anchor</h2>
-    <p><strong>A stored association from a point track ID to that point's 3D
-      position in the object's fixed coordinates.</strong> The code representation
-      is <code>ObjectGroupAssociation.anchors[point_id] = xyz_in_reference</code>.</p>
-    <p>For example, an entry says “tracked point 42 belongs at this position relative
-      to the object.” The association uses these stored positions to relate the
-      object to a <a href="#motion-group">motion group</a>. Within the same reference,
-      later accepted observations can add new IDs but do not move existing entries.</p>
-    <p><strong>Earlier wording:</strong> “object anchor” meant this stored point, not
-      an extra marker or a point fixed in the room. An anchor can remain stored when
-      its point has no current measurement. Calling that point “hidden” did not
-      establish that it was physically occluded. Its predicted location is not a
-      fresh observation.</p>
+    <p><strong>A remembered 3D position of a point on the object, measured relative
+      to the object's fixed coordinate system.</strong> Its stored value is three
+      coordinates in metres. The label “anchor” names a code data structure; it is
+      not an extra physical marker.</p>
+    <p>For example, consider a small visible spot on a cube:</p>
+    <ol>
+      <li>In the RGB image the spot has a <strong>2D pixel position</strong>, such as
+        <code>(u, v)</code>. The image tracker gives that track an integer ID.</li>
+      <li>Depth at that pixel and the camera calibration give a <strong>3D position
+        relative to the camera</strong>.</li>
+      <li>Using the accepted object position and rotation, the code expresses that
+        3D point <strong>relative to the object</strong> and remembers it under the
+        track's ID: <code>anchors[42] = (x, y, z)</code>.</li>
+    </ol>
+    <p>The remembered value is 3D; the associated image track has 2D pixel positions.
+      When the cube moves, the spot's camera coordinates change, while its stored
+      coordinates relative to the cube remain fixed. Later measurements with that
+      track ID can be associated with this remembered point. An ID match remains
+      a tracking hypothesis and can be wrong.</p>
+    <p>The entry can remain stored without a current measurement of the spot. That
+      does not establish that the spot is physically occluded or that its predicted
+      current position is correct. Within the same object reference, accepted
+      observations can add new entries but do not move existing entries.</p>
     <p class="source">Code: <a href="../object_group_association.py#L167"><code>ObjectGroupAssociation.record_observation</code></a>
       creates entries and preserves existing coordinates;
       <a href="../object_group_association.py#L50"><code>query</code></a> uses them and can
@@ -177,13 +196,19 @@
 
   <section id="motion-group">
     <h2>Motion group</h2>
-    <p><strong>A set of tracked 3D points modelled as moving together rigidly.</strong>
-      It has a group ID, fixed group coordinates, a pose, and a flag distinguishing
-      currently measured members from members whose positions are predicted.</p>
-    <p>Groups are formed from scene motion, not SAM object labels. A group can contain
-      object and surrounding points. Relating the object to that group can supply
-      a pose prediction, but measured surrounding points alone do not establish
-      that an independently moved object still follows the group.</p>
+    <p><strong>A collection of 3D points that the tracker assumes move together as
+      one rigid body.</strong> This means one common rotation and translation
+      explains their motion; their distances from one another stay approximately
+      constant. The group need not equal one physical object or one SAM mask.</p>
+    <p>For example, points on a tray and a cube resting on it can appear to move
+      together. If the cube is then lifted, that shared-motion assumption is no
+      longer valid for the cube. Tracking the tray successfully does not tell us
+      where the lifted cube went.</p>
+    <p>The implementation retains some unmeasured group points and predicts their
+      positions from the measured members. Remembered object points can connect
+      an object to such a group. In the recorded failure, the group still had
+      measured background points while its established object points had no current
+      measurements, so its object position prediction was stale.</p>
     <p class="source">Code: <a href="../motion_groups.py#L76"><code>GroupView</code></a>
       and <a href="../object_group_association.py#L50"><code>ObjectGroupAssociation.query</code></a>.</p>
   </section>

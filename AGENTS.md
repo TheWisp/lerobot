@@ -146,6 +146,10 @@ how several defects went unnoticed for months.
   to its definition. Add a precise definition and code citation before introducing
   a new term. Distinguish point track IDs, object identity, and coordinate frames;
   do not use “identity,” “reference,” or “alignment” without qualifying them.
+  Explain terms inline as well: the user accesses remotely and cannot rely on
+  localhost or local-file links. State whether a point is 2D or 3D and which
+  coordinates it uses. Report position differences in distance units and rotation
+  differences in degrees separately; never describe a pose as merely “too far away.”
 - **FLASH perception:** [`src/lerobot/gui/static/flash_architecture.html`](src/lerobot/gui/static/flash_architecture.html)
   is the canonical diagram of the running frame path. Update it in the same
   change when altering frame inputs, group evidence, fitting, pose publication,
