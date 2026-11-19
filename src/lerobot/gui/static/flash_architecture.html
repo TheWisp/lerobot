@@ -1268,12 +1268,20 @@
             <h3>Surface fit · quality within the budget</h3>
             <p>
               <b>Read:</b> <code>geometry_cost</code>, <code>evaluations</code>,
-              and <code>validation_count</code>.
+              <code>validation_count</code>, <code>translation_initialization</code>,
+              and <code>initial_translation_correction_m</code>.
             </p>
             <p>
               <b>Optimize:</b> surface alignment, with outline coverage and
               image/group evidence helping choose the fit. A lower cost cannot
               excuse a failed geometry check.
+            </p>
+            <p>
+              <b>Initialize:</b> keep the proposed rotation. Compare the original
+              translation with a translation aligning the means of the stored and
+              current 3D object surfaces. Start the one solve from whichever has
+              lower geometry cost. Partial visibility can move the measured centre,
+              so centre alignment does not automatically replace a better motion estimate.
             </p>
             <p>
               <b>Tune:</b> the selected matcher's numerical iteration budget and

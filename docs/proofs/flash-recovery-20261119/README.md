@@ -25,7 +25,40 @@ The screenshots use the original full history. The short regression starts
 fresh and reproduces the corresponding surface-fitting and Kalman-update failures;
 it does not restore or fake the original accumulated map/group state.
 
-## Experiments
+## Implemented translation initialization
+
+The production `WholeSurfaceFit.fit_once` now compares the motion proposal with
+a translation aligning the means of the stored and current 3D object surfaces.
+It preserves the proposed rotation and runs one bounded solve from the lower
+geometry-cost start. The comparison matters: a newly visible side can move a
+surface's measured centre even when the object centre has not moved. The
+geometry checks, Kalman settings, and map-update rules are unchanged.
+
+The sparse cube and pointer regressions now pass with ordinary recorded settings,
+including reacquisition after all image tracks are lost. The wrong-object control
+also passes on the production path. Restoring the original `fit_once` in a
+subprocess makes all four recovery tests fail again, at frames 2741, 3000, 2747,
+and 3008. No video or expected pose is an estimator input.
+
+The separate ring Kalman-fusion regression remains a strict expected failure.
+The live server was not changed or restarted. The screenshots and original
+experiment tables below describe the pre-fix implementation at `9ff25cf80`.
+
+The new full-history replay publishes 315 observed updates, 84 lost updates and
+one prediction, compared with 216/182/2 before the fix. These are availability
+counts, **not pose-accuracy scores**. The compact regression additionally checks
+visible location and depth; full-history exact 6D accuracy remains unlabelled.
+See [implementation verification](translation-initialization-results.json).
+
+Verification: the recorded suite, including actual cached UFM inference, passes
+20 tests with the one ring expected failure. A broader selection of fitting,
+publication, live tracking, shared matching and Kalman tests passes 264 tests,
+with 4 optional skips, 3 expected failures and 11 ordinary failures. All 11 also
+reproduce with the original `fit_once`: one image-assisted partial-view fit,
+six wrong-image/rotation cases, and four gamepad placements. They remain visible
+failures rather than being reclassified or relaxed for this fix.
+
+## Original experiments
 
 ### What each matching step receives
 
@@ -45,13 +78,13 @@ The relevant code paths are `SharedFrameTracker.update`/`pairs`,
 `SurfaceTrackingSession.prepare`, `surface_observation.observation`, and
 `LibraryMatcher.prepare`. Selecting only object pixels is distinct from aligning
 their centres: their 3D coordinates still retain the object's camera-space
-position. The missing translation initialization below occurs despite the object
+position. The original missing translation initialization below occurred despite the object
 surface already being selected.
 
 ### Missing initialization from the current surface centre
 
-The production path chooses one starting pose from image-tracked motion, a group
-prediction, or the previous estimate. It does not first align the stored surface
+**Corrected above; historical diagnosis.** The path at `9ff25cf80` chose one starting pose from image-tracked motion, a group
+prediction, or the previous estimate. It did not first align the stored surface
 centre with the current measured surface centre. The centring in
 `LibraryMatcher.prepare` changes coordinates for numerical computation;
 `LibraryMatcher.refine` converts the initial transform into those coordinates,
@@ -79,8 +112,10 @@ retain this evidence separately from the earlier comparison of two fitted poses.
 
 ### Recovery policies
 
-These policies exist only in the benchmark runner. No production source or
-live-server configuration was changed.
+These policy interventions exist only in the benchmark runner. This original
+experiment did not change production source or live-server configuration. The
+subsequent production translation fix is documented above; running `baseline`
+now uses that updated fitter with the recorded settings.
 
 - `baseline`: recorded settings.
 - `recover`: if the ordinary local surface fit fails, try the predicted pose and then a
@@ -112,7 +147,7 @@ the cube and checks rejection. Visible-location assertions use reviewed image
 regions. These checks do not provide exact 6D ground truth or a general
 lookalike-object guarantee.
 
-## Longer-history check
+## Original longer-history check
 
 All 404 retained results from the four selections were replayed from their
 actual initialization frames. The baseline reproduces all 404 recorded statuses.
@@ -131,7 +166,7 @@ not resolve every fusion failure. Full-history exact orientation and map
 correctness remain unlabelled. Do not promote either experiment solely because
 more poses are published.
 
-## Verification
+## Original experiment verification
 
 The baseline defects are strict expected failures, not hidden passing tests.
 The opt-in experiments must satisfy the same recovery assertions. Reintroducing

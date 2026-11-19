@@ -71,15 +71,19 @@ def assert_visible_recovery(rows, recorded, first_observed_index):
         assert row["map_version"] > rows[0]["map_version"]
 
 
-@pytest.mark.parametrize("case", ["cube", "pointer", "ring"])
 @pytest.mark.parametrize(
-    "policy",
+    "case,policy",
     [
+        ("cube", "baseline"),
+        ("pointer", "baseline"),
         pytest.param(
+            "ring",
             "baseline",
-            marks=pytest.mark.xfail(strict=True, reason="Recorded local-fit/fusion recovery defect"),
+            marks=pytest.mark.xfail(strict=True, reason="Kalman fusion rejects recovered ring geometry"),
         ),
-        "recover_reset",
+        ("cube", "recover_reset"),
+        ("pointer", "recover_reset"),
+        ("ring", "recover_reset"),
     ],
 )
 def test_sparse_recording_recovers_and_tracks_following_frames(case, policy, runs, recorded):
@@ -89,18 +93,7 @@ def test_sparse_recording_recovers_and_tracks_following_frames(case, policy, run
 
 
 @pytest.mark.parametrize("case", ["cube", "pointer"])
-@pytest.mark.parametrize(
-    "policy",
-    [
-        pytest.param(
-            "baseline",
-            marks=pytest.mark.xfail(
-                strict=True, reason="No reacquisition after all image identities are lost"
-            ),
-        ),
-        "recover_reset",
-    ],
-)
+@pytest.mark.parametrize("policy", ["baseline", "recover_reset"])
 def test_reappearing_object_recovers_without_surviving_image_identities(case, policy, runs, recorded):
     rows = runs(case, policy, True)
     hidden = rows[1]
@@ -142,7 +135,7 @@ def test_fixture_contains_only_eleven_lossless_observations(recorded):
         assert masks["object"].shape == frame.depth.shape == frame.rgb.shape[:2]
 
 
-@pytest.mark.parametrize("policy", ["recover_reset", "rematch_reset"])
+@pytest.mark.parametrize("policy", ["baseline", "recover_reset", "rematch_reset"])
 def test_recovery_does_not_accept_the_green_ring_as_the_cube(policy, recorded):
     meta, frames = recorded
     meta = deepcopy(meta)

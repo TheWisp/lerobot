@@ -43,11 +43,15 @@ git lfs pull --include='tests/policies/flash/fixtures/motion_recovery_20261117/*
 PYTHONPATH=src:. python -m pytest tests/policies/flash/test_recorded_motion_recovery.py -q -rx
 ```
 
-Five **strict expected failures** pin the known production defects. Passing a
-previously failing baseline raises XPASS and requires removing its marker.
+The production fitter now initializes translation from the measured surface
+centres when that improves geometry agreement. Cube and pointer recovery,
+including complete loss of image tracks, are ordinary passing regressions.
+One **strict expected failure** pins the separate ring Kalman-fusion defect.
+Passing it raises XPASS and requires removing its marker.
 The same assertions run against opt-in policies in
 `benchmarks/flash_motion_recovery.py`; these do not change production defaults.
-For an unmarked red demonstration, pass `--runxfail -k baseline`.
+For an unmarked red demonstration of that remaining defect, pass
+`--runxfail -k 'baseline and ring'`.
 
 Real UFM tests require CUDA, the installed UFM implementation, and the cached
 checkpoint revision `980825b59331413bb51e5773f9272bfce525bce2`:

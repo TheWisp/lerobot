@@ -32,9 +32,10 @@
     Define a new term here before introducing it elsewhere. Explanations must also
     stand on their own for remote readers who cannot open local links. Specify 2D
     or 3D, the coordinate system, and separate position from rotation differences.</p>
-  <p class="scope">Checked against production source at <code>9ff25cf80</code> and the
-    recovery experiments at <code>77becade1</code>. Experimental recovery is explicitly
-    identified below; it is not the production default.</p>
+  <p class="scope">Definitions originated at <code>9ff25cf80</code> and the
+    recovery experiments at <code>77becade1</code>, and now include the production
+    translation-initialization fix. Experimental recovery is explicitly identified
+    below; filter reset and fresh image rematching remain experiments.</p>
   <nav aria-label="Definitions"><ul>
     <li><a href="#point-track-id">Point track ID (“image identity”)</a></li>
     <li><a href="#image-match">Image match / 2D correspondence</a></li>
@@ -170,8 +171,8 @@
       the starting estimate helps this example; it does not isolate the separate
       causal effects of position and rotation. The SAM mask and depth are identical
       in both trials. See <a href="../../../../../docs/proofs/flash-recovery-20261119/02-local-alignment.png">the measured comparison</a>.</p>
-    <p><strong>Implementation defect, checked separately:</strong> the current path
-      does not first align the two surface centres. In a controlled replay of the
+    <p><strong>Original implementation defect, now corrected:</strong> the path at
+      <code>9ff25cf80</code> did not first align the two surface centres. In a controlled replay of the
       same frame, changing only the initial translation to align the means removes
       a <strong>43.4 mm</strong> centre gap. The starting rotation changes by
       <strong>0°</strong>, and the same fit and checks then accept the result.
@@ -180,6 +181,13 @@
       missing. The solver's internal coordinate centring preserves the initial
       displacement; it does not perform this correction.
       <a href="../../../../../docs/proofs/flash-recovery-20261119/center-initialization-ablation.json">Controlled trial evidence</a>.</p>
+    <p><strong>Current initialization:</strong> keep the proposed rotation, compare
+      its translation with one aligning the two surface means, and start one fit
+      from whichever has lower geometry cost. Partial visibility can shift the
+      measured centre, so the original translation remains eligible. Acceptance
+      still requires the existing geometry checks. This corrects the recorded cube
+      and pointer recovery failures, including complete loss of image tracks;
+      it does not fix the separate ring Kalman-fusion failure.</p>
     <p class="source">Code: <a href="../experimental_surface_session.py#L851"><code>GrowingSurfaceSession.update</code></a>
       chooses the starting pose; <a href="../surface_grounding.py#L784"><code>WholeSurfaceFit._solve</code></a>
       and <a href="../surface_grounding.py#L798"><code>fit_once</code></a> run one bounded fit;

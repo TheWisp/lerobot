@@ -174,7 +174,12 @@ One start → bounded correspondence/pose iterations → check visited poses →
                                                   stricter growth checks
 ```
 
-`WholeSurfaceFit.fit_once` invokes one numerical solve. The poses visited by
+`WholeSurfaceFit.fit_once` first compares the motion proposal with a translation
+that aligns the means of the stored and current 3D object surfaces, retaining
+the proposed rotation. It selects the lower geometry cost as the starting pose.
+This recovers displacement without surviving image tracks while preserving a
+better motion estimate when partial visibility shifts the measured centre.
+It then invokes one numerical solve. The poses visited by
 that solve are proposals, not separate restarts. An invalid lower-cost step
 cannot replace an earlier valid step. No valid step means no
 measured pose. Insufficient overlap can still leave a prediction available if
@@ -208,8 +213,8 @@ Translation and rotation convergence tolerances can stop a solve earlier.
 The selectable `visible_icp` solver instead applies one weighted rigid update
 per iteration. There is no outer restart search.
 
-The surface fitter starts from the image/group motion proposal and does not
-restart the fit from the previous pose or coarse orientations. It keeps the
+The surface fitter uses the original or centre-aligned translation described
+above and does not restart the fit from the previous pose or coarse orientations. It keeps the
 best geometry-compatible pose visited during that fit. Kalman fusion and the
 final geometry check remain downstream; surface growth has its own stricter
 checks. Recorded comparisons show faster fitting but less pose availability;

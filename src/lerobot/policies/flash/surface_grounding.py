@@ -802,7 +802,7 @@ class WholeSurfaceFit:
         geometry=None,
         check=None,
     ):
-        """Run one bounded registration; publish only an observed-compatible iterate."""
+        """Choose a translation start, run one bounded fit, and validate its poses."""
         geometry = self if geometry is None else geometry
         check = geometry.check_pose if check is None else check
         objective = (
@@ -810,7 +810,21 @@ class WholeSurfaceFit:
             if self.has_image_evidence and self.config.registration.backend == "visible_icp"
             else geometry
         )
-        final, detail, iterates = objective._solve(proposal, self.config.max_evaluations)
+        # Object selection does not remove camera-space displacement. Consider
+        # aligning surface centres while retaining the proposed rotation.
+        # Partial visibility can shift the measured centre, so use this start
+        # only when it improves agreement with the observed geometry. This is
+        # initialization of one bounded solve, not a second registration.
+        centred = np.array(proposal, dtype=float, copy=True)
+        centred[:3, 3] = geometry.target.mean(0) - centred[:3, :3] @ geometry.reference.mean(0)
+        geometry.batch_residuals([proposal, centred])
+        use_centres = geometry.score(centred) < geometry.score(proposal)
+        initial = centred if use_centres else proposal
+        final, detail, iterates = objective._solve(initial, self.config.max_evaluations)
+        detail.update(
+            translation_initialization="surface_centres" if use_centres else "motion_proposal",
+            initial_translation_correction_m=(initial[:3, 3] - proposal[:3, 3]).tolist(),
+        )
         poses = list({pose.tobytes(): pose for _, pose in iterates}.values())
         if final.tobytes() not in {pose.tobytes() for pose in poses}:
             poses.append(final)

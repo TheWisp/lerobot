@@ -1,0 +1,68 @@
+{
+  "parent_commit": "ed6db2306114c2ba5d04c503382b69a9588a1ef5",
+  "source_sha256": "8151cf1e9c19bb01965e9aa970688ae3115d26795a1e237e53851e57581fbe49",
+  "implementation": "Compare the motion proposal with mean-centre-aligned translation at unchanged rotation; choose lower geometry cost and run one bounded solve. Existing acceptance and Kalman settings remain.",
+  "recorded_regression": {
+    "passed": 20,
+    "expected_failures": 1,
+    "remaining_failure": "ring frame 4759 Kalman fusion",
+    "includes": "Real UFM inference, production cube/pointer recovery after complete image-track loss, unchanged map while hidden, and wrong-object rejection"
+  },
+  "mutation_check": {
+    "intervention": "Restore parent commit WholeSurfaceFit.fit_once in a subprocess; no file edits",
+    "recovery_tests_failed": 4,
+    "failure_frames": [
+      2741,
+      3000,
+      2747,
+      3008
+    ],
+    "wrong_object_control_passed": true
+  },
+  "broader_checks": {
+    "passed": 264,
+    "failed": 11,
+    "skipped": 4,
+    "expected_failures": 3,
+    "all_11_failures_reproduced_with_parent_fit_once": true,
+    "remaining_failures": {
+      "test_partial_surface_fitting.py::test_image_assisted_candidate_selection_keeps_both_measured_views": 1,
+      "test_surface_evidence_priority.py::test_geometry_tracks_real_rotation_despite_wrong_image_matches": 6,
+      "test_visible_surface_matcher.py::test_recorded_clear_gamepad_placement": 4
+    }
+  },
+  "full_history": {
+    "recording": "saved-747dd29b27a745418524e2744ac29cb5",
+    "policy": "baseline (recorded settings, current production fitter)",
+    "counts_by_sequence": {
+      "cube/baseline/recorded": {
+        "initialized": 1,
+        "observed_candidate": 48
+      },
+      "pointer/baseline/recorded": {
+        "initialized": 1,
+        "observed_candidate": 69,
+        "lost": 70,
+        "predicted": 1
+      },
+      "ring/baseline/recorded": {
+        "initialized": 1,
+        "observed_candidate": 100,
+        "lost": 14
+      },
+      "cube_again/baseline/recorded": {
+        "initialized": 1,
+        "observed_candidate": 98
+      }
+    },
+    "updates": 400,
+    "observed": 315,
+    "lost": 84,
+    "predicted": 1,
+    "previous_observed": 216,
+    "previous_lost": 182,
+    "previous_predicted": 2,
+    "scope": "Availability only. No independent full-history 6D ground truth."
+  },
+  "live_server_modified": false
+}

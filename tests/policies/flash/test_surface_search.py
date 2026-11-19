@@ -103,10 +103,10 @@ def test_uncertainty_switch_does_not_change_geometric_validity(enabled, mode):
     pose, detail = fit.correct_surface_first(
         protruding(), np.eye(4), check=check, uncertainty=PoseUncertaintyConfig(enabled=enabled, mode=mode)
     )
-    # The previous pose no longer starts a second solve or rescues a bad
-    # proposal. The fitter must never publish its invalid pose instead.
-    assert pose is None
-    assert any(detail["candidate_check"] == verdict for verdict in seen.values())
+    # Aligning the measured centres recovers this translation even when the
+    # motion proposal is invalid. Every returned pose still needs geometry.
+    assert_static(fit, pose)
+    assert any(detail["geometry_check"] == verdict for verdict in seen.values())
     pose, detail = fit.correct_surface_first(
         np.eye(4), protruding(), check=check, uncertainty=PoseUncertaintyConfig(enabled=enabled, mode=mode)
     )
@@ -214,7 +214,7 @@ def test_stationary_frame_uses_one_numerical_fit(monkeypatch):
     assert len(calls) == 1
 
 
-def test_image_conditioned_fit_runs_only_once_from_motion_proposal(monkeypatch):
+def test_image_conditioned_fit_runs_once_from_observed_centres(monkeypatch):
     fit = fitter(
         ImageConditionedFit,
         image_reference=np.empty((0, 3)),
@@ -236,7 +236,8 @@ def test_image_conditioned_fit_runs_only_once_from_motion_proposal(monkeypatch):
     assert any(c["check"]["accepted"] for c in candidates)
     assert len(calls) == 1
     assert detail["numerical_solves"] == 1
-    np.testing.assert_array_equal(calls, [proposal])
+    np.testing.assert_array_equal(calls[0][:3, :3], proposal[:3, :3])
+    np.testing.assert_allclose(move(fit.reference, calls[0]).mean(0), fit.target.mean(0), atol=1e-12)
 
 
 @pytest.mark.parametrize("iterations", [1, 2, 8])
@@ -245,6 +246,9 @@ def test_one_iteration_budget_bounds_the_actual_solver(monkeypatch, iterations):
 
     fit = fitter()
     wrong = protruding()
+    # Translation initialization can repair a pure displacement. A wrong
+    # orientation remains contradictory even after the centres coincide.
+    wrong[:3, :3] = [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
     limits = []
 
     def steps(problem, initial, limit):
