@@ -17,6 +17,7 @@ from .experimental_surface_session import GrowingSurfaceConfig, GrowingSurfaceSe
 from .flow_paths import DenseFlow, FlowPaths
 from .motion_groups import SceneMotionGroups
 from .object_group_association import ObjectGroupAssociation, ObjectMotionSource
+from .scene_depth import SceneDepth
 from .scene_groups import ScenePointTracker
 from .shared_image_tracking import SharedFrameTracker
 from .surface_correspondence import crop_pair, measured_pairs, robust_fit, ufm_pairs
@@ -361,19 +362,28 @@ class SurfaceFrameSession:
             begin = time.perf_counter()
             scene = scene_tracker.update(frame)
             row["scene_point_tracking_ms"] = (time.perf_counter() - begin) * 1000
+        depth_m = frame.depth.astype(np.float32) * frame.depth_m_per_unit
+        frame_filters = prepare_surface_frame(depth_m, asdict(config.observation))
         if self.scene_groups is not None:
             begin = time.perf_counter()
-            group_frame = self.scene_groups.update(scene)
+            scene_depth = SceneDepth.from_frame(
+                frame,
+                frame_filters,
+                tolerance_m=config.shape.depth_tolerance_m,
+                radius_px=config.shape.mask_boundary_tolerance_px,
+            )
+            row["group_depth_prepare_ms"] = (time.perf_counter() - begin) * 1000
+            begin = time.perf_counter()
+            group_frame = self.scene_groups.update(scene, depth=scene_depth)
             row["group_update_ms"] = (time.perf_counter() - begin) * 1000
             row["scene_groups"] = {
                 "groups": len(group_frame.groups),
+                "depth_rejected_ids": sorted(group_frame.depth_rejected_ids),
                 "points": group_frame.point_count,
                 "supported": sum(g.supported for g in group_frame.groups.values()),
                 "confirmed": sum(g.confirmed for g in group_frame.groups.values()),
             }
             row["scene_group_tracks"] = scene_group_record(group_frame, scene, frame)
-        depth_m = frame.depth.astype(np.float32) * frame.depth_m_per_unit
-        frame_filters = prepare_surface_frame(depth_m, asdict(config.observation))
         match_row = {"frame": frame.frame_id, "objects": {}}
 
         def process_role(

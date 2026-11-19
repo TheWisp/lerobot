@@ -60,7 +60,7 @@ class GroupConfig:
     @classmethod
     def from_dict(cls, values):
         # Old recordings may carry this retired setting. It no longer changes
-        # retention: a hidden member remains until a real split or capacity eviction.
+        # retention: a hidden member remains until a split, depth contradiction or capacity eviction.
         values = dict(values)
         values.pop("max_hidden_s", None)
         return cls(**values)
@@ -101,6 +101,8 @@ class GroupFrame:
     # Old group ID -> (surviving group ID, surviving_group_from_old_group).
     # This is scene-only coordinate lineage for downstream consumers.
     merges: Mapping[int, tuple[int, np.ndarray]] = field(default_factory=lambda: MappingProxyType({}))
+    # Memberships rejected at their carried positions in this frame, not lost LK IDs.
+    depth_rejected_ids: frozenset[int] = frozenset()
 
 
 @dataclass
@@ -543,7 +545,28 @@ class SceneMotionGroups:
                 parent.departed_ids.add(i)
                 self._departed_from[i] = (parent_id, anchor)
 
-    def update(self, scene):
+    def _reject_depth(self, depth, current):
+        """Retire contradicted predictions after this frame's group motion is known."""
+        rejected = set()
+        for group in list(self._groups.values()):
+            ids = sorted(group.anchors.keys() - group.inliers)
+            if not ids:
+                continue
+            predicted = move(np.array([group.anchors[i] for i in ids]), group.pose)
+            for i, bad in zip(ids, depth.contradicted(predicted), strict=True):
+                if not bad:
+                    continue
+                del group.anchors[i]
+                self._departing.pop(i, None)
+                self._departed_from.pop(i, None)
+                if i not in current:
+                    self._seen.pop(i, None)
+                rejected.add(i)
+            if len(group.anchors) < self.config.min_motion_points:
+                del self._groups[group.id]
+        return frozenset(rejected)
+
+    def update(self, scene, *, depth=None):
         time = float(scene.source_time_s)
         if self._time is not None and time <= self._time:
             raise ValueError("group measurements must advance in source time")
@@ -678,6 +701,7 @@ class SceneMotionGroups:
             for i, origin in self._departed_from.items()
             if i in self._seen and origin[0] in self._groups and i not in self._groups[origin[0]].anchors
         }
+        rejected = self._reject_depth(depth, current) if depth is not None else frozenset()
         views = {}
         for gid, group in self._groups.items():
             # Diagnostic provenance only: it never participates in fitting,
@@ -710,6 +734,6 @@ class SceneMotionGroups:
             )
         self._previous, self._time = current, time
         self.frame = GroupFrame(
-            scene.frame_id, time, MappingProxyType(views), len(self._seen), MappingProxyType(merges)
+            scene.frame_id, time, MappingProxyType(views), len(self._seen), MappingProxyType(merges), rejected
         )
         return self.frame

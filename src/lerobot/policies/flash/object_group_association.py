@@ -69,6 +69,7 @@ class ObjectGroupAssociation:
         }
         if merged_from is not None:
             details["merged_from_group"] = merged_from
+        depth_rejected = snapshot.depth_rejected_ids & self.anchors.keys()
         alive = {int(i) for g in snapshot.groups.values() for i in g.ids} | set(scene.ids.tolist())
         self.anchors = {i: p for i, p in self.anchors.items() if i in alive}
         if self.reference is None or str(reference_frame) != str(self.reference_frame):
@@ -77,6 +78,12 @@ class ObjectGroupAssociation:
         if object_usable is not None:
             keep &= inside(scene, object_usable)
         own_now = set(scene.ids[keep].tolist())
+        bound = snapshot.groups.get(self._group)
+        if depth_rejected and (bound is None or not any(int(i) in self.anchors for i in bound.ids)):
+            # No remembered link survived explicit scene-depth rejection.
+            # This consumes group evidence; it cannot rewrite that evidence.
+            self._group = self._group_from_reference = None
+            details["group_id"] = None
         candidates = []
         for gid, group in snapshot.groups.items():
             known = [j for j, i in enumerate(group.ids) if int(i) in self.anchors]

@@ -122,6 +122,8 @@ PYTHONPATH=src:. python -m benchmarks.flash_recovery_pair_audit /path/to/saved-r
 
 ## Why the object remains attached to the background group
 
+This section describes the original failure. The [depth rejection result](#depth-rejection-of-carried-group-points) below tests its correction.
+
 [Group-state replay](group-membership-audit.json) separates missing measurements from rejected
 measurements at frame 5381. Group 0 has 425 accepted environment measurements. Of the 15 retained
 object members, 12 have no current scene measurement; IDs 6, 591 and 592 do have current 3D
@@ -350,4 +352,64 @@ PYTHONPATH=src:. python -m benchmarks.flash_recovery_screenshots \
   /path/to/saved-recording /tmp/recovery-figure-data
 PYTHONPATH=src:. python -m benchmarks.flash_recovery_figures \
   /path/to/saved-recording /tmp/recovery-figure-data docs/proofs/flash-recovery-20261119
+```
+
+## Depth rejection of carried group points
+
+Measured on 2026-11-19 against `44fc18138`, with the group-depth change in this
+branch. A [motion group](../../../src/lerobot/policies/flash/docs/glossary.md#motion-group)
+predicts a missing or rejected member's 3D position from the current group motion.
+The new check converts that position into current camera coordinates, projects
+it into the current image, and rejects the membership when reliable current
+depth is farther than its current camera Z by over 5 mm. A two-pixel conservative
+neighborhood preserves holes, depth boundaries and possible nearer occluders.
+No object mask or fitted object pose participates. The comparison function is
+shared with object-surface validation, while mask-dependent depth preparation
+remains separate.
+
+The full 38-frame replay (5118–5381) retains all 15 stale cube members with the
+check disabled and none with it enabled. IDs 6, 591 and 592 still have current LK
+and depth measurements elsewhere; rejection removes their group placement, not
+their image tracks. At frame 5381 the unsupported background-group object hint
+is absent. Both versions accept all 37 post-initialization object observations:
+the translation fix already recovers this sequence, so this change improves the
+group state without increasing that recovery count. Exact 6D pose accuracy is
+not independently labelled.
+
+Three paired runs alternate enabled/disabled order on an AMD Ryzen 9 9950X,
+OpenCV one thread. SAM and Foundation Stereo outputs are frozen; file decoding
+and model inference are excluded. The first frame is excluded from timing summaries.
+
+| Measurement                                                        |    Median | 95th percentile |
+| ------------------------------------------------------------------ | --------: | --------------: |
+| Added depth preparation + membership check                         |  0.660 ms |        0.953 ms |
+| Group update, disabled                                             |  8.843 ms |       17.844 ms |
+| Group update, enabled (includes check, excludes depth preparation) | 10.443 ms |       18.333 ms |
+| Full frame processing, disabled                                    | 66.025 ms |       82.218 ms |
+| Full frame processing, enabled                                     | 60.050 ms |       78.766 ms |
+
+The different group and object state changes subsequent work. These timings do
+not establish a general speedup or camera/model throughput. The direct added cost
+and unchanged observation count support enabling this check for this case.
+[Timing summaries](group-depth-results.json) · [Per-frame measurements](group-depth-results.frames.jsonl).
+
+The [813 KiB fixture](../../../tests/policies/flash/fixtures/group_depth_20261119/README.md)
+reconstructs stale group membership from 38 measured point snapshots and stores
+only one depth image. The production frame owner supplies the endpoint depth;
+metre and millimetre input cases both remove all 15 stale members while retaining
+at least 400 measured scene points. Synthetic cases check moved group and camera
+coordinates, missing/nearer/equal depth, boundaries, offscreen points and the
+object-side connection. Reintroducing missing depth wiring fails the recorded
+regression; restoring the original object query fails the connection regression.
+The targeted group, shared tracking, live frame, surface validation/refresh and
+recorded recovery suites pass: **206 passed, 5 skipped, 1 expected failure**
+(the existing ring Kalman-fusion case). The moved depth-comparison functions
+are unchanged; syntax-tree comparison against `44fc18138` verifies equivalence.
+
+Reproduce the full processing comparison:
+
+```sh
+PYTHONPATH=src:. python -m benchmarks.flash_group_depth /path/to/saved-recording \
+  --output /tmp/group-depth-results.json --repeats 3
+PYTHONPATH=src:. python -m pytest tests/policies/flash/test_group_depth_rejection.py -q
 ```

@@ -788,7 +788,7 @@
 
       <section id="group-update">
         <h2>Scene-wide group tracker</h2>
-        <p class="intro">The shared matcher supplies measured point IDs and 3D positions across the scene. It also samples more densely inside selected masks. Established IDs remain in their group when hidden or when one measurement disagrees; their positions are predicted from the group's motion. A split needs a measured cohort whose motion is distinct beyond fit error. Locally co-moving points stay together, and uncertain neighbors follow the nearest measured branch after a split. New groups are seeded by coherent motion scored with bounded 3D error, so a compromise motion cannot win merely by placing a few extra points inside the fit tolerance. New IDs join after sustained measured co-motion. The group tracker receives no masks, object labels, poses, or Kalman state.</p>
+        <p class="intro">The shared matcher supplies measured point IDs and 3D positions across the scene. It also samples more densely inside selected masks. Missing or rejected measurements have positions predicted from the group's current motion. Reliable current scene depth farther than a carried point's current camera Z removes that membership; nearer occluders, missing depth and offscreen positions preserve it. Current camera calibration supplies the projection, independently of object masks. A split needs a measured cohort whose motion is distinct beyond fit error. Locally co-moving points stay together, and uncertain neighbors follow the nearest measured branch after a split. New groups are seeded by coherent motion scored with bounded 3D error, so a compromise motion cannot win merely by placing a few extra points inside the fit tolerance. New IDs join after sustained measured co-motion. The group tracker receives no masks, object labels, poses, or Kalman state.</p>
         <div class="group-scroll">
           <svg class="group-diagram" viewBox="0 0 1200 470" role="img" aria-labelledby="group-title group-description">
             <title id="group-title">Independent scene group update</title>
@@ -797,7 +797,7 @@
             <rect x="150" y="25" width="570" height="85" rx="15" fill="#edf5fc" stroke="#b7cfdf" />
             <text class="group-step" x="175" y="54">Shared LK / UFM: image t−1 → image t</text>
             <text class="group-caption" x="175" y="80">Point IDs + measured depth → 3D scene points</text>
-            <text class="group-caption" x="175" y="100">All measured points are considered; new IDs join after co-motion</text>
+            <text class="group-caption" x="175" y="100">Current depth image + calibration also check carried positions</text>
             <rect x="825" y="25" width="330" height="85" rx="15" fill="#f0edf8" stroke="#c9bddf" />
             <text class="group-step" x="845" y="54">Group state from t−1</text>
             <text class="group-caption" x="845" y="80">Member IDs + fixed group coordinates</text>
@@ -805,8 +805,8 @@
             <path class="group-arrow" d="M435 110V155" /><path class="group-arrow" d="M990 110V140H700V155" />
             <rect x="150" y="155" width="570" height="100" rx="15" fill="#edf5fc" stroke="#b7cfdf" />
             <text class="group-step" x="175" y="185">Update scene groups from measured points</text>
-            <text class="group-caption" x="175" y="211">Fit ≥4 measured members; lone outliers stay predicted</text>
-            <text class="group-caption" x="175" y="235">Score coherent bodies by bounded error; carry uncertain IDs</text>
+            <text class="group-caption" x="175" y="211">Fit ≥4 measured members; carry missing / rejected points</text>
+            <text class="group-caption" x="175" y="235">Reject carried positions contradicted by current depth</text>
             <a class="metric-callout" href="#metric-group"><path d="M150 205H125" /><text x="110" y="186" text-anchor="end"><tspan x="110">Inlier count</tspan><tspan x="110" dy="18">Motion error</tspan><tspan x="110" dy="18">Agreement time</tspan></text></a>
             <path class="group-arrow" d="M720 205H825" />
             <rect x="825" y="165" width="330" height="80" rx="15" fill="#f0edf8" stroke="#c9bddf" />
@@ -822,7 +822,7 @@
         </div>
         <div class="mobile-path" aria-label="Independent group update steps"><ol>
           <li>Shared image matching and depth supply measured 3D point IDs across the scene, with extra samples in selected masks. All samples enter grouping.</li>
-          <li>Scene groups score coherent motion by bounded 3D error and split only a measured branch with distinct motion. Hidden and isolated discrepant points stay predicted; after a split, uncertain points follow nearby reliable members. Only scene points and prior group state participate.<a class="metric-link" href="#metric-group">Inliers · motion error · agreement time</a></li>
+          <li>Scene groups score coherent motion by bounded 3D error and split only a measured branch with distinct motion. Missing and isolated discrepant points stay predicted unless current calibrated scene depth contradicts their carried position. After a split, uncertain points follow nearby reliable members. Scene points, scene depth and prior group state participate.<a class="metric-link" href="#metric-group">Inliers · motion error · agreement time</a></li>
           <li>The group snapshot G[t] can be queried or displayed. A rejected object pose cannot change it.</li>
         </ol></div>
       </section>
@@ -834,7 +834,7 @@
           <article><small>Object-side query</small><strong>Persistent point membership → H[t]</strong><p>The object follows the group containing the most of its remembered point IDs, including hidden members; ties retain the existing group. Initial coordinates require measured support (12 points by default). A split can establish new coordinates from persistent anchors; a merge carries the existing relation through the group's exact coordinate transform. Unsupported groups retain the association but supply no motion hint.</p></article>
           <article><small>Object pose decision</small><strong>Surface fit → Kalman → pose</strong><p>Depth and mask check the fit. Kalman belongs to the object pose estimator, not the group tracker. The pose can be observed, predicted or lost.</p></article>
         </div>
-        <p class="intro">There is no separate visible-point disconnect vote. Ungrouped points do not cancel the association. The absolute group hint can seed a fit or carry a predicted pose through occlusion. Accepting a pose does not rewrite the fixed group relation.</p>
+        <p class="intro">There is no separate visible-point disconnect vote. Ungrouped measurements alone do not cancel the association. Explicit scene-depth rejection of its last remembered member clears the fixed relation to that group. The absolute group hint can seed a fit or carry a predicted pose through occlusion. Accepting a pose does not rewrite the fixed group relation.</p>
         <p class="intro"><a href="#metric-motion">Group support metric</a> → <a href="#metric-kalman">pose update metric</a> → <a href="#pose-flow">pose decision paths</a>. Display modes: None hides groups; Objects shows groups associated with tracked objects; All shows every scene group. Measured members and predicted members share one wireframe; edges involving predicted members have lower opacity. Demos persist the same group records and wireframe as live tracking. Live, demo, and rollout views use the same drawing functions. These display choices do not affect pose estimation.</p>
       </section>
 

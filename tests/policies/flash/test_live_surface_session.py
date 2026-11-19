@@ -564,9 +564,10 @@ def test_scene_groups_update_once_before_all_objects_and_survive_rejected_pose(m
     predict = ObjectGroupAssociation.query
     fit = GrowingSurfaceSession.update
 
-    def group_update(self, scene):
+    def group_update(self, scene, *, depth=None):
+        assert depth is not None
         events.append((scene.frame_id, "group"))
-        return update(self, scene)
+        return update(self, scene, depth=depth)
 
     def query(self, snapshot, frame, *args, **kwargs):
         assert snapshot.frame_id == frame.frame_id

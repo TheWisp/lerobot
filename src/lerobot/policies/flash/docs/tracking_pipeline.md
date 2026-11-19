@@ -272,8 +272,9 @@ pickup; it does not establish accuracy throughout manipulation.
 ## Scene groups and object association
 
 Group membership belongs to the scene, independent of which objects are selected.
-The group state machine consumes only timestamped point IDs and measured 3D
-positions. The shared image matcher currently reserves extra sample points
+The group state machine consumes timestamped point IDs, measured 3D positions,
+and calibrated current scene depth for checking carried positions. The shared
+image matcher currently reserves extra sample points
 inside selected masks; these improve small-object coverage but make the _input
 sampling_ selection-dependent. They do not supply labels, ownership, object
 poses, or feedback to group updates. This distinction matters when comparing
@@ -283,7 +284,7 @@ group results across different object selections.
 Shared image matches + reliable depth → measured 3D point IDs
                                            ↓
                               Scene groups (once per frame)
-                              fit / separate / merge / retain hidden IDs
+                              fit / separate / merge / check carried points against current depth
                                            ↓
                               Read-only group snapshot G[t]
                                            ↓ queried by the main tracker
@@ -294,10 +295,21 @@ Current mask + depth + stored surface → surface fit + Kalman → pose
 
 - Each group stores point IDs, fixed group-local positions and its current rigid
   transform. Visible measured members update that transform; hidden members keep
-  predicted positions. Predictions never become measurements.
+  predicted positions. Predictions never become measurements. After estimating
+  current group motion, project each carried point into the current camera.
+  If reliable depth at that pixel exceeds the carried point's current camera Z
+  by the configured tolerance, remove its group membership. Preserve possible
+  occlusions, missing depth and offscreen points. A current image measurement
+  rejected by the group remains available independently at its measured position.
+  The depth comparison is shared with surface validation; mask-independent frame
+  depth preparation is computed once before both groups and object fitting.
 - A measured departure beyond the configured tolerance separates after the
   configured short confirmation time. One departing point does not need a
-  quorum of other departing points. Forming a new group requires the larger
+  quorum of other departing points. **NOT IMPLEMENTED for motion disagreement
+  alone:** the running tracker requires a coherent measured cohort to split;
+  isolated discrepancies remain predicted. Depth contradiction independently
+  removes an impossible carried position without a cohort. Forming a new group
+  requires the larger
   new-group consensus; updating an existing group needs fewer visible members.
   Groups merge after sustained relative agreement, not proximity or object labels.
 - The object association identifies which groups contain its measured points.
@@ -305,7 +317,9 @@ Current mask + depth + stored surface → surface fit + Kalman → pose
   cannot modify group membership, motion, or point history. Later fitted poses
   can identify new points but do not move the existing point anchors. A new
   association requires enough currently measured object point IDs in that
-  group. A valid existing association can carry through full occlusion; once
+  group. Removal of its last remembered member by scene-depth contradiction
+  clears an existing fixed object-to-group relation. A valid existing association
+  can carry through full occlusion; once
   measured separation breaks it, old IDs alone cannot recreate it.
 - The fitter consumes the generic `PoseHint` / `PointEvidence` interface. Its
   geometry checks can withhold a pose, but cannot delete groups. Group predictions

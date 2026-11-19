@@ -114,7 +114,7 @@ Camera coordinates, robot-base coordinates, and the fixed object coordinates are
 Code: [`SurfacePatch.points`](../experimental_surface_session.py#L291) converts measured camera
 points into reference coordinates; [`PoseKalmanFilter`](../surface_kalman.py#L71) uses a fixed
 object point. [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L767)
-initializes the fixed coordinates; [`ObjectGroupAssociation.record_observation`](../object_group_association.py#L167)
+initializes the fixed coordinates; [`ObjectGroupAssociation.record_observation`](../object_group_association.py#L174)
 composes the camera-to-base transform.
 Design: [persistent coordinates](tracking_pipeline.md#what-persists-between-frames).
 
@@ -171,8 +171,8 @@ can shift the measured centre, so the original translation remains eligible. Acc
 requires the geometry checks.
 
 Code: [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L851) chooses the starting
-pose; [`WholeSurfaceFit._solve`](../surface_grounding.py#L784) and
-[`fit_once`](../surface_grounding.py#L798) run one bounded fit;
+pose; [`WholeSurfaceFit._solve`](../surface_grounding.py#L743) and
+[`fit_once`](../surface_grounding.py#L757) run one bounded fit;
 [`LibraryMatcher.refine`](../surface_registration.py#L202) supplies the correspondence-distance and
 iteration limits.
 
@@ -201,7 +201,7 @@ object reference, accepted observations can add new entries but do not move exis
 Entries are removed when their IDs no longer survive in the scene tracker or its groups.
 This object-side record cannot change scene-group membership or motion.
 
-Code: [`ObjectGroupAssociation.record_observation`](../object_group_association.py#L167) creates
+Code: [`ObjectGroupAssociation.record_observation`](../object_group_association.py#L174) creates
 entries and preserves existing coordinates; [`query`](../object_group_association.py#L50) uses them
 and can add points through an established group relation. Group-local anchors in
 `motion_groups._Group` use a different coordinate system.
@@ -217,7 +217,8 @@ then lifted, that shared-motion assumption is no longer valid for the cube. Trac
 successfully does not tell us where the lifted cube went.
 
 The scene-group tracker receives timestamped point IDs and measured 3D positions in robot-base
-coordinates. It owns group membership, fixed group-local positions, and each group's transform
+coordinates, plus current camera calibration and reliable scene depth for checking
+carried positions. It owns group membership, fixed group-local positions, and each group's transform
 into base coordinates. It receives no object masks, fitted object poses, or Kalman state.
 Mask-dependent sampling happens upstream in the shared image tracker. Object association only
 queries the resulting group snapshot; accepting or rejecting an object pose cannot rewrite it.
@@ -231,8 +232,19 @@ diagnosing failures. Remembered object points can connect an object to such a gr
 member assumes it still shares the measured members' motion; it does not establish that the point
 remained physically attached.
 
+A carried 3D point is transformed into the current camera coordinates and projected
+into the current image. Reliable scene depth farther than its current camera Z by
+more than the depth tolerance contradicts that position. The group removes that
+membership even without enough points to form another group. Nearer depth can
+occlude the point; missing depth, uncertain boundaries, and offscreen positions
+leave it unknown. These checks use no object mask or object pose. A surviving
+image track at another measured position remains available to the scene tracker.
+If rejection removes the last remembered link to an object, the object-side
+association stops using that group's fixed relation.
+
 Code: [`GroupView`](../motion_groups.py#L76) and
-[`SceneMotionGroups.update`](../motion_groups.py#L546) own the scene representation;
+[`SceneMotionGroups.update`](../motion_groups.py#L569) own the scene representation;
+[`SceneDepth`](../scene_depth.py) checks current camera depth;
 [`ObjectGroupAssociation.query`](../object_group_association.py#L50) consumes it.
 
 ## Pose prediction / prior

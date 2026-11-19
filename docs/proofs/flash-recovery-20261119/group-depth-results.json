@@ -1,0 +1,230 @@
+{
+  "date": "2026-11-19",
+  "baseline_commit": "44fc18138",
+  "comparison": "Disable only SceneDepth preparation/rejection; keep all other tracking settings identical.",
+  "source_sha256": {
+    "scene_depth.py": "06da5167cce5343822d8c2b920b4399ecf9b4b2d2d9ff4dafe8c7ef54efd4bda",
+    "motion_groups.py": "f9ccaecd6c094e63a06d5c903e0fb00de377c6a8aea7217cc2cb46f4222ec6e5",
+    "object_group_association.py": "ec8193c445f4fcdf9edeedf2db8d36b638ca886c1a7043062c5610be93984572",
+    "surface_frame_session.py": "a419fb53a78e93a0d3422910e52e8063ae3b0569d36ec44bbb42157a59825c43",
+    "surface_grounding.py": "bdd0c2c5e3a97fcc90b6fce8031d4d33bb8568b96eadf6c0e0e4c75b8b066d2e"
+  },
+  "opencv_threads": 1,
+  "repetitions": 3,
+  "aggregate_ms": {
+    "disabled": {
+      "elapsed_ms": {
+        "median": 66.02474697865546,
+        "p95": 82.21763034816831
+      },
+      "group_update_ms": {
+        "median": 8.843410992994905,
+        "p95": 17.844418878667057
+      },
+      "depth_prepare_ms": {
+        "median": 0.0267901923507452,
+        "p95": 0.032466487027704716
+      },
+      "depth_check_ms": {
+        "median": 0.0,
+        "p95": 0.0
+      },
+      "added_depth_ms": {
+        "median": 0.0267901923507452,
+        "p95": 0.032466487027704716
+      }
+    },
+    "enabled": {
+      "elapsed_ms": {
+        "median": 60.05024095065892,
+        "p95": 78.76609603408724
+      },
+      "group_update_ms": {
+        "median": 10.443113977089524,
+        "p95": 18.33311445079744
+      },
+      "depth_prepare_ms": {
+        "median": 0.36267307586967945,
+        "p95": 0.43115648441016674
+      },
+      "depth_check_ms": {
+        "median": 0.3022190649062395,
+        "p95": 0.5242968909442425
+      },
+      "added_depth_ms": {
+        "median": 0.6597819738090038,
+        "p95": 0.9531896794214845
+      }
+    }
+  },
+  "recording": "saved-747dd29b27a745418524e2744ac29cb5",
+  "scope": "Full LiveSurfaceSession with frozen SAM and Foundation Stereo outputs; decoding/inference excluded; first frame excluded from timing summaries.",
+  "runs": [
+    {
+      "repeat": 0,
+      "enabled": false,
+      "summary_ms": {
+        "elapsed_ms": {
+          "median": 68.04749090224504,
+          "p95": 81.15510381758213
+        },
+        "group_update_ms": {
+          "median": 8.426377084106207,
+          "p95": 16.236085724085562
+        },
+        "depth_prepare_ms": {
+          "median": 0.027001136913895607,
+          "p95": 0.030641956254839883
+        },
+        "depth_check_ms": {
+          "median": 0.0,
+          "p95": 0.0
+        }
+      },
+      "statuses": {
+        "initialized": 1,
+        "observed_candidate": 37
+      }
+    },
+    {
+      "repeat": 0,
+      "enabled": true,
+      "summary_ms": {
+        "elapsed_ms": {
+          "median": 61.27303303219378,
+          "p95": 77.61478275060654
+        },
+        "group_update_ms": {
+          "median": 10.67753485403955,
+          "p95": 18.056621542200446
+        },
+        "depth_prepare_ms": {
+          "median": 0.36068912595510483,
+          "p95": 0.46645882539451117
+        },
+        "depth_check_ms": {
+          "median": 0.3049238584935665,
+          "p95": 0.5270924884825944
+        }
+      },
+      "statuses": {
+        "initialized": 1,
+        "observed_candidate": 37
+      }
+    },
+    {
+      "repeat": 1,
+      "enabled": true,
+      "summary_ms": {
+        "elapsed_ms": {
+          "median": 57.03582498244941,
+          "p95": 79.88757458515465
+        },
+        "group_update_ms": {
+          "median": 9.911561850458384,
+          "p95": 18.35843361914158
+        },
+        "depth_prepare_ms": {
+          "median": 0.36267307586967945,
+          "p95": 0.4330615513026713
+        },
+        "depth_check_ms": {
+          "median": 0.28877402655780315,
+          "p95": 0.527296494692564
+        }
+      },
+      "statuses": {
+        "initialized": 1,
+        "observed_candidate": 37
+      }
+    },
+    {
+      "repeat": 1,
+      "enabled": false,
+      "summary_ms": {
+        "elapsed_ms": {
+          "median": 63.91331204213202,
+          "p95": 82.94406733475626
+        },
+        "group_update_ms": {
+          "median": 8.843410992994905,
+          "p95": 18.871865654364225
+        },
+        "depth_prepare_ms": {
+          "median": 0.025278190150856972,
+          "p95": 0.029319152235984802
+        },
+        "depth_check_ms": {
+          "median": 0.0,
+          "p95": 0.0
+        }
+      },
+      "statuses": {
+        "initialized": 1,
+        "observed_candidate": 37
+      }
+    },
+    {
+      "repeat": 2,
+      "enabled": false,
+      "summary_ms": {
+        "elapsed_ms": {
+          "median": 66.21371302753687,
+          "p95": 79.10936311818658
+        },
+        "group_update_ms": {
+          "median": 10.00719191506505,
+          "p95": 16.536482237279408
+        },
+        "depth_prepare_ms": {
+          "median": 0.027101021260023117,
+          "p95": 0.034066382795572274
+        },
+        "depth_check_ms": {
+          "median": 0.0,
+          "p95": 0.0
+        }
+      },
+      "statuses": {
+        "initialized": 1,
+        "observed_candidate": 37
+      }
+    },
+    {
+      "repeat": 2,
+      "enabled": true,
+      "summary_ms": {
+        "elapsed_ms": {
+          "median": 62.741413014009595,
+          "p95": 76.47880469448864
+        },
+        "group_update_ms": {
+          "median": 10.52074902690947,
+          "p95": 18.38395670056343
+        },
+        "depth_prepare_ms": {
+          "median": 0.36784284748136997,
+          "p95": 0.42333495803177357
+        },
+        "depth_check_ms": {
+          "median": 0.3079900052398443,
+          "p95": 0.49209655262529844
+        }
+      },
+      "statuses": {
+        "initialized": 1,
+        "observed_candidate": 37
+      }
+    }
+  ],
+  "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+  "frame_trace": "group-depth-results.frames.jsonl",
+  "verification": {
+    "tests_passed": 206,
+    "tests_skipped": 5,
+    "expected_failures": 1,
+    "expected_failure": "Existing ring Kalman-fusion case",
+    "mutation_checks": "Missing depth wiring fails both recorded unit cases; original object query fails both connection cases.",
+    "shared_helper": "Moved project and scene_depth_evidence have identical ASTs to 44fc18138."
+  }
+}
