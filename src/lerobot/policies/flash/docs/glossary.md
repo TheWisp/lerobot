@@ -243,7 +243,7 @@ If rejection removes the last remembered link to an object, the object-side
 association stops using that group's fixed relation.
 
 Code: [`GroupView`](../motion_groups.py#L76) and
-[`SceneMotionGroups.update`](../motion_groups.py#L569) own the scene representation;
+[`SceneMotionGroups.update`](../motion_groups.py#L579) own the scene representation;
 [`SceneDepth`](../scene_depth.py) checks current camera depth;
 [`ObjectGroupAssociation.query`](../object_group_association.py#L50) consumes it.
 

@@ -17,6 +17,7 @@ import numpy as np
 
 from benchmarks.flash_motion_recovery import full_recording
 from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
+from lerobot.policies.flash.motion_groups import SceneMotionGroups
 from lerobot.policies.flash.scene_depth import SceneDepth, project
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
 from lerobot.policies.flash.surface_observation import move
@@ -30,15 +31,21 @@ def benchmark(recording, repeats=101):
     kernels = compiled_kernels()
     queries = []
     original = SceneDepth.contradicted
+    reject_depth = SceneMotionGroups._reject_depth
     captured = []
 
-    def capture(depth, points):
-        queries.append((depth, points.copy()))
-        return original(depth, points)
+    def capture(tracker, depth, current):
+        # Preserve group boundaries even when production submits a single batch.
+        for group in tracker._groups.values():
+            ids = sorted(group.anchors.keys() - group.inliers)
+            if ids:
+                points = move(np.array([group.anchors[i] for i in ids]), group.pose)
+                queries.append((depth, points))
+        return reject_depth(tracker, depth, current)
 
     with (
         SearchPool(settings["config"]["shape"]["batch_query_workers"]) as pool,
-        patch.object(SceneDepth, "contradicted", capture),
+        patch.object(SceneMotionGroups, "_reject_depth", capture),
     ):
         live = LiveSurfaceSession(settings, masks_source, kernels=kernels, search_pool=pool)
         try:
@@ -65,7 +72,7 @@ def benchmark(recording, repeats=101):
         return evaluate(depth, np.concatenate([points for _, points in queries]))
 
     variants = {
-        "current_numpy_per_group": lambda q: per_group(q, original),
+        "numpy_per_group": lambda q: per_group(q, original),
         "numpy_one_batch": lambda q: batch(q, original),
     }
     if kernels is not None:
@@ -84,7 +91,7 @@ def benchmark(recording, repeats=101):
         }
         if queries:
             assert all(depth is queries[0][0] for depth, _ in queries)
-            expected = variants["current_numpy_per_group"](queries)
+            expected = variants["numpy_per_group"](queries)
             # Equivalence and warmup happen outside the timing loop.
             for evaluate in variants.values():
                 np.testing.assert_array_equal(evaluate(queries), expected)

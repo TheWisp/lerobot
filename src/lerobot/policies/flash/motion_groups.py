@@ -547,13 +547,23 @@ class SceneMotionGroups:
 
     def _reject_depth(self, depth, current):
         """Retire contradicted predictions after this frame's group motion is known."""
-        rejected = set()
-        for group in list(self._groups.values()):
+        pending, predictions = [], []
+        for group in self._groups.values():
             ids = sorted(group.anchors.keys() - group.inliers)
             if not ids:
                 continue
-            predicted = move(np.array([group.anchors[i] for i in ids]), group.pose)
-            for i, bad in zip(ids, depth.contradicted(predicted), strict=True):
+            pending.append((group, ids))
+            predictions.append(move(np.array([group.anchors[i] for i in ids]), group.pose))
+        if not pending:
+            return frozenset()
+        # Every group queries the same camera/depth. Batch projection and lookup
+        # once, retaining each group's own transform and membership decisions.
+        contradicted = depth.contradicted(np.concatenate(predictions))
+        rejected, offset = set(), 0
+        for group, ids in pending:
+            flags = contradicted[offset : offset + len(ids)]
+            offset += len(ids)
+            for i, bad in zip(ids, flags, strict=True):
                 if not bad:
                     continue
                 del group.anchors[i]

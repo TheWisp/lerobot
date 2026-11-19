@@ -1,0 +1,534 @@
+{
+  "date": "2026-11-19",
+  "baseline_commit": "4c9a2b3a0",
+  "source_sha256": "39ddac51d7ca5984d4ad3baa86a3d084e199980b9493736c85353853840cb669",
+  "scope": "Complete _reject_depth on captured real replay states, with state cloning outside timers. Fifty-one warm, alternating repetitions per frame. Includes group-local transforms, batched camera projection/depth queries, and membership cleanup. Excludes depth-image preparation and the rest of frame processing.",
+  "states_equal": true,
+  "median_over_post_initialization_frames_ms": {
+    "per_group": 0.2036921214312315,
+    "batched": 0.12236996553838253
+  },
+  "frames": [
+    {
+      "frame": 5118,
+      "median_ms": {
+        "per_group": 0.000341096892952919,
+        "batched": 0.00031013041734695435
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5143,
+      "median_ms": {
+        "per_group": 0.008355127647519112,
+        "batched": 0.008256174623966217
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5149,
+      "median_ms": {
+        "per_group": 0.052097951993346214,
+        "batched": 0.05290890112519264
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5155,
+      "median_ms": {
+        "per_group": 0.05024392157793045,
+        "batched": 0.050966162234544754
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5161,
+      "median_ms": {
+        "per_group": 0.052238116040825844,
+        "batched": 0.05262903869152069
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5166,
+      "median_ms": {
+        "per_group": 0.05043414421379566,
+        "batched": 0.0509750097990036
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5170,
+      "median_ms": {
+        "per_group": 0.051786890253424644,
+        "batched": 0.052277930080890656
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5176,
+      "median_ms": {
+        "per_group": 0.051717041060328484,
+        "batched": 0.05228794179856777
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5182,
+      "median_ms": {
+        "per_group": 0.052148010581731796,
+        "batched": 0.052748946473002434
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5188,
+      "median_ms": {
+        "per_group": 0.052829040214419365,
+        "batched": 0.05340995267033577
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5193,
+      "median_ms": {
+        "per_group": 0.054853036999702454,
+        "batched": 0.05579506978392601
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5199,
+      "median_ms": {
+        "per_group": 0.05097594112157822,
+        "batched": 0.05151703953742981
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5205,
+      "median_ms": {
+        "per_group": 0.05337013863027096,
+        "batched": 0.05398108623921871
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5213,
+      "median_ms": {
+        "per_group": 0.05338992923498154,
+        "batched": 0.054100994020700455
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5219,
+      "median_ms": {
+        "per_group": 0.05337991751730442,
+        "batched": 0.0541219487786293
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5223,
+      "median_ms": {
+        "per_group": 0.05300994962453842,
+        "batched": 0.053690047934651375
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5231,
+      "median_ms": {
+        "per_group": 0.08160318247973919,
+        "batched": 0.08237408474087715
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5235,
+      "median_ms": {
+        "per_group": 0.1912578009068966,
+        "batched": 0.1918089110404253
+      },
+      "rejected_ids": [
+        0,
+        3,
+        6,
+        13,
+        15,
+        16,
+        18,
+        22,
+        24,
+        29,
+        41,
+        52,
+        72,
+        77,
+        80,
+        93,
+        106,
+        117,
+        119,
+        123,
+        136,
+        146,
+        154,
+        167,
+        169,
+        173,
+        175,
+        200,
+        213,
+        225,
+        231,
+        244,
+        245,
+        269,
+        276,
+        292,
+        298,
+        303,
+        305,
+        309,
+        313,
+        318,
+        328,
+        329,
+        332,
+        341,
+        365,
+        386,
+        389,
+        413,
+        436,
+        451,
+        473,
+        475,
+        481,
+        482,
+        487,
+        531,
+        532,
+        539,
+        548,
+        555,
+        559,
+        569,
+        571,
+        576,
+        581,
+        585,
+        591,
+        606,
+        607,
+        610,
+        621,
+        622,
+        627,
+        632,
+        635,
+        636,
+        642,
+        645,
+        647,
+        664,
+        666,
+        676,
+        681,
+        688,
+        694,
+        699,
+        701,
+        702,
+        715,
+        726,
+        728,
+        733,
+        744,
+        760,
+        761,
+        763,
+        767,
+        777,
+        782,
+        793,
+        798,
+        811,
+        816,
+        824,
+        827
+      ]
+    },
+    {
+      "frame": 5242,
+      "median_ms": {
+        "per_group": 0.16237515956163406,
+        "batched": 0.11940393596887589
+      },
+      "rejected_ids": [
+        20,
+        233,
+        390,
+        426,
+        731,
+        743,
+        747,
+        755,
+        758,
+        775,
+        805
+      ]
+    },
+    {
+      "frame": 5251,
+      "median_ms": {
+        "per_group": 0.2036921214312315,
+        "batched": 0.11944305151700974
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5259,
+      "median_ms": {
+        "per_group": 0.20840996876358986,
+        "batched": 0.12236996553838253
+      },
+      "rejected_ids": [
+        467,
+        787,
+        888
+      ]
+    },
+    {
+      "frame": 5265,
+      "median_ms": {
+        "per_group": 0.21012406796216965,
+        "batched": 0.12567592784762383
+      },
+      "rejected_ids": [
+        512,
+        528,
+        542,
+        558,
+        655,
+        673
+      ]
+    },
+    {
+      "frame": 5273,
+      "median_ms": {
+        "per_group": 0.25745201855897903,
+        "batched": 0.12807990424335003
+      },
+      "rejected_ids": [
+        294,
+        474,
+        686,
+        721,
+        739
+      ]
+    },
+    {
+      "frame": 5280,
+      "median_ms": {
+        "per_group": 0.2868981100618839,
+        "batched": 0.12372108176350594
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5288,
+      "median_ms": {
+        "per_group": 0.30168495140969753,
+        "batched": 0.13406109064817429
+      },
+      "rejected_ids": [
+        649,
+        830,
+        831,
+        836
+      ]
+    },
+    {
+      "frame": 5295,
+      "median_ms": {
+        "per_group": 0.29604509472846985,
+        "batched": 0.13149715960025787
+      },
+      "rejected_ids": [
+        438
+      ]
+    },
+    {
+      "frame": 5301,
+      "median_ms": {
+        "per_group": 0.3021771553903818,
+        "batched": 0.13336003758013248
+      },
+      "rejected_ids": [
+        93,
+        598,
+        829,
+        844,
+        854
+      ]
+    },
+    {
+      "frame": 5309,
+      "median_ms": {
+        "per_group": 0.298728933557868,
+        "batched": 0.13472209684550762
+      },
+      "rejected_ids": [
+        735
+      ]
+    },
+    {
+      "frame": 5316,
+      "median_ms": {
+        "per_group": 0.3060640301555395,
+        "batched": 0.13887998647987843
+      },
+      "rejected_ids": [
+        36,
+        870
+      ]
+    },
+    {
+      "frame": 5322,
+      "median_ms": {
+        "per_group": 0.2979380078613758,
+        "batched": 0.1345919445157051
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5329,
+      "median_ms": {
+        "per_group": 0.3097499720752239,
+        "batched": 0.14679506421089172
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5336,
+      "median_ms": {
+        "per_group": 0.2711378037929535,
+        "batched": 0.14423090033233166
+      },
+      "rejected_ids": []
+    },
+    {
+      "frame": 5345,
+      "median_ms": {
+        "per_group": 0.30031194910407066,
+        "batched": 0.16929698176681995
+      },
+      "rejected_ids": [
+        83,
+        357,
+        379
+      ]
+    },
+    {
+      "frame": 5352,
+      "median_ms": {
+        "per_group": 0.25040912441909313,
+        "batched": 0.16577006317675114
+      },
+      "rejected_ids": [
+        57,
+        506,
+        754,
+        1161
+      ]
+    },
+    {
+      "frame": 5359,
+      "median_ms": {
+        "per_group": 0.25475816801190376,
+        "batched": 0.1674429513514042
+      },
+      "rejected_ids": [
+        45,
+        119
+      ]
+    },
+    {
+      "frame": 5365,
+      "median_ms": {
+        "per_group": 0.25317491963505745,
+        "batched": 0.1674231607466936
+      },
+      "rejected_ids": [
+        6,
+        16,
+        191,
+        594,
+        1251
+      ]
+    },
+    {
+      "frame": 5372,
+      "median_ms": {
+        "per_group": 0.25982712395489216,
+        "batched": 0.1752388197928667
+      },
+      "rejected_ids": [
+        2,
+        3,
+        7,
+        9,
+        10,
+        15,
+        17,
+        159,
+        559,
+        591,
+        592,
+        593,
+        642,
+        760,
+        782,
+        889,
+        1108,
+        1149,
+        1384,
+        1742,
+        1783,
+        1828
+      ]
+    },
+    {
+      "frame": 5381,
+      "median_ms": {
+        "per_group": 0.3038800787180662,
+        "batched": 0.17772288993000984
+      },
+      "rejected_ids": [
+        1,
+        4,
+        5,
+        8,
+        11,
+        12,
+        14,
+        373,
+        453,
+        493,
+        814,
+        1058,
+        1059,
+        1109,
+        1679,
+        1773,
+        1839,
+        1932,
+        1951,
+        1958
+      ]
+    }
+  ]
+}

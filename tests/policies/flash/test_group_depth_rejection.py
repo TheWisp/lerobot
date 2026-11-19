@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from copy import copy, deepcopy
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -206,3 +207,94 @@ def test_recorded_stale_members_are_removed_through_frame_owner(units):
             assert sum(g.measured.sum() for g in after.groups.values()) >= 400
     finally:
         engine.close()
+
+
+def _reject_depth_per_group(tracker, depth, current):
+    """Pre-batching implementation, retained as an equivalence oracle."""
+    rejected = set()
+    for group in list(tracker._groups.values()):
+        ids = sorted(group.anchors.keys() - group.inliers)
+        if not ids:
+            continue
+        predicted = move(np.array([group.anchors[i] for i in ids]), group.pose)
+        for i, bad in zip(ids, depth.contradicted(predicted), strict=True):
+            if not bad:
+                continue
+            del group.anchors[i]
+            tracker._departing.pop(i, None)
+            tracker._departed_from.pop(i, None)
+            if i not in current:
+                tracker._seen.pop(i, None)
+            rejected.add(i)
+        if len(group.anchors) < tracker.config.min_motion_points:
+            del tracker._groups[group.id]
+    return frozenset(rejected)
+
+
+@pytest.mark.parametrize("depth_kind", ["recorded", "unknown", "farther"])
+def test_batched_depth_preserves_per_group_results_and_cleanup(depth_kind, monkeypatch):
+    root = Path(__file__).parent / "fixtures/group_depth_20261119"
+    meta = json.loads((root / "manifest.json").read_text())
+    tracker = SceneMotionGroups(GroupConfig.from_dict(meta["settings"]["group_experiment"]))
+    with np.load(root / "measurements.npz", allow_pickle=False) as saved:
+        for n, t in zip(meta["frames"], meta["times_s"], strict=True):
+            measured = SceneTracks(n, t, saved[f"ids_{n}"], saved[f"xy_{n}"], saved[f"xyz_{n}"])
+            tracker.update(measured)
+        depth = saved["depth"].copy()
+        if depth_kind == "unknown":
+            depth.fill(0)
+        elif depth_kind == "farther":
+            depth.fill(10)
+        f = RGBDFrame(
+            n,
+            np.zeros((*depth.shape, 3), np.uint8),
+            depth,
+            saved["intrinsics"],
+            1.0,
+            saved["base_from_camera"],
+            t,
+            t,
+            "recorded",
+        )
+        observed = evidence(f)
+    # Include complete group retirement, as well as mixed measured/carried groups.
+    if depth_kind == "farther":
+        for group in tracker._groups.values():
+            group.inliers.clear()
+    legacy = copy(tracker)
+    previous_group_count = len(tracker._groups)
+    for name in ("_groups", "_seen", "_departing", "_departed_from"):
+        setattr(legacy, name, deepcopy(getattr(tracker, name)))
+    expected = _reject_depth_per_group(legacy, observed, set(measured.ids))
+    original, calls = SceneDepth.contradicted, []
+
+    def counted(self, xyz):
+        calls.append(len(xyz))
+        return original(self, xyz)
+
+    monkeypatch.setattr(SceneDepth, "contradicted", counted)
+    assert sum(bool(g.anchors.keys() - g.inliers) for g in tracker._groups.values()) > 1
+    assert tracker._reject_depth(observed, set(measured.ids)) == expected
+    assert len(calls) == 1
+    np.testing.assert_equal(
+        {i: asdict(g) for i, g in tracker._groups.items()},
+        {i: asdict(g) for i, g in legacy._groups.items()},
+    )
+    for name in ("_seen", "_departing", "_departed_from"):
+        np.testing.assert_equal(getattr(tracker, name), getattr(legacy, name))
+    if depth_kind == "recorded":
+        assert set(meta["old_ids"]) <= expected
+    elif depth_kind == "unknown":
+        assert not expected
+    else:
+        # Offscreen points can remain; groups wholly contradicted in view retire.
+        assert len(tracker._groups) < previous_group_count
+
+
+def test_depth_query_is_skipped_without_carried_members():
+    tracker = established()
+
+    def unexpected_query(xyz):
+        pytest.fail("Accepted measured members must not require a depth query")
+
+    tracker.update(scene(2, points()), depth=SimpleNamespace(contradicted=unexpected_query))

@@ -1,6 +1,8 @@
 # Depth computation and reuse
 
-Inspected at `04f67348e` on 2026-11-19. The diagram describes the running
+Inspected and updated on 2026-11-19. The initial timings below were measured
+before batching at `04f67348e`; the implementation comparison is recorded at the
+end. The diagram includes batching and describes the running
 `LiveSurfaceSession` path after aligned RGB, selected depth and masks are ready.
 Arrows show dependencies; the frame owner updates groups before processing objects.
 
@@ -20,7 +22,7 @@ flowchart TD
     B --> D["Update group motion from accepted measurements"]
     D --> E["Predict current 3D positions of members<br/>without an accepted group measurement"]
     C --> F["Prepare group depth lookup over whole image<br/>Added: 0.36 ms median"]
-    E --> G["Project carried positions, compare depth,<br/>remove contradicted memberships<br/>Added: 0.30 ms median"]
+    E --> G["One batched projection and depth query per frame<br/>Remove contradicted memberships"]
     F --> G
     G --> H["Object association supplies motion information"]
     A --> I["Prepare each object's measured surface<br/>and object-specific depth lookup"]
@@ -51,7 +53,8 @@ The added group lookup replaces invalid/unreliable depth with unknown values and
 takes the nearest depth in a five-by-five-pixel neighborhood. This protects points
 near holes, depth boundaries and possible occluders. It costs 0.364 ms median in
 the interleaved replay; querying carried members and updating membership costs
-0.299 ms median. Their combined median is 0.661 ms (separate medians need not add).
+0.299 ms median before batching. Their combined median is 0.661 ms before batching
+(separate medians need not add).
 
 For each query, the relevant pixel and camera Z depend on the point's predicted
 **current** 3D position. The rule is reliable depth farther than that Z by over
@@ -95,7 +98,8 @@ rejection flag and reduces the median isolated query time from **0.149 ms to
 excludes full-image lookup preparation, group bookkeeping, and the rest of frame
 processing. Inputs are warm and each frame is repeated 101 times with alternating
 variant order. This is evidence of roughly 0.08 ms query savings on this case,
-not a measured end-to-end speedup. No runtime implementation changed.
+not a measured end-to-end speedup. This initial experiment did not change runtime
+behavior; the implemented batching is measured below.
 
 The optional compiled routine could be shared too, but Numba is absent from this
 environment. It was not measured. Further savings from sharing prepared lookups
@@ -111,3 +115,28 @@ a larger cache or cross-layer coupling is not justified by this measurement.
 PYTHONPATH=src:. python -m benchmarks.flash_depth_queries /path/to/saved-recording \
   --output /tmp/depth-query-results.json
 ```
+
+## Batched implementation
+
+`SceneMotionGroups._reject_depth` now collects carried positions from every group
+and performs one camera transformation, projection and depth query for the frame.
+Each group's own transform still produces its robot-base positions before this
+shared query. The results are partitioned back into the original group membership
+order. A frame without carried members does not call the depth query.
+
+On states captured from the same 38-frame replay, the **complete membership
+rejection operation** takes **0.204 ms before / 0.122 ms after batching** (median
+over post-initialization frames). This includes constructing the carried positions
+and deleting memberships, but excludes depth-image preparation and other frame
+work. Each captured state was cloned outside the timer and evaluated 51 times
+with alternating order after warmup. Thus about **0.08 ms** is saved in this
+operation; this is not a measurement of total frame throughput. Every frame's
+rejected IDs, remaining groups and cleanup records match the previous implementation.
+[Measurements and implementation hash](depth-batching-results.json).
+
+The recorded equivalence tests cover mixed rejection, unknown depth, group
+retirement and retained offscreen members. The recorded frame-owner regression
+still removes the 15 stale memberships. An intentionally incorrect batch offset
+fails the recorded equivalence test. The targeted depth, group, shared-tracking,
+live-session and recorded-recovery suites pass: **147 passed, 4 skipped,
+1 expected failure** (the existing ring Kalman-fusion case).
