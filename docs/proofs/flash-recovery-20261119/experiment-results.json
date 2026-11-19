@@ -1,0 +1,421 @@
+{
+  "scope": "Availability and visible-region checks, not full 6D ground truth. Policies are opt-in benchmark experiments.",
+  "checkpoint": "980825b59331413bb51e5773f9272bfce525bce2",
+  "python": "3.12.13",
+  "versions": {
+    "numpy": "2.2.6",
+    "scipy": "1.17.1",
+    "small_gicp": "1.0.1",
+    "torch": "2.10.0"
+  },
+  "runs": {
+    "lk_compact": {
+      "cube/baseline/recorded": {
+        "counts": {
+          "initialized": 1,
+          "lost": 3
+        }
+      },
+      "pointer/baseline/recorded": {
+        "counts": {
+          "initialized": 1,
+          "lost": 2
+        }
+      },
+      "ring/baseline/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 2,
+          "lost": 1
+        }
+      },
+      "cube/recover/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 3
+        }
+      },
+      "pointer/recover/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 2
+        }
+      },
+      "ring/recover/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 2,
+          "lost": 1
+        }
+      },
+      "cube/baseline_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "lost": 3
+        }
+      },
+      "pointer/baseline_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "lost": 2
+        }
+      },
+      "ring/baseline_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 3
+        }
+      },
+      "cube/recover_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 3
+        }
+      },
+      "pointer/recover_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 2
+        }
+      },
+      "ring/recover_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 3
+        }
+      },
+      "cube/baseline/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "lost": 2
+        }
+      },
+      "pointer/baseline/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "lost": 1
+        }
+      },
+      "ring/baseline/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      },
+      "cube/recover/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      },
+      "pointer/recover/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 1
+        }
+      },
+      "ring/recover/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      },
+      "cube/baseline_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "lost": 2
+        }
+      },
+      "pointer/baseline_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "lost": 1
+        }
+      },
+      "ring/baseline_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      },
+      "cube/recover_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      },
+      "pointer/recover_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 1
+        }
+      },
+      "ring/recover_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      }
+    },
+    "ufm_compact": {
+      "cube/baseline/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 3
+        }
+      },
+      "pointer/baseline/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 2
+        }
+      },
+      "ring/baseline/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 2,
+          "lost": 1
+        }
+      },
+      "cube/baseline_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 3
+        }
+      },
+      "pointer/baseline_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 2
+        }
+      },
+      "ring/baseline_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 3
+        }
+      },
+      "cube/baseline/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "lost": 2
+        }
+      },
+      "pointer/baseline/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "lost": 1
+        }
+      },
+      "ring/baseline/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      },
+      "cube/baseline_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "lost": 2
+        }
+      },
+      "pointer/baseline_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "lost": 1
+        }
+      },
+      "ring/baseline_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      }
+    },
+    "ufm_rematch_compact": {
+      "cube/rematch/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 3
+        }
+      },
+      "pointer/rematch/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 2
+        }
+      },
+      "ring/rematch/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 2,
+          "lost": 1
+        }
+      },
+      "cube/rematch_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 3
+        }
+      },
+      "pointer/rematch_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 2
+        }
+      },
+      "ring/rematch_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 3
+        }
+      },
+      "cube/rematch/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      },
+      "pointer/rematch/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 1
+        }
+      },
+      "ring/rematch/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "lost": 1,
+          "observed_candidate": 1
+        }
+      },
+      "cube/rematch_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      },
+      "pointer/rematch_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 1
+        }
+      },
+      "ring/rematch_reset/missing": {
+        "counts": {
+          "initialized": 1,
+          "predicted": 1,
+          "observed_candidate": 2
+        }
+      }
+    },
+    "lk_full": {
+      "cube/baseline/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 20,
+          "lost": 28
+        }
+      },
+      "pointer/baseline/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 48,
+          "lost": 92
+        }
+      },
+      "ring/baseline/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 98,
+          "lost": 15,
+          "predicted": 1
+        }
+      },
+      "cube_again/baseline/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 50,
+          "lost": 47,
+          "predicted": 1
+        }
+      },
+      "cube/recover_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 48
+        }
+      },
+      "pointer/recover_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 140
+        }
+      },
+      "ring/recover_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 114
+        }
+      },
+      "cube_again/recover_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 98
+        }
+      }
+    },
+    "ufm_full": {
+      "cube/rematch_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 48
+        }
+      },
+      "pointer/rematch_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 139,
+          "predicted": 1
+        }
+      },
+      "ring/rematch_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 114
+        }
+      },
+      "cube_again/rematch_reset/recorded": {
+        "counts": {
+          "initialized": 1,
+          "observed_candidate": 98
+        }
+      }
+    }
+  },
+  "baseline_statuses_match_original": 404,
+  "trace_file": "experiment-trace.jsonl"
+}

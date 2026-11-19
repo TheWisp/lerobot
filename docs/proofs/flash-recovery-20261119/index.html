@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FLASH recovery — regression and visual evidence</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101922;color:#eaf0f6;font:16px/1.5 system-ui,sans-serif}
+main{max-width:1320px;margin:auto;padding:22px}h1{font-size:28px;margin:0 0 8px}p{margin:8px 0}
+nav{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 4px}button{font:inherit;font-size:14px;padding:9px 13px;border:1px solid #506273;border-radius:8px;background:#1b2936;color:inherit;cursor:pointer}
+button[aria-pressed=true]{background:#d5f2f3;color:#102331;border-color:#d5f2f3}button:focus-visible{outline:3px solid #ffdf55;outline-offset:3px}
+figure{margin:0}figure img{width:100%;height:auto;display:block}figcaption{font-size:14px;color:#bbc9d5;margin-top:3px}
+a{color:#8be4ec}details{border-top:1px solid #334552;margin-top:20px;padding-top:12px}summary{cursor:pointer;font-weight:600}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{padding:9px;border-bottom:1px solid #334552;text-align:left}th{background:#1b2936}.note{color:#c6d5df;font-size:14px}
+</style>
+<main>
+<h1>FLASH recovery: what failed, and what helps</h1>
+<p><strong>Regression: 11 lossless frames, 6.4 MiB.</strong> Real matching, groups, fitting, filtering and map updates. Saved SAM masks and model depth; no video needed.</p>
+<p class="note">15 tests passed, including real UFM and wrong-object controls. Five baseline failures are explicitly marked as known defects. Recovery changes are benchmark experiments; production behavior is unchanged.</p>
+<nav aria-label="Choose a failure explanation">
+<button aria-pressed="true" data-file="01-lost-identities.png">1 · Lost identities</button>
+<button aria-pressed="false" data-file="02-local-alignment.png">2 · Local alignment</button>
+<button aria-pressed="false" data-file="03-stale-group.png">3 · Stale group pose</button>
+<button aria-pressed="false" data-file="04-filter-rejection.png">4 · Filter rejection</button>
+<button aria-pressed="false" data-file="05-depth-pairs.png">5 · Depth-supported pairs</button>
+</nav>
+<figure><a id="full" href="01-lost-identities.png" target="_blank"><img id="evidence" src="01-lost-identities.png" alt="Lost object identities: last accepted image and visible current object with new short tracks"></a>
+<figcaption>Click the image to open it at full size. These are actual camera frames with replay-derived overlays. Screenshots use the original full history; compact tests initialize freshly.</figcaption></figure>
+<details open><summary>What the recovery experiments establish</summary>
+<table><thead><tr><th>Intervention</th><th>Sparse cube / pointer</th><th>After complete identity loss</th><th>Ring rejection</th></tr></thead><tbody>
+<tr><td>Existing LK pipeline</td><td>Fails</td><td>Fails</td><td>Fails</td></tr>
+<tr><td>UFM, existing pipeline</td><td>Recovers both</td><td>Still fails both</td><td>Still fails</td></tr>
+<tr><td>UFM + fresh matching to accepted image</td><td>Recovers both</td><td>Recovers both: 145 / 108 validated pairs</td><td>Still needs filter change</td></tr>
+<tr><td>LK + surface recovery + filter reset</td><td>Recovers both</td><td>Recovers both without temporal pairs</td><td>Recovers</td></tr>
+<tr><td>UFM + fresh matching + filter reset</td><td>Recovers both</td><td>Recovers both</td><td>Recovers</td></tr>
+</tbody></table>
+<p>The complete-loss experiment deliberately supplies one black image with empty mask/depth. The original recording is kept separate. Both recovered location and subsequent reference/map updates are checked.</p>
+<p><strong>Longer replay:</strong> all 404 original statuses reproduce on the baseline. Across 400 subsequent updates, the baseline observes 216; the LK surface-recovery experiment observes 400; UFM rematching observes 399 and predicts once. These are availability counts, not pose-accuracy scores.</p>
+<p class="note">Exact 6D orientation remains unlabelled. UFM frame 3491 still rejects its fused candidate and retains a compatible prediction. A general fix needs broader identity/ambiguity checks before adoption.</p>
+</details>
+<p class="note"><a href="README.md">Scope, commands and verification</a> · <a href="experiment-results.json">Measured experiment results</a> · <a href="experiment-trace.jsonl">Frame traces</a></p>
+</main>
+<script>
+const descriptions={
+'01-lost-identities.png':'Lost object identities: last accepted image and visible current object with new short tracks',
+'02-local-alignment.png':'Same cube frame: stale starting pose misses the object; alternative alignment fits the current surface',
+'03-stale-group.png':'Background group remains measured while its object anchors are hidden and its carried object pose is stale',
+'04-filter-rejection.png':'Ring: geometry-compatible fit and rejected Kalman-fused pose on the same camera image',
+'05-depth-pairs.png':'Matched endpoints: twelve survive image tracking but only three have acceptable depth support'};
+document.querySelectorAll('button[data-file]').forEach(button=>button.addEventListener('click',()=>{
+ document.querySelectorAll('button[data-file]').forEach(other=>other.setAttribute('aria-pressed',String(other===button)));
+ const file=button.dataset.file;document.getElementById('evidence').src=file;
+ document.getElementById('evidence').alt=descriptions[file];document.getElementById('full').href=file;
+}));
+</script></html>
