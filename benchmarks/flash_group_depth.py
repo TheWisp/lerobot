@@ -63,7 +63,7 @@ def export(recording, destination=FIXTURE):
     )
 
 
-def benchmark(recording, repeats):
+def benchmark(recording, repeats, *, interleave=False):
     meta, source_frames = full_recording(recording)
     numbers = [n for n in meta["cases"]["cube_again"] if n <= 5381]
     # File decoding is outside processing measurements and identical for both runs.
@@ -72,54 +72,73 @@ def benchmark(recording, repeats):
     source = type("SavedMasks", (), {"prompts": {"object": "selected object"}})()
     runs = []
     original = SceneMotionGroups._reject_depth
-    for repeat in range(repeats):
-        # Alternate order to reduce systematic warm-up / machine-load bias.
-        for enabled in [False, True] if repeat % 2 == 0 else [True, False]:
-            check_ms = []
+    check_ms = []
 
-            def timed(self, *args, check_ms=check_ms):
-                begin = time.perf_counter()
-                result = original(self, *args)
-                check_ms.append((time.perf_counter() - begin) * 1000)
-                return result
+    def timed(self, *args):
+        begin = time.perf_counter()
+        result = original(self, *args)
+        check_ms.append((time.perf_counter() - begin) * 1000)
+        return result
 
-            rows = []
-            with (
-                SearchPool(settings["config"]["shape"]["batch_query_workers"]) as pool,
-                patch.object(SceneMotionGroups, "_reject_depth", timed),
-                nullcontext() if enabled else patch.object(SceneDepth, "from_frame", return_value=None),
-            ):
-                live = LiveSurfaceSession(settings, source, kernels=compiled_kernels(), search_pool=pool)
-                try:
-                    for n in numbers:
-                        frame, masks = frames[n]
-                        begin = time.perf_counter()
-                        row, _, _ = live.step(frame, measured_masks=(n, masks, 0.0))
-                        elapsed = (time.perf_counter() - begin) * 1000
-                        obj = row["objects"]["object"]
-                        groups = live.engine.scene_groups.frame
-                        group = obj["group_growing_details"].get("group", {})
-                        rows.append(
-                            {
-                                "frame": n,
-                                "elapsed_ms": elapsed,
-                                "group_update_ms": row["group_update_ms"],
-                                "depth_prepare_ms": row["group_depth_prepare_ms"],
-                                "depth_check_ms": check_ms[-1] if enabled else 0,
-                                "rejected_ids": sorted(groups.depth_rejected_ids),
-                                "old_members": sorted(
-                                    {int(i) for g in groups.groups.values() for i in g.ids} & set(OLD_IDS)
-                                ),
-                                "status": obj["group_growing_status"],
-                                "group": {
-                                    k: v
-                                    for k, v in group.items()
-                                    if k not in {"camera_from_reference", "kalman_motion"}
-                                },
-                            }
-                        )
-                finally:
+    def measure(live, n, enabled):
+        frame, masks = frames[n]
+        with nullcontext() if enabled else patch.object(SceneDepth, "from_frame", return_value=None):
+            begin = time.perf_counter()
+            row, _, _ = live.step(frame, measured_masks=(n, masks, 0.0))
+            elapsed = (time.perf_counter() - begin) * 1000
+        obj = row["objects"]["object"]
+        groups = live.engine.scene_groups.frame
+        details = obj["group_growing_details"]
+        group = details.get("group", {})
+        return {
+            "frame": n,
+            "elapsed_ms": elapsed,
+            "group_update_ms": row["group_update_ms"],
+            "depth_prepare_ms": row["group_depth_prepare_ms"],
+            "depth_check_ms": check_ms[-1] if enabled else 0,
+            "image_tracking_ms": row["scene_point_tracking_ms"],
+            "object_prepare_ms": obj["prepare_ms"],
+            "object_update_ms": obj["group_growing_ms"],
+            "fit_evaluations": details.get("fit", {}).get("evaluations", 0),
+            "rejected_ids": sorted(groups.depth_rejected_ids),
+            "old_members": sorted({int(i) for g in groups.groups.values() for i in g.ids} & set(OLD_IDS)),
+            "status": obj["group_growing_status"],
+            "group": {k: v for k, v in group.items() if k not in {"camera_from_reference", "kalman_motion"}},
+        }
+
+    # Interleaving compares each frame in independent sessions under nearby load.
+    # A discarded complete pair warms both paths before collecting timings.
+    for repeat in range(-1 if interleave else 0, repeats):
+        rows_by_variant = {False: [], True: []}
+        order = [False, True] if repeat % 2 == 0 else [True, False]
+        schedule = (
+            [
+                (enabled, n)
+                for j, n in enumerate(numbers)
+                for enabled in (order if j % 2 == 0 else order[::-1])
+            ]
+            if interleave
+            else [(enabled, n) for enabled in order for n in numbers]
+        )
+        with (
+            SearchPool(settings["config"]["shape"]["batch_query_workers"]) as pool,
+            patch.object(SceneMotionGroups, "_reject_depth", timed),
+        ):
+            kernels = compiled_kernels()
+            sessions = {
+                enabled: LiveSurfaceSession(settings, source, kernels=kernels, search_pool=pool)
+                for enabled in order
+            }
+            try:
+                for enabled, n in schedule:
+                    rows_by_variant[enabled].append(measure(sessions[enabled], n, enabled))
+            finally:
+                for live in sessions.values():
                     live.close()
+        if repeat < 0:
+            continue
+        for enabled in order:
+            rows = rows_by_variant[enabled]
             for row in rows:
                 row["added_depth_ms"] = row["depth_prepare_ms"] + row["depth_check_ms"]
             summary = {
@@ -138,7 +157,16 @@ def benchmark(recording, repeats):
             }
             runs.append(run)
             print(json.dumps({k: v for k, v in run.items() if k != "frames"}), flush=True)
-    keys = ("elapsed_ms", "group_update_ms", "depth_prepare_ms", "depth_check_ms", "added_depth_ms")
+    keys = (
+        "elapsed_ms",
+        "group_update_ms",
+        "depth_prepare_ms",
+        "depth_check_ms",
+        "added_depth_ms",
+        "image_tracking_ms",
+        "object_prepare_ms",
+        "object_update_ms",
+    )
     aggregate = {}
     for enabled in (False, True):
         samples = [row for run in runs if run["enabled"] == enabled for row in run["frames"][1:]]
@@ -152,9 +180,23 @@ def benchmark(recording, repeats):
             )
             for k in keys
         }
+    by_run = {(r["repeat"], r["enabled"]): r["frames"][1:] for r in runs}
+    differences = [
+        new["elapsed_ms"] - old["elapsed_ms"]
+        for repeat in range(repeats)
+        for old, new in zip(by_run[repeat, False], by_run[repeat, True], strict=True)
+    ]
     source = Path(__file__).resolve().parents[1] / "src/lerobot/policies/flash"
     return {
         "date": date.today().isoformat(),
+        "schedule": "alternate variants per frame" if interleave else "alternate complete runs",
+        "warmup_pairs_discarded": int(interleave),
+        "paired_frame_delta_ms": {
+            "median": float(np.median(differences)),
+            "mean": float(np.mean(differences)),
+            "p05": float(np.quantile(differences, 0.05)),
+            "p95": float(np.quantile(differences, 0.95)),
+        },
         "baseline_commit": "44fc18138",
         "comparison": "Disable only SceneDepth preparation/rejection; keep all other tracking settings identical.",
         "source_sha256": {
@@ -197,12 +239,15 @@ def main():
     parser.add_argument("--export", action="store_true")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--interleave", action="store_true", help="Warm both variants, then alternate per frame"
+    )
     args = parser.parse_args()
     cv2.setNumThreads(1)
     if args.export:
         export(args.recording)
     if args.output:
-        save_report(args.output, benchmark(args.recording, args.repeats))
+        save_report(args.output, benchmark(args.recording, args.repeats, interleave=args.interleave))
 
 
 if __name__ == "__main__":

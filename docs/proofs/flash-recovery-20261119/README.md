@@ -376,7 +376,7 @@ the translation fix already recovers this sequence, so this change improves the
 group state without increasing that recovery count. Exact 6D pose accuracy is
 not independently labelled.
 
-Three paired runs alternate enabled/disabled order on an AMD Ryzen 9 9950X,
+The original measurement used three paired runs alternating enabled/disabled order on an AMD Ryzen 9 9950X,
 OpenCV one thread. SAM and Foundation Stereo outputs are frozen; file decoding
 and model inference are excluded. The first frame is excluded from timing summaries.
 
@@ -388,10 +388,41 @@ and model inference are excluded. The first frame is excluded from timing summar
 | Full frame processing, disabled                                    | 66.025 ms |       82.218 ms |
 | Full frame processing, enabled                                     | 60.050 ms |       78.766 ms |
 
-The different group and object state changes subsequent work. These timings do
-not establish a general speedup or camera/model throughput. The direct added cost
-and unchanged observation count support enabling this check for this case.
-[Timing summaries](group-depth-results.json) · [Per-frame measurements](group-depth-results.frames.jsonl).
+**The apparent 6 ms reduction in full processing time did not reproduce in the
+closer comparison below.** It must not be attributed to the depth check. The
+original complete-run comparison did not control timing variation sufficiently
+to establish that saving. These figures exclude camera/model throughput.
+[Original timing summaries](group-depth-results.json) · [Original per-frame measurements](group-depth-results.frames.jsonl).
+
+### Follow-up timing comparison
+
+Six pairs of independent tracking sessions alternate enabled/disabled processing
+for each recorded frame, reversing order on successive frames and repetitions.
+One complete pair is discarded for warmup. Hardware, model outputs and timing
+scope are unchanged. This places each comparison close in time while preserving
+each session's own tracking history.
+
+| Measurement                                                            |  Disabled |   Enabled |
+| ---------------------------------------------------------------------- | --------: | --------: |
+| Full processing median                                                 | 61.114 ms | 61.901 ms |
+| Full processing 95th percentile                                        | 78.597 ms | 80.766 ms |
+| Group update median, excluding depth preparation                       |  8.747 ms | 10.416 ms |
+| Object update stage median, including geometry preparation and fitting | 28.963 ms | 28.408 ms |
+| Fitting evaluations per replay                                         |     1,279 |     1,291 |
+
+For each matching frame and repetition, subtracting disabled time from enabled
+time gives **+0.603 ms median** and +1.204 ms mean over 222 pairs. Each repetition's
+median is positive, ranging from +0.232 to +1.034 ms. The direct depth preparation
+and membership check take **0.661 ms median / 0.944 ms p95**. Individual frame
+differences remain noisy; stage medians are not additive.
+
+There is no consistent fitting saving that explains the original 6 ms difference:
+the enabled version performs slightly more fitting evaluations. Some downstream
+work changes with the group state, but these measurements support a small added
+processing cost for this correctness fix, not a demonstrated speedup. All six
+pairs still remove all 15 stale memberships only with the check enabled; both
+versions accept all 37 post-initialization observations.
+[Follow-up timing summaries](group-depth-interleaved.json) · [Follow-up per-frame measurements](group-depth-interleaved.frames.jsonl).
 
 The [813 KiB fixture](../../../tests/policies/flash/fixtures/group_depth_20261119/README.md)
 reconstructs stale group membership from 38 measured point snapshots and stores
@@ -411,5 +442,7 @@ Reproduce the full processing comparison:
 ```sh
 PYTHONPATH=src:. python -m benchmarks.flash_group_depth /path/to/saved-recording \
   --output /tmp/group-depth-results.json --repeats 3
+PYTHONPATH=src:. python -m benchmarks.flash_group_depth /path/to/saved-recording \
+  --interleave --output /tmp/group-depth-interleaved.json --repeats 6
 PYTHONPATH=src:. python -m pytest tests/policies/flash/test_group_depth_rejection.py -q
 ```
