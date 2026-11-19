@@ -70,6 +70,11 @@ These are separate stages: a match can survive in 2D but lack usable depth; a us
 still disagree with the other points' motion. Neither stage proves that the pixels depict the same
 physical surface point.
 
+The shared path checks finite positive depth around both pixels, then the object's usable-surface
+mask. That mask also excludes the configured band inside the segmentation boundary and applies
+local depth-continuity, surface-normal, optional depth-range, and sampled-surface coverage checks.
+Therefore, a rejected pair does not necessarily lack depth: specify which check failed.
+
 Code: [`SharedFrameTracker.pairs`](../shared_image_tracking.py#L223),
 [`measured_pairs`](../surface_correspondence.py#L76), and
 [`robust_fit`](../surface_correspondence.py#L120).
@@ -218,10 +223,13 @@ Mask-dependent sampling happens upstream in the shared image tracker. Object ass
 queries the resulting group snapshot; accepting or rejecting an object pose cannot rewrite it.
 See the [group architecture](../../../gui/static/flash_architecture.html#group-update).
 
-The implementation retains some unmeasured group points and predicts their positions from the
-measured members. Remembered object points can connect an object to such a group. Predicting an
-unmeasured member assumes it still shares the measured members' motion; it does not establish
-that the point remained physically attached.
+The implementation retains some members without accepted group measurements and predicts their
+positions from the accepted members. In `GroupView`, `measured` means both currently measured and
+accepted as an inlier of that group's motion. A false flag can mean either a missing measurement
+or a current measurement rejected by the group fit. Those cases must be distinguished when
+diagnosing failures. Remembered object points can connect an object to such a group. Predicting a
+member assumes it still shares the measured members' motion; it does not establish that the point
+remained physically attached.
 
 Code: [`GroupView`](../motion_groups.py#L76) and
 [`SceneMotionGroups.update`](../motion_groups.py#L546) own the scene representation;

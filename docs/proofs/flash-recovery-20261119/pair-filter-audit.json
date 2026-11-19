@@ -1,0 +1,883 @@
+{
+  "settings": {
+    "backend": "lk",
+    "max_image_size_px": 640,
+    "scene_points": 800,
+    "object_points": 256,
+    "spacing_px": 5,
+    "history_frames": 64,
+    "depth_support_radius_px": 1,
+    "lk": {
+      "window_size_px": 21,
+      "pyramid_levels": 3,
+      "forward_backward_limit_px": 1
+    },
+    "ufm": {
+      "covisibility_min": 0.5
+    }
+  },
+  "observation_settings": {
+    "mask_margin_px": 4,
+    "outer_mask_margin_px": 2,
+    "depth_span_m": 0.01,
+    "depth_neighborhood_px": 3,
+    "normal_bilateral_diameter_px": 5,
+    "normal_bilateral_sigma_px": 2,
+    "huber_m": 0.005,
+    "surface_spacing_m": 0.003,
+    "samples_across_object": 64,
+    "min_surface_spacing_m": 0.001,
+    "component_gap_m": null,
+    "depth_outlier_sigma": 3,
+    "filtered_depth_for_fitting": true,
+    "validation_tile_px": 4
+  },
+  "endpoints": {
+    "5372": {
+      "mask_pixels": 913,
+      "interior_pixels": 288,
+      "valid_surface_pixels": 287,
+      "sampled_surface_points": 167,
+      "bbox_xywh": [
+        280,
+        249,
+        50,
+        43
+      ]
+    },
+    "5381": {
+      "mask_pixels": 1034,
+      "interior_pixels": 368,
+      "valid_surface_pixels": 368,
+      "sampled_surface_points": 207,
+      "bbox_xywh": [
+        307,
+        280,
+        48,
+        52
+      ]
+    }
+  },
+  "pairs": [
+    {
+      "track_id": 6,
+      "stage": 3,
+      "source_uv": [
+        294.411,
+        260.316
+      ],
+      "target_uv": [
+        318.237,
+        290.287
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": true,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": true,
+        "connected": true,
+        "usable": true,
+        "span_mm": 0.9999871253967285,
+        "pixel_depth_m": 0.40700000524520874
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": true,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": true,
+        "connected": true,
+        "usable": true,
+        "span_mm": 0.9999871253967285,
+        "pixel_depth_m": 0.4000000059604645
+      }
+    },
+    {
+      "track_id": 15,
+      "stage": 2,
+      "source_uv": [
+        282.597,
+        280.052
+      ],
+      "target_uv": [
+        308.744,
+        311.493
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 2.9999911785125732,
+        "pixel_depth_m": 0.4020000100135803
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 2.0000040531158447,
+        "pixel_depth_m": 0.39400002360343933
+      }
+    },
+    {
+      "track_id": 591,
+      "stage": 2,
+      "source_uv": [
+        289.157,
+        278.044
+      ],
+      "target_uv": [
+        315.161,
+        309.007
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 4.999995231628418,
+        "pixel_depth_m": 0.39400002360343933
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 2.9999911785125732,
+        "pixel_depth_m": 0.39100003242492676
+      }
+    },
+    {
+      "track_id": 1251,
+      "stage": 2,
+      "source_uv": [
+        288.614,
+        262.365
+      ],
+      "target_uv": [
+        312.585,
+        292.634
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 0.9999871253967285,
+        "pixel_depth_m": 0.406000018119812
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 0.9999871253967285,
+        "pixel_depth_m": 0.39900001883506775
+      }
+    },
+    {
+      "track_id": 1717,
+      "stage": 0,
+      "source_uv": [
+        305.46,
+        268.541
+      ],
+      "target_uv": [
+        329.161,
+        298.894
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": false,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 20.999998092651367,
+        "pixel_depth_m": 0.4050000309944153
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 0.0,
+        "pixel_depth_m": 0.39900001883506775
+      }
+    },
+    {
+      "track_id": 1718,
+      "stage": 2,
+      "source_uv": [
+        313.709,
+        266.196
+      ],
+      "target_uv": [
+        338.068,
+        294.859
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": false,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 27.000009536743164,
+        "pixel_depth_m": 0.40700000524520874
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 0.0,
+        "pixel_depth_m": 0.4010000228881836
+      }
+    },
+    {
+      "track_id": 1902,
+      "stage": 2,
+      "source_uv": [
+        321.935,
+        258.626
+      ],
+      "target_uv": [
+        344.111,
+        286.157
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 0.0,
+        "pixel_depth_m": 0.4090000092983246
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 1.0000169277191162,
+        "pixel_depth_m": 0.4020000100135803
+      }
+    },
+    {
+      "track_id": 1903,
+      "stage": 0,
+      "source_uv": [
+        286.884,
+        264.289
+      ],
+      "target_uv": [
+        311.187,
+        294.382
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 0.0,
+        "pixel_depth_m": 0.406000018119812
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 0.9999871253967285,
+        "pixel_depth_m": 0.398000031709671
+      }
+    },
+    {
+      "track_id": 1904,
+      "stage": 3,
+      "source_uv": [
+        304.503,
+        257.093
+      ],
+      "target_uv": [
+        326.197,
+        286.693
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": true,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": true,
+        "connected": true,
+        "usable": true,
+        "span_mm": 0.9999871253967285,
+        "pixel_depth_m": 0.4090000092983246
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": true,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": true,
+        "connected": true,
+        "usable": true,
+        "span_mm": 1.0000169277191162,
+        "pixel_depth_m": 0.4010000228881836
+      }
+    },
+    {
+      "track_id": 1905,
+      "stage": 0,
+      "source_uv": [
+        292.63,
+        252.279
+      ],
+      "target_uv": [
+        350.239,
+        259.207
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 0.0,
+        "pixel_depth_m": 0.4090000092983246
+      },
+      "5381": {
+        "mask": false,
+        "positive_3x3": false,
+        "mask_interior": false,
+        "depth_span": false,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 405.0000305175781,
+        "pixel_depth_m": 0.40400001406669617
+      }
+    },
+    {
+      "track_id": 1907,
+      "stage": 3,
+      "source_uv": [
+        299.975,
+        263.597
+      ],
+      "target_uv": [
+        323.151,
+        292.937
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": true,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": true,
+        "connected": true,
+        "usable": true,
+        "span_mm": 0.0,
+        "pixel_depth_m": 0.406000018119812
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": true,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": true,
+        "connected": true,
+        "usable": true,
+        "span_mm": 0.9999871253967285,
+        "pixel_depth_m": 0.39900001883506775
+      }
+    },
+    {
+      "track_id": 1908,
+      "stage": 0,
+      "source_uv": [
+        302.094,
+        251.245
+      ],
+      "target_uv": [
+        383.529,
+        244.766
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": false,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 34.00000762939453,
+        "pixel_depth_m": 0.4100000262260437
+      },
+      "5381": {
+        "mask": false,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 2.0000040531158447,
+        "pixel_depth_m": 0.3880000114440918
+      }
+    },
+    {
+      "track_id": 1910,
+      "stage": 2,
+      "source_uv": [
+        315.874,
+        256.236
+      ],
+      "target_uv": [
+        337.062,
+        284.739
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 0.0,
+        "pixel_depth_m": 0.4100000262260437
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 0.0,
+        "pixel_depth_m": 0.4020000100135803
+      }
+    },
+    {
+      "track_id": 1966,
+      "stage": 2,
+      "source_uv": [
+        297.472,
+        271.261
+      ],
+      "target_uv": [
+        321.966,
+        300.629
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": false,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 16.000001907348633,
+        "pixel_depth_m": 0.40300002694129944
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 0.9999871253967285,
+        "pixel_depth_m": 0.3970000147819519
+      }
+    },
+    {
+      "track_id": 1967,
+      "stage": 0,
+      "source_uv": [
+        286.048,
+        269.423
+      ],
+      "target_uv": [
+        311.622,
+        298.115
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 0.0,
+        "pixel_depth_m": 0.4050000309944153
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 1.0000169277191162,
+        "pixel_depth_m": 0.3970000147819519
+      }
+    },
+    {
+      "track_id": 1968,
+      "stage": 2,
+      "source_uv": [
+        320.036,
+        264.925
+      ],
+      "target_uv": [
+        343.878,
+        292.847
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": false,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 27.000009536743164,
+        "pixel_depth_m": 0.40800002217292786
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": true,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": true,
+        "usable": false,
+        "span_mm": 0.0,
+        "pixel_depth_m": 0.4010000228881836
+      }
+    },
+    {
+      "track_id": 1969,
+      "stage": 2,
+      "source_uv": [
+        327.247,
+        263.076
+      ],
+      "target_uv": [
+        351.722,
+        289.664
+      ],
+      "5372": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": false,
+        "depth_range": false,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 34.00000762939453,
+        "pixel_depth_m": 0.39100003242492676
+      },
+      "5381": {
+        "mask": true,
+        "positive_3x3": true,
+        "mask_interior": false,
+        "depth_span": false,
+        "depth_range": true,
+        "valid_surface": false,
+        "connected": false,
+        "usable": false,
+        "span_mm": 16.999990463256836,
+        "pixel_depth_m": 0.4020000100135803
+      }
+    }
+  ],
+  "sampling_trials": [
+    {
+      "spacing_px": 5,
+      "object_points": 256,
+      "last_frames": [
+        {
+          "frame": 5372,
+          "object_tracks": 17,
+          "new_object_tracks": 0,
+          "total_tracks": 815,
+          "matching_ms": 7.782649016007781,
+          "total_ms": 12.375559890642762
+        },
+        {
+          "frame": 5381,
+          "object_tracks": 17,
+          "new_object_tracks": 3,
+          "total_tracks": 812,
+          "matching_ms": 8.969187969341874,
+          "total_ms": 14.575156150385737
+        }
+      ],
+      "usable_pairs": 3,
+      "lk_survivors": 12,
+      "median_matching_ms": 9.066170081496239,
+      "median_shared_update_ms": 14.346688170917332,
+      "timing_repeats": 12
+    },
+    {
+      "spacing_px": 5,
+      "object_points": 512,
+      "last_frames": [
+        {
+          "frame": 5372,
+          "object_tracks": 17,
+          "new_object_tracks": 0,
+          "total_tracks": 815,
+          "matching_ms": 7.859892910346389,
+          "total_ms": 12.541131116449833
+        },
+        {
+          "frame": 5381,
+          "object_tracks": 17,
+          "new_object_tracks": 3,
+          "total_tracks": 812,
+          "matching_ms": 9.035521885380149,
+          "total_ms": 14.241840923205018
+        }
+      ],
+      "usable_pairs": 3,
+      "lk_survivors": 12,
+      "median_matching_ms": 9.086914011277258,
+      "median_shared_update_ms": 14.31594486348331,
+      "timing_repeats": 12
+    },
+    {
+      "spacing_px": 3,
+      "object_points": 256,
+      "last_frames": [
+        {
+          "frame": 5372,
+          "object_tracks": 44,
+          "new_object_tracks": 4,
+          "total_tracks": 842,
+          "matching_ms": 7.763091940432787,
+          "total_ms": 12.497639050707221
+        },
+        {
+          "frame": 5381,
+          "object_tracks": 45,
+          "new_object_tracks": 7,
+          "total_tracks": 844,
+          "matching_ms": 8.859572932124138,
+          "total_ms": 13.990611070767045
+        }
+      ],
+      "usable_pairs": 13,
+      "lk_survivors": 36,
+      "median_matching_ms": 8.918302948586643,
+      "median_shared_update_ms": 13.92664690501988,
+      "timing_repeats": 12
+    },
+    {
+      "spacing_px": 2,
+      "object_points": 256,
+      "last_frames": [
+        {
+          "frame": 5372,
+          "object_tracks": 82,
+          "new_object_tracks": 8,
+          "total_tracks": 881,
+          "matching_ms": 8.084682980552316,
+          "total_ms": 12.844027020037174
+        },
+        {
+          "frame": 5381,
+          "object_tracks": 96,
+          "new_object_tracks": 19,
+          "total_tracks": 896,
+          "matching_ms": 9.697460103780031,
+          "total_ms": 15.006963163614273
+        }
+      ],
+      "usable_pairs": 24,
+      "lk_survivors": 72,
+      "median_matching_ms": 9.821698069572449,
+      "median_shared_update_ms": 15.368819935247302,
+      "timing_repeats": 12
+    },
+    {
+      "spacing_px": 2,
+      "object_points": 512,
+      "last_frames": [
+        {
+          "frame": 5372,
+          "object_tracks": 82,
+          "new_object_tracks": 8,
+          "total_tracks": 881,
+          "matching_ms": 8.110322058200836,
+          "total_ms": 12.84308498725295
+        },
+        {
+          "frame": 5381,
+          "object_tracks": 96,
+          "new_object_tracks": 19,
+          "total_tracks": 896,
+          "matching_ms": 9.740761946886778,
+          "total_ms": 15.190616017207503
+        }
+      ],
+      "usable_pairs": 24,
+      "lk_survivors": 72,
+      "median_matching_ms": 9.699560119770467,
+      "median_shared_update_ms": 14.99446458183229,
+      "timing_repeats": 12
+    }
+  ],
+  "source_track_ids": [
+    6,
+    15,
+    591,
+    1251,
+    1717,
+    1718,
+    1902,
+    1903,
+    1904,
+    1905,
+    1907,
+    1908,
+    1910,
+    1966,
+    1967,
+    1968,
+    1969
+  ],
+  "point_history": [
+    {
+      "frame": 5345,
+      "object_tracks": 26,
+      "new_object_tracks": 11,
+      "total_tracks": 722,
+      "matching_ms": 12.748528039082885,
+      "total_ms": 18.48109206184745
+    },
+    {
+      "frame": 5352,
+      "object_tracks": 13,
+      "new_object_tracks": 2,
+      "total_tracks": 805,
+      "matching_ms": 9.13112098351121,
+      "total_ms": 15.508712036535144
+    },
+    {
+      "frame": 5359,
+      "object_tracks": 16,
+      "new_object_tracks": 9,
+      "total_tracks": 808,
+      "matching_ms": 8.583436021581292,
+      "total_ms": 13.964113080874085
+    },
+    {
+      "frame": 5365,
+      "object_tracks": 18,
+      "new_object_tracks": 4,
+      "total_tracks": 815,
+      "matching_ms": 7.974897976964712,
+      "total_ms": 12.951056938618422
+    },
+    {
+      "frame": 5372,
+      "object_tracks": 17,
+      "new_object_tracks": 0,
+      "total_tracks": 815,
+      "matching_ms": 7.782649016007781,
+      "total_ms": 12.375559890642762
+    },
+    {
+      "frame": 5381,
+      "object_tracks": 17,
+      "new_object_tracks": 3,
+      "total_tracks": 812,
+      "matching_ms": 8.969187969341874,
+      "total_ms": 14.575156150385737
+    }
+  ],
+  "recording": "saved-747dd29b27a745418524e2744ac29cb5",
+  "scope": "Endpoint filters from saved model depth and SAM masks; shared tracker replay only. Timing excludes groups, surface fitting, SAM and depth inference; twelve repeats of frame 5381, OpenCV one thread. No tracking defaults changed."
+}

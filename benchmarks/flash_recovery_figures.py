@@ -139,7 +139,7 @@ def main(recording, evidence, output):
         "3 · Background tracking does not establish the moved object’s location",
         [
             "Frame 5381: associated group has 425 measured environment points and 0 measured points in the usable object mask.",
-            "Its 15 stored object points have no current measurements. Their displayed locations are predicted from the group.",
+            "Of 15 stored object points, 12 are missing; 3 have measurements rejected by the group fit. All 15 are drawn as predictions.",
             "Zoom: orange = group-supplied object pose; cyan = compatible fit from the prior pose; yellow = current SAM mask.",
         ],
         "03-stale-group.png",
@@ -185,9 +185,9 @@ def main(recording, evidence, output):
     figure(
         "5 · A surviving 2D match is not necessarily a usable 3D pair",
         [
-            "Frame pair 5372 → 5381: 17 object queries; 12 survive LK; only 3 pass the endpoint depth/support filters.",
-            "Cyan circles: usable 3D pairs. Pink crosses: survived image tracking but failed a depth/support requirement.",
-            "The rigid-motion fit needs at least 6 pairs. There is visible object depth, but too few acceptable matched endpoints.",
+            "Frame pair 5372 → 5381: 17 object queries; 12 survive LK; only 3 pass the usable-surface checks.",
+            "Cyan circles: usable pairs. All 9 pink crosses fall in the excluded 4-pixel mask boundary band at both endpoints.",
+            "All 12 LK survivors have positive 3×3 depth support. Additional depth checks reject some boundary points too.",
         ],
         "05-depth-pairs.png",
         five,

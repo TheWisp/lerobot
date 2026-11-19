@@ -16,6 +16,7 @@ table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{pad
 <p class="note"><strong>Production translation initialization is now implemented.</strong> Cube and pointer recovery pass, including complete loss of image tracks and the wrong-object control. The fitter compares the original translation with one aligning the measured surface centres and uses the lower geometry cost for one solve. The separate ring Kalman-fusion failure remains. The live server was not restarted.</p>
 <p class="note">The screenshots and experiment table below describe the original implementation at <code>9ff25cf80</code>. The updated full-history replay observes 315 of 400 updates; this measures availability, not pose accuracy. <a href="translation-initialization-results.json">Implementation verification</a>.</p>
 <p><a href="README.md#current-regression-cases">Current regression cases and results (Markdown)</a> · <a href="../../../src/lerobot/policies/flash/docs/glossary.md">Tracking glossary — definitions and code citations (Markdown)</a></p>
+<p class="note">The five panels show interacting failure mechanisms, not five independent root causes. <a href="README.md#how-the-five-panels-relate">Relationship between the failures</a> · <a href="README.md#why-the-pairs-are-rejected-and-sparse">Endpoint filter and sampling audit</a>.</p>
 <nav aria-label="Choose a failure explanation">
 <button aria-pressed="true" data-file="01-lost-identities.png">1 · Lost point tracks</button>
 <button aria-pressed="false" data-file="02-local-alignment.png">2 · Local surface fitting</button>
@@ -44,17 +45,17 @@ table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{pad
 const descriptions={
 '01-lost-identities.png':'Lost point tracks: last accepted image and visible current object with new short tracks',
 '02-local-alignment.png':'Same cube frame: stale starting pose misses the object; fitting from another starting pose succeeds',
-'03-stale-group.png':'Background group remains measured while its stored object points have no current measurements and its predicted object pose is stale',
+'03-stale-group.png':'Background group retains fifteen old object points: twelve missing, three measured but rejected by its motion fit',
 '04-filter-rejection.png':'Ring: geometry-compatible fit and rejected Kalman-fused pose on the same camera image',
-'05-depth-pairs.png':'Matched endpoints: twelve survive image tracking but only three have acceptable depth support'};
+'05-depth-pairs.png':'Twelve image matches have positive depth; nine are excluded by the four-pixel mask boundary band'};
 const glossary='../../../src/lerobot/policies/flash/docs/glossary.md';
 const term=(id,label)=>`<a href="${glossary}#${id}">${label}</a>`;
 const explanations={
 '01-lost-identities.png':`A ${term('point-track-id','point track ID')} labels one tracked image point. Here the object is visible, but no old IDs connect the ${term('accepted-observation--reference-image','last accepted image')} to the current image.`,
 '02-local-alignment.png':`${term('local-surface-fitting','Surface fitting')} moves and rotates stored 3D points to match current depth. The original implementation omitted initialization from the current surface centre; that defect is now corrected. A controlled replay aligned the centres by changing only the initial translation (43.4 mm), with 0° change to the starting rotation: the same fit and checks accepted the result. The picture below compares the original starting estimate and recovered fit. <a href="center-initialization-ablation.json">Controlled trial evidence</a>.`,
-'03-stale-group.png':`An ${term('object-point-anchor','object point anchor')} remembers a 3D position relative to the object, indexed by an image track’s ID. A ${term('motion-group','motion group')} is a collection of 3D points assumed to move together rigidly. Here the group still has measured background points, but its established object points have no current measurements. Predicting the object’s position from that group gives a stale result.`,
+'03-stale-group.png':`A ${term('motion-group','motion group')} is a collection of 3D points assumed to move together rigidly. This group has 425 accepted environment measurements. Of its 15 remembered object points, 12 are missing and 3 have measurements rejected by the group fit. All 15 retain membership and are displayed at predicted group positions. The object association still produces a pose suggestion from that group. <a href="README.md#why-the-object-remains-attached-to-the-background-group">Mechanism and code citations</a>.`,
 '04-filter-rejection.png':`The ${term('kalman-pose-update','Kalman pose update')} combines the old prediction with the new surface fit. The resulting pose fails a depth check even though the new fit passed.`,
-'05-depth-pairs.png':`An ${term('image-match--2d-correspondence','image match')} supplies two pixels. A ${term('usable-and-validated-3d-pairs','usable 3D pair')} also needs acceptable depth at both pixels. Here only three pairs survive those checks; the motion fit needs at least six.`};
+'05-depth-pairs.png':`Of 17 object queries, 12 survive LK and have positive depth in both 3×3 neighborhoods. Nine are excluded by the configured 4-pixel band inside the SAM boundary at both endpoints; some also fail depth-change checks. Only 3 ${term('usable-and-validated-3d-pairs','usable 3D pairs')} remain; the motion fit requires 6. <a href="pair-filter-detail.png">See the excluded boundary band</a> · <a href="README.md#why-the-pairs-are-rejected-and-sparse">Sampling and measured cost</a>.`};
 document.querySelectorAll('button[data-file]').forEach(button=>button.addEventListener('click',()=>{
  document.querySelectorAll('button[data-file]').forEach(other=>other.setAttribute('aria-pressed',String(other===button)));
  const file=button.dataset.file;document.getElementById('evidence').src=file;

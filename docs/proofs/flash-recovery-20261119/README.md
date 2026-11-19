@@ -45,6 +45,115 @@ link the same definitions: point track IDs, local surface fitting,
 and motion groups, Kalman pose updates, and
 [usable 3D pairs](../../../src/lerobot/policies/flash/docs/glossary.md#usable-and-validated-3d-pairs).
 
+## Viewing the Markdown
+
+The glossary remains Markdown in the repository. To render it and the report links in a browser,
+run `uv run scripts/preview_markdown.py --port 18935` from the repository root, then open
+`http://127.0.0.1:18935/docs/proofs/flash-recovery-20261119/index.html` on that machine.
+The preview reads each Markdown file on request, renders headings, tables and links, and offers
+“View source.” It does not maintain a second glossary or change the tracking server.
+
+## How the five panels relate
+
+| Panel                         | Mechanism                                                                                                                                 | Relationship                                                                                                              |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 1: Lost point tracks          | No surviving IDs connect the accepted image to the current one; the shared path does not attempt fresh matching between those images      | One way to lose an image-derived motion estimate. Loss of tracks itself must be tolerated.                                |
+| 5: Too few usable pairs       | Some IDs survive, but sparse queries and object-surface filters leave fewer than six 3D pairs                                             | Another way to lose the motion estimate; different immediate cause from panel 1.                                          |
+| 3: Stale group pose           | Old object membership survives missing or contradictory measurements; measured background motion still supplies an object-pose suggestion | Can supply the wrong fallback when image motion is unavailable.                                                           |
+| 2: Translation initialization | The original fitter starts from that suggestion without comparing translation against current object geometry                             | Turns a bad starting position into a failed local fit. The committed centre-translation comparison addresses this defect. |
+| 4: Kalman pose update         | A surface fit passes geometry checks, but combining it with the prediction creates a pose that fails them                                 | A distinct downstream failure, still present in the ring case.                                                            |
+
+Panels 5 and 3 show the same frame, 5381: three usable pairs cannot supply image motion,
+so the stale group pose becomes the fit's starting estimate. The original fitter then fails;
+fitting from the previous pose succeeds in the recorded comparison. Panel 2 separately isolates
+missing centre-translation initialization on cube frame 2741. Thus these are interacting causes,
+not proof that every panel is a separate bug or that fixing translation fixes all five mechanisms.
+
+## Why the pairs are rejected and sparse
+
+The [endpoint audit](pair-filter-audit.json) evaluates the saved SAM masks and model depth for
+frames 5372 and 5381. Of 17 object queries, 12 survive LK and target-mask membership; 3 become
+[usable 3D pairs](../../../src/lerobot/policies/flash/docs/glossary.md#usable-and-validated-3d-pairs).
+All 12 have finite positive depth in both 3×3 neighborhoods. **All nine excluded pairs fail the
+4-pixel inner mask-margin requirement at both endpoints.** Four also exceed the 10 mm local
+depth-span limit in the source; one of those also exceeds it in the target and fails the source
+robust depth-range check. These reasons overlap. “Failed depth support” was an incomplete diagnosis.
+
+![Excluded boundary band and matched endpoints](pair-filter-detail.png)
+
+The source SAM mask contains 913 pixels in a 50×43-pixel bounding box; erosion leaves 288 pixels,
+of which 287 pass surface cleaning. The target has 1034 mask pixels and 368 clean pixels.
+The image tracker seeds from the full mask with positive neighborhood depth, while object matching
+later requires the stricter cleaned surface. Therefore it can spend queries on boundary locations
+that the object matcher will exclude. See [query selection](../../../src/lerobot/policies/flash/shared_image_tracking.py#L93),
+[surface preparation](../../../src/lerobot/policies/flash/surface_tracking.py#L207), and
+[pair filtering](../../../src/lerobot/policies/flash/shared_image_tracking.py#L223).
+
+The recorded configuration permits 256 points per object and 800 background points, with 5-pixel
+spacing in a 640-pixel-wide matching image. For this 848-pixel-wide recording, that spacing is about
+6.6 original-image pixels. The object is only about 38×32 matching-image pixels. The ceiling is not
+filled: the tracker already replenishes points each frame, subject to available space. Frame 5372
+has 17 object tracks; frame 5381 has 17 after adding 3 new object tracks. New IDs cannot contribute
+to a pair with an older image in which they did not exist.
+
+Replaying the shared tracker from frame 5118 gives:
+
+| Spacing in matching image | Object-point ceiling | Source object tracks | Usable pairs at 5381 | Shared-update time |
+| ------------------------- | -------------------- | -------------------- | -------------------- | ------------------ |
+| 5 px                      | 256                  | 17                   | 3                    | 14.3 ms            |
+| 5 px                      | 512                  | 17                   | 3                    | 14.3 ms            |
+| 3 px                      | 256                  | 44                   | 13                   | 13.9 ms            |
+| 2 px                      | 256                  | 82                   | 24                   | 15.4 ms            |
+
+Times are medians of 12 repeats of frame 5381 on this machine, with OpenCV using one CPU thread.
+They include LK, query replenishment and depth lifting, but exclude groups, surface fitting, SAM,
+and depth inference. The small 5-versus-3-pixel timing difference is not evidence that denser points
+are faster. These measurements do not establish overall frame rate, UFM cost, or pose accuracy.
+Only diagnostic configurations changed; production settings remain unchanged.
+The point ceiling is exposed as “Point budget per object” in the GUI; spacing is configurable as
+`shared_matching.spacing_px`, but is not currently exposed by the GUI settings form.
+
+Reproduce the filter and density audit with the original recording:
+
+```sh
+PYTHONPATH=src:. python -m benchmarks.flash_recovery_pair_audit /path/to/saved-recording /tmp/pair-filter-audit.json \
+  --figure /tmp/pair-filter-detail.png
+```
+
+## Why the object remains attached to the background group
+
+[Group-state replay](group-membership-audit.json) separates missing measurements from rejected
+measurements at frame 5381. Group 0 has 425 accepted environment measurements. Of the 15 retained
+object members, 12 have no current scene measurement; IDs 6, 591 and 592 do have current 3D
+measurements, but all three disagree with the group's fitted motion. Consequently none of the
+15 has `GroupView.measured=True`. This flag means an accepted group inlier, not merely that a
+measurement exists. The earlier statement that all 15 lacked measurements was wrong.
+
+The mechanism spans two stages:
+
+1. [Scene groups](../../../src/lerobot/policies/flash/motion_groups.py#L400) retain an inconsistent
+   member until a coherent measured split is established. A split requires at least 12 points in
+   this configuration. Missing members have no time-based expiry; memory capacity can evict them.
+   The three measured old object members cannot establish that split by themselves.
+2. [Object association](../../../src/lerobot/policies/flash/object_group_association.py#L85) counts
+   remembered members, including those without accepted group measurements, when selecting a
+   group. An established relation does not require current object inliers. Once the group is
+   supported and confirmed by background measurements, it can still return an object-pose hint.
+
+Retaining a membership hypothesis through occlusion is useful. Continuing to let it supply the
+object's pose despite contradictory measurements is the failure here. “No confirmed split” does
+not establish that the object still follows the background. The final geometry checks reject this
+bad pose in the recorded frame; the result is tracking loss, not an accepted correct pose. Fixing
+this needs a distinction between remembering possible membership and trusting it for object motion.
+The group and association logic has not been changed by the translation-initialization fix.
+
+Reproduce the group inspection in an isolated replay process (the script loads only the original
+`fit_once` method from local commit `9ff25cf80`; it does not edit production code):
+
+```sh
+PYTHONPATH=src:. python -m benchmarks.flash_recovery_group_audit /path/to/saved-recording /tmp/group-membership-audit.json
+```
+
 ## Implemented translation initialization
 
 The production `WholeSurfaceFit.fit_once` now compares the motion proposal with
