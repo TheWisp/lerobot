@@ -85,10 +85,10 @@ def main(recording, evidence, output):
         ax[1].scatter(*uv.T, s=22, facecolors="none", edgecolors=CYAN, lw=1.1)
 
     figure(
-        "1 · Visible again, but the old image identities are gone",
+        "1 · Visible again, but the old point tracks are gone",
         [
             "Yellow: saved SAM mask. Cyan circles: surviving short tracks from the immediately preceding processed image.",
-            "The object estimator still refers to frame 5372. Zero point identities connect that accepted image to frame 5512.",
+            "The object estimator still refers to frame 5372. Zero point track IDs connect that accepted image to frame 5512.",
             "Confirmed in the trace/code: no fresh reference-to-current matching is attempted. Pictures alone cannot prove that omission.",
         ],
         "01-lost-identities.png",
@@ -98,17 +98,17 @@ def main(recording, evidence, output):
     def two(ax):
         for a in ax:
             panel(a, 2741, "", (145, 175, 315, 315))
-        ax[0].set_title("Original starting pose · local alignment fails", fontsize=12)
+        ax[0].set_title("Original starting pose · surface fitting fails", fontsize=12)
         ax[1].set_title("Another starting pose · geometry-compatible fit", fontsize=12)
         dots(ax[0], 2741, "seed", AMBER, "Original starting pose")
         dots(ax[1], 2741, "alternative_center", CYAN, "Alternative fitted surface")
 
     figure(
-        "2 · SAM found the cube; local 3D alignment started too far away",
+        "2 · SAM found the cube; surface fitting started too far away",
         [
             "Both panels show the SAME frame 2741 and the SAME mask/depth. Yellow outlines the selected cube.",
             "Orange dots: stored surface at the original starting pose. Cyan dots: fitted surface after changing the starting pose.",
-            "This isolates the search failure. Passing geometry checks does not establish exact orientation or identity in other scenes.",
+            "Changing the starting pose helps this fit. Passing geometry checks does not prove the pose or the selected object is correct.",
         ],
         "02-local-alignment.png",
         two,
@@ -134,7 +134,7 @@ def main(recording, evidence, output):
         "3 · Background tracking does not establish the moved object’s location",
         [
             "Frame 5381: associated group has 425 measured environment points and 0 measured points in the usable object mask.",
-            "Its 15 established object anchors are all predicted. The original group links and purple color are preserved.",
+            "Its 15 stored object points have no current measurements. Their displayed locations are predicted from the group.",
             "Zoom: orange = group-supplied object pose; cyan = compatible fit from the prior pose; yellow = current SAM mask.",
         ],
         "03-stale-group.png",

@@ -141,6 +141,11 @@ how several defects went unnoticed for months.
 
 ## Architecture (`src/lerobot/`)
 
+- **FLASH terminology:** use the [tracking glossary](src/lerobot/policies/flash/docs/glossary.html)
+  for explanations and reports, and hyperlink the first use of each technical term
+  to its definition. Add a precise definition and code citation before introducing
+  a new term. Distinguish point track IDs, object identity, and coordinate frames;
+  do not use “identity,” “reference,” or “alignment” without qualifying them.
 - **FLASH perception:** [`src/lerobot/gui/static/flash_architecture.html`](src/lerobot/gui/static/flash_architecture.html)
   is the canonical diagram of the running frame path. Update it in the same
   change when altering frame inputs, group evidence, fitting, pose publication,

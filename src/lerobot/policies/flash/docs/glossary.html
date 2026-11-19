@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FLASH tracking glossary</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #101922; color: #eaf0f6; font: 17px/1.6 system-ui, sans-serif; }
+    main { max-width: 900px; margin: auto; padding: 28px 24px 70px; }
+    h1 { font-size: 32px; margin: 0 0 8px; }
+    h2 { font-size: 23px; margin: 0 0 10px; }
+    p { margin: 10px 0; }
+    a { color: #8be4ec; text-underline-offset: 3px; }
+    a:focus-visible { outline: 3px solid #ffdf55; outline-offset: 3px; }
+    code { overflow-wrap: anywhere; font-size: .9em; }
+    section { border-top: 1px solid #334552; margin-top: 28px; padding-top: 20px; scroll-margin-top: 20px; }
+    section:target { border-color: #ffdf55; }
+    .source, .scope { color: #bbc9d5; font-size: 14px; }
+    nav ul { columns: 2; padding-left: 22px; }
+    nav li { break-inside: avoid; margin: 5px 0; }
+    @media (max-width: 600px) { nav ul { columns: 1; } }
+  </style>
+</head>
+<body><main>
+  <h1>FLASH tracking glossary</h1>
+  <p>Definitions for the current growing-surface tracker and its recovery experiments.
+    Each entry names the corresponding code. These definitions describe what the
+    system stores or computes; they do not certify that an estimate is correct.</p>
+  <p><strong>Writing convention:</strong> use the names below and link their first use
+    in an explanation or report. Qualify “identity,” “reference,” and “alignment.”
+    Define a new term here before introducing it elsewhere.</p>
+  <p class="scope">Checked against production source at <code>9ff25cf80</code> and the
+    recovery experiments at <code>77becade1</code>. Experimental recovery is explicitly
+    identified below; it is not the production default.</p>
+  <nav aria-label="Definitions"><ul>
+    <li><a href="#point-track-id">Point track ID (“image identity”)</a></li>
+    <li><a href="#image-match">Image match / 2D correspondence</a></li>
+    <li><a href="#3d-pair">Usable and validated 3D pairs</a></li>
+    <li><a href="#segmentation-mask">Segmentation mask</a></li>
+    <li><a href="#object-pose">Object coordinates and pose</a></li>
+    <li><a href="#surface-map">Stored surface / surface map</a></li>
+    <li><a href="#surface-fitting">Local surface fitting (“local 3D alignment”)</a></li>
+    <li><a href="#object-anchor">Object point anchor (“object anchor”)</a></li>
+    <li><a href="#motion-group">Motion group</a></li>
+    <li><a href="#pose-prediction">Pose prediction / prior</a></li>
+    <li><a href="#kalman-update">Kalman pose update (“smoothing”)</a></li>
+    <li><a href="#accepted-observation">Accepted observation / reference image</a></li>
+    <li><a href="#recovery">Tracking loss and recovery</a></li>
+  </ul></nav>
+
+  <section id="point-track-id">
+    <h2>Point track ID</h2>
+    <p><strong>An integer label carried by a tracked image point across processed
+      frames.</strong> For example, ID 42 labels a pixel in one image and the pixel
+      that the matcher assigns to it in the next image. This represents a hypothesis
+      that both pixels show the same physical point; tracking can be wrong.</p>
+    <p>The shared tracker keeps the ID when it accepts the next match. A newly
+      selected point receives a new ID. Matching an older accepted image through
+      the stored history requires IDs shared with the current frame.</p>
+    <p><strong>Earlier wording:</strong> “image identity” meant this point track ID.
+      It did not mean the image's frame number or the selected object's identity.
+      “All old point tracks were lost” can be true while SAM still finds the object.</p>
+    <p class="source">Code: <a href="../shared_image_tracking.py#L93"><code>SharedFrameTracker._seed</code></a>
+      assigns IDs; <a href="../shared_image_tracking.py#L163"><code>update</code></a> carries them;
+      <a href="../shared_image_tracking.py#L223"><code>pairs</code></a> joins surviving IDs.</p>
+  </section>
+
+  <section id="image-match">
+    <h2>Image match / 2D correspondence</h2>
+    <p><strong>A proposed pairing of a pixel in a source image with a pixel in a
+      target image.</strong> LK and UFM supply these pixel pairs. An accepted image
+      match has passed the matcher's checks; it does not yet establish a valid 3D
+      measurement or the physical identity of the object.</p>
+    <p>A pair can be computed directly between two images without retaining a
+      <a href="#point-track-id">point track ID</a> through every intervening frame.
+      The recovery benchmark's fresh-rematching experiment does this when too few
+      usable 3D pairs remain.</p>
+    <p class="source">Code: <a href="../shared_image_tracking.py#L163"><code>SharedFrameTracker.update</code></a>;
+      experiment: <a href="../../../../../benchmarks/flash_motion_recovery.py"><code>flash_motion_recovery.py</code></a>,
+      <code>rematch</code> policy.</p>
+  </section>
+
+  <section id="3d-pair">
+    <h2>Usable and validated 3D pairs</h2>
+    <p><strong>A usable 3D pair is an image match whose two pixels have suitable
+      mask membership and depth support, converted to two 3D positions.</strong>
+      Each position uses its image's camera intrinsics and depth. “Validated pairs”
+      in the recovery report are the subset retained by the robust rigid-motion fit.</p>
+    <p>These are separate stages: a match can survive in 2D but lack usable depth;
+      a usable 3D pair can still disagree with the other points' motion. Neither
+      stage proves that the pixels depict the same physical surface point.</p>
+    <p class="source">Code: <a href="../shared_image_tracking.py#L223"><code>SharedFrameTracker.pairs</code></a>,
+      <a href="../surface_correspondence.py#L76"><code>measured_pairs</code></a>, and
+      <a href="../surface_correspondence.py#L120"><code>robust_fit</code></a>.</p>
+  </section>
+
+  <section id="segmentation-mask">
+    <h2>Segmentation mask</h2>
+    <p><strong>A per-image set of pixels estimated to belong to the selected
+      object.</strong> In these experiments the masks are saved SAM outputs,
+      aligned to the recorded RGB and depth. A mask selects the current object
+      region; it does not pair old and new pixels or specify the object's 3D rotation.</p>
+    <p class="source">Code: <a href="../shared_image_tracking.py#L163"><code>SharedFrameTracker.update</code></a>
+      checks mask dimensions; <a href="../shared_image_tracking.py#L223"><code>pairs</code></a>
+      checks source and target mask membership.</p>
+  </section>
+
+  <section id="object-pose">
+    <h2>Object coordinates and pose</h2>
+    <p><strong>Object coordinates are the fixed 3D coordinate system used to store
+      the object's reference surface. Its pose is the rotation and translation
+      mapping those coordinates into the current camera's coordinates.</strong>
+      The code stores this as a 4×4 transform, <code>camera_from_reference</code>.</p>
+    <p>For a stored point <code>p</code>, its predicted camera position is
+      <code>R × p + t</code>. The coordinate origin stays fixed when the surface
+      grows; it need not be the object's physical centre. Here “reference coordinates”
+      means this coordinate system, not a particular saved image.</p>
+    <p class="source">Code: <a href="../experimental_surface_session.py#L291"><code>SurfacePatch.points</code></a>
+      converts measured camera points into reference coordinates;
+      <a href="../surface_kalman.py#L71"><code>PoseKalmanFilter</code></a> uses a fixed object point.</p>
+  </section>
+
+  <section id="surface-map">
+    <h2>Stored surface / surface map</h2>
+    <p><strong>The accumulated 3D surface measurements stored in
+      <a href="#object-pose">object coordinates</a>.</strong> New accepted views can
+      add measurements of newly visible parts. The current visible surface is
+      separately measured from the current mask and usable depth. Neither is a
+      complete ground-truth model of the object.</p>
+    <p class="source">Code: <a href="../experimental_surface_session.py#L282"><code>SurfacePatch</code></a>
+      and <a href="../experimental_surface_session.py#L295"><code>SurfaceStore</code></a>.</p>
+  </section>
+
+  <section id="surface-fitting">
+    <h2>Local surface fitting</h2>
+    <p><strong>Adjusting an initial object pose so the stored surface agrees with
+      the current measured surface.</strong> This is also called surface registration.
+      The <strong>starting pose</strong> is the initial rotation and translation
+      passed to that numerical solver.</p>
+    <p>“Local” describes the optimisation: it refines a starting estimate using
+      nearby surface correspondences and a bounded number of iterations. It does
+      not exhaustively search every possible pose. In this replay, the solver is
+      <code>small_gicp</code>; its surface correspondence distance is limited.</p>
+    <p><strong>Earlier wording:</strong> “local 3D alignment” meant this fitting step.
+      SAM can correctly select the cube while fitting still fails: placing the
+      stored surface too far from the measured cube can prevent the solver from
+      finding useful correspondences. The failure is in pose fitting, even when
+      segmentation is correct. See <a href="../../../../../docs/proofs/flash-recovery-20261119/02-local-alignment.png">the cube example</a>.</p>
+    <p class="source">Code: <a href="../experimental_surface_session.py#L851"><code>GrowingSurfaceSession.update</code></a>
+      chooses the starting pose; <a href="../surface_grounding.py#L784"><code>WholeSurfaceFit._solve</code></a>
+      and <a href="../surface_grounding.py#L798"><code>fit_once</code></a> run one bounded fit;
+      <a href="../surface_registration.py#L202"><code>LibraryMatcher.refine</code></a> supplies
+      the correspondence-distance and iteration limits.</p>
+  </section>
+
+  <section id="object-anchor">
+    <h2>Object point anchor</h2>
+    <p><strong>A stored association from a point track ID to that point's 3D
+      position in the object's fixed coordinates.</strong> The code representation
+      is <code>ObjectGroupAssociation.anchors[point_id] = xyz_in_reference</code>.</p>
+    <p>For example, an entry says “tracked point 42 belongs at this position relative
+      to the object.” The association uses these stored positions to relate the
+      object to a <a href="#motion-group">motion group</a>. Within the same reference,
+      later accepted observations can add new IDs but do not move existing entries.</p>
+    <p><strong>Earlier wording:</strong> “object anchor” meant this stored point, not
+      an extra marker or a point fixed in the room. An anchor can remain stored when
+      its point has no current measurement. Calling that point “hidden” did not
+      establish that it was physically occluded. Its predicted location is not a
+      fresh observation.</p>
+    <p class="source">Code: <a href="../object_group_association.py#L167"><code>ObjectGroupAssociation.record_observation</code></a>
+      creates entries and preserves existing coordinates;
+      <a href="../object_group_association.py#L50"><code>query</code></a> uses them and can
+      add points through an established group relation. Group-local anchors in
+      <code>motion_groups._Group</code> use a different coordinate system.</p>
+  </section>
+
+  <section id="motion-group">
+    <h2>Motion group</h2>
+    <p><strong>A set of tracked 3D points modelled as moving together rigidly.</strong>
+      It has a group ID, fixed group coordinates, a pose, and a flag distinguishing
+      currently measured members from members whose positions are predicted.</p>
+    <p>Groups are formed from scene motion, not SAM object labels. A group can contain
+      object and surrounding points. Relating the object to that group can supply
+      a pose prediction, but measured surrounding points alone do not establish
+      that an independently moved object still follows the group.</p>
+    <p class="source">Code: <a href="../motion_groups.py#L76"><code>GroupView</code></a>
+      and <a href="../object_group_association.py#L50"><code>ObjectGroupAssociation.query</code></a>.</p>
+  </section>
+
+  <section id="pose-prediction">
+    <h2>Pose prediction / prior</h2>
+    <p><strong>An estimate of the current pose before accepting the current object's
+      surface measurement.</strong> The Kalman filter carries the previous pose
+      through camera changes and any usable measured group motion. A group can
+      also supply a separate pose hint through the stored object-to-group relation.</p>
+    <p>A prediction and a fit's <a href="#surface-fitting">starting pose</a> need not
+      be the same: the starting pose can instead come from current image matches.
+      Publishing a predicted pose does not mean the object was measured this frame.</p>
+    <p class="source">Code: <a href="../surface_kalman.py#L93"><code>PoseKalmanFilter.predict</code></a>,
+      <a href="../object_group_association.py#L129"><code>ObjectGroupAssociation.query</code></a>, and
+      <a href="../experimental_surface_session.py#L851"><code>GrowingSurfaceSession.update</code></a>.</p>
+  </section>
+
+  <section id="kalman-update">
+    <h2>Kalman pose update</h2>
+    <p><strong>Combining the predicted pose with a new surface-fit pose using their
+      estimated uncertainty.</strong> The output is called the fused pose. Rotation
+      and position can receive different corrections according to the information
+      supplied by the measurements.</p>
+    <p><strong>Earlier wording:</strong> “smoothing” referred to this pose update,
+      not blurring RGB, masks or depth. The fused pose can differ from both input
+      poses, so it must pass the geometry checks again. In the ring example a fit
+      passes, but the fused pose fails and the correction is rolled back.</p>
+    <p class="source">Code: <a href="../surface_kalman.py#L148"><code>PoseKalmanFilter.correct</code></a>
+      and <a href="../surface_kalman.py#L161"><code>_correct</code></a>;
+      <a href="../experimental_surface_session.py#L958"><code>GrowingSurfaceSession.update</code></a>
+      checks the fused pose. <a href="../../../../../docs/proofs/flash-recovery-20261119/04-filter-rejection.png">Ring evidence</a>.</p>
+  </section>
+
+  <section id="accepted-observation">
+    <h2>Accepted observation / reference image</h2>
+    <p><strong>A processed RGB-D image and mask whose pose the tracker accepted
+      for its state update.</strong> The tracker retains that observation, its
+      frame ID, intrinsics and pose for subsequent matching. “Reference image” in
+      the recovery report means this last accepted image.</p>
+    <p>The last accepted image may be older than the previous processed image.
+      Accepting a newer image does not redefine the fixed
+      <a href="#object-pose">object coordinates</a>. “Accepted” reports the estimator's
+      decision; it is not independent ground-truth verification.</p>
+    <p class="source">Code: <a href="../experimental_surface_session.py#L1049"><code>GrowingSurfaceSession._remember_observation</code></a>
+      stores <code>accepted_frame</code>, <code>accepted_pose</code>, and <code>accepted_observation</code>.</p>
+  </section>
+
+  <section id="recovery">
+    <h2>Tracking loss and recovery</h2>
+    <p><strong>Recovery means obtaining an accepted current object pose after the
+      tracker could not obtain one.</strong> Specify what was lost: old point tracks,
+      the mask, usable depth, or an accepted pose. Those are different failures.</p>
+    <p>The compact complete-loss test deliberately supplies one black image with
+      empty mask and depth, then restores recorded observations. It checks recovery
+      without surviving old image tracks. The fresh-rematching experiment computes
+      new matches from the last accepted image; it does not restore the old IDs.</p>
+    <p class="source">Evidence: <a href="../../../../../docs/proofs/flash-recovery-20261119/index.html">recovery report</a>;
+      code: <a href="../../../../../tests/policies/flash/test_recorded_motion_recovery.py"><code>test_recorded_motion_recovery.py</code></a>
+      and <a href="../../../../../benchmarks/flash_motion_recovery.py"><code>flash_motion_recovery.py</code></a>.</p>
+  </section>
+</main></body>
+</html>

@@ -1,5 +1,15 @@
 # Recovery regression and first experiments
 
+Use the [tracking glossary](../../../src/lerobot/policies/flash/docs/glossary.html)
+for exact definitions and code citations. Earlier “image identity” means
+[point track ID](../../../src/lerobot/policies/flash/docs/glossary.html#point-track-id);
+“local 3D alignment” means
+[local surface fitting](../../../src/lerobot/policies/flash/docs/glossary.html#surface-fitting);
+“object anchor” means
+[object point anchor](../../../src/lerobot/policies/flash/docs/glossary.html#object-anchor).
+“Smoothing” referred to the
+[Kalman pose update](../../../src/lerobot/policies/flash/docs/glossary.html#kalman-update).
+
 The compact regression replays eleven real RGB-D observations through
 `LiveSurfaceSession`: real image matching, scene groups, surface preparation,
 registration, Kalman updates, accepted-image changes and map growth. SAM and
@@ -12,7 +22,7 @@ as diagnostic alternatives. The ring's rejection involves depth in a retained
 view and cannot be established from RGB appearance alone.
 
 The screenshots use the original full history. The short regression starts
-fresh and reproduces the corresponding local-alignment and fusion failures;
+fresh and reproduces the corresponding surface-fitting and Kalman-update failures;
 it does not restore or fake the original accumulated map/group state.
 
 ## Experiments
@@ -21,20 +31,20 @@ These policies exist only in the benchmark runner. No production source or
 live-server configuration was changed.
 
 - `baseline`: recorded settings.
-- `recover`: if the ordinary local fit fails, try the predicted pose and then a
+- `recover`: if the ordinary local surface fit fails, try the predicted pose and then a
   translation aligning surface medians. All existing geometry checks remain.
   This is a diagnostic recovery proposal, not evidence of object identity.
 - `baseline_reset`: enable the existing Kalman reset-on-geometry-conflict option.
 - `recover_reset`: combine those two interventions.
 - `rematch`: when fewer than the configured minimum 3D pairs remain, perform
   fresh matching directly from the accepted image to the current image. Sample
-  depth-supported source pixels without requiring surviving image identities;
+  depth-supported source pixels without requiring surviving point track IDs;
   retain mask, endpoint-depth, robust-fit and geometry checks. This experiment
   does not resurrect lost scene-group IDs.
 - `rematch_reset`: combine fresh matching and the existing filter-reset option.
 
 The ordinary UFM path recovers the sparse cube and pointer sequences, but both
-still fail after complete identity loss. Fresh reference-to-current UFM matching
+still fail after all old point tracks are lost. Fresh reference-to-current UFM matching
 recovers them with 145 and 108 validated 3D pairs respectively. The ring still
 needs the separate filter change. Actual UFM inference uses cached checkpoint
 `980825b59331413bb51e5773f9272bfce525bce2`; it is not a fake flow field.
@@ -75,7 +85,7 @@ The baseline defects are strict expected failures, not hidden passing tests.
 The opt-in experiments must satisfy the same recovery assertions. Reintroducing
 the defects produced the intended failures:
 
-- Removing alternative alignment seeds fails cube 2741 and pointer 3000.
+- Removing alternative starting poses fails cube 2741 and pointer 3000.
 - Disabling the filter reset fails ring 4759 with the original fusion rejection.
 - Removing fresh matching fails UFM reacquisition after complete loss.
 
