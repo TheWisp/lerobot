@@ -74,6 +74,12 @@
       target image.</strong> LK and UFM supply these pixel pairs. An accepted image
       match has passed the matcher's checks; it does not yet establish a valid 3D
       measurement or the physical identity of the object.</p>
+    <p><strong>Actual inputs in the shared tracking path:</strong> two full RGB
+      images, resized to the configured image budget, and 2D query pixels. LK uses
+      grayscale versions. SAM masks and depth are not inputs to the image-matching
+      backend: the caller uses them to select queries and filter the returned pairs.
+      This shared pass tracks background points as well as object points. It does
+      not create a separate crop around each object's old and current masks.</p>
     <p>A pair can be computed directly between two images without retaining a
       <a href="#point-track-id">point track ID</a> through every intervening frame.
       The recovery benchmark's fresh-rematching experiment does this when too few
@@ -141,6 +147,15 @@
       surface registration. The starting estimate has two distinct parts:
       <strong>position</strong> (where the object is) and <strong>orientation</strong>
       (how it is rotated).</p>
+    <p><strong>Actual inputs to the 3D registration solver:</strong> stored object
+      surface points, current 3D points sampled from usable depth inside the SAM
+      mask, and a starting rotation and translation. These are object surface
+      points, not a point cloud of the entire scene. The surrounding depth image
+      is retained separately for checking proposed placements.</p>
+    <p>Selecting object points does not itself remove their camera-space position.
+      For example, object centres at camera X = 100 mm and X = 140 mm remain 40 mm
+      apart after background points are removed. Initializing the translation
+      from those centres is a separate operation.</p>
     <p>“Local” means the solver improves an initial estimate using spatially nearby
       3D points and a limited number of iterations, rather than searching every
       possible position and rotation. A wrong starting position, a wrong starting

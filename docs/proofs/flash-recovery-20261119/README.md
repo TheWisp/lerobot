@@ -27,6 +27,27 @@ it does not restore or fake the original accumulated map/group state.
 
 ## Experiments
 
+### What each matching step receives
+
+The shared LK/UFM pass receives the previous and current full RGB images resized
+to 640 × 362 in this recording. Its caller uses masks to allocate queries and
+filter object matches, but it does not create separate object crops for the two
+images. Depth is used after image matching to form 3D point pairs.
+
+The small_gicp surface fit receives stored object points and current points lifted
+from usable depth inside the SAM mask. Projecting its saved target points back
+into the recorded mask verifies 915/915 inside for frame 2741 and 207/207 inside
+for frame 5381; neither target cloud includes points outside that mask. This checks
+mask inclusion, not whether SAM labelled every pixel correctly. Full scene depth
+remains available separately for rejecting incompatible placements.
+
+The relevant code paths are `SharedFrameTracker.update`/`pairs`,
+`SurfaceTrackingSession.prepare`, `surface_observation.observation`, and
+`LibraryMatcher.prepare`. Selecting only object pixels is distinct from aligning
+their centres: their 3D coordinates still retain the object's camera-space
+position. The missing translation initialization below occurs despite the object
+surface already being selected.
+
 ### Missing initialization from the current surface centre
 
 The production path chooses one starting pose from image-tracked motion, a group
