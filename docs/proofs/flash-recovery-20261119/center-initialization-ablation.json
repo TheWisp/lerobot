@@ -1,0 +1,204 @@
+{
+  "frame": 2741,
+  "reference_frame": 2607,
+  "trials": [
+    {
+      "trial": "original",
+      "accepted": false,
+      "initial_position_change_mm": 0.0,
+      "initial_rotation_change_deg": 0.0,
+      "initial_centroid_gap_mm": 43.39508889408884,
+      "reason": "no_observation_compatible_candidate",
+      "candidate_check": {
+        "observed_outlier_fraction": 0.0,
+        "free_space_outlier_fraction": 0.9591836734693877,
+        "visible_reference_weight": 0.0,
+        "visible_current_weight": 0.0,
+        "has_visible_overlap": false,
+        "scene_depth_outlier_fraction": 1.0,
+        "scene_depth_exposed_weights": [
+          144.0,
+          367.0435813874657
+        ],
+        "scene_depth_coherent_protrusion": true,
+        "scene_depth_views": [
+          {
+            "frame_id": 2741,
+            "direction": "map_to_current",
+            "outlier_fraction": 1.0,
+            "coherent_protrusion": true
+          },
+          {
+            "frame_id": 2735,
+            "direction": "current_to_retained",
+            "outlier_fraction": 0.23387220388045907,
+            "coherent_protrusion": true
+          }
+        ],
+        "accepted": false,
+        "geometry_accepted": false,
+        "observed_overlap": 0.0,
+        "observed_overlap_basis": "current_points_to_full_map",
+        "surface_median_mm": 36.302859659679655,
+        "rejection_reference_frame": 2735,
+        "reliable_reference_points": 147,
+        "full_reference_points": 262
+      },
+      "initial_camera_from_reference": [
+        [
+          0.9999999412261701,
+          0.0001687188259864067,
+          0.0002984654339166542,
+          -0.00015912870966256623
+        ],
+        [
+          -0.000168666200839568,
+          0.9999999702287597,
+          -0.0001763354521146286,
+          0.00011797227339883225
+        ],
+        [
+          -0.00029849517614117664,
+          0.00017628510072018996,
+          0.9999999399120948,
+          -2.315120532159209e-05
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "result_camera_from_reference": null
+    },
+    {
+      "trial": "same_rotation_align_means",
+      "accepted": true,
+      "initial_position_change_mm": 43.39508889408884,
+      "initial_rotation_change_deg": 0.0,
+      "initial_centroid_gap_mm": 0.0,
+      "reason": null,
+      "candidate_check": null,
+      "initial_camera_from_reference": [
+        [
+          0.9999999412261701,
+          0.0001687188259864067,
+          0.0002984654339166542,
+          0.03454535724821403
+        ],
+        [
+          -0.000168666200839568,
+          0.9999999702287597,
+          -0.0001763354521146286,
+          0.022877814638342757
+        ],
+        [
+          -0.00029849517614117664,
+          0.00017628510072018996,
+          0.9999999399120948,
+          -0.01270076809684828
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "result_camera_from_reference": [
+        [
+          0.9991748716881582,
+          -0.022589726538162335,
+          -0.03375322268887583,
+          0.04957775966791579
+        ],
+        [
+          0.02173711281417892,
+          0.9994405754781508,
+          -0.025417199184933105,
+          0.03893101753898526
+        ],
+        [
+          0.034308507887366155,
+          0.024662529124847985,
+          0.9991069441975214,
+          -0.004725442734783765
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "trial": "same_rotation_align_medians",
+      "accepted": true,
+      "initial_position_change_mm": 42.62825526900565,
+      "initial_rotation_change_deg": 0.0,
+      "initial_centroid_gap_mm": 1.1064749765155206,
+      "reason": null,
+      "candidate_check": null,
+      "initial_camera_from_reference": [
+        [
+          0.9999999412261701,
+          0.0001687188259864067,
+          0.0002984654339166542,
+          0.03377286747359549
+        ],
+        [
+          -0.000168666200839568,
+          0.9999999702287597,
+          -0.0001763354521146286,
+          0.02228620442555757
+        ],
+        [
+          -0.00029849517614117664,
+          0.00017628510072018996,
+          0.9999999399120948,
+          -0.01322759233498949
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "result_camera_from_reference": [
+        [
+          0.9991748716881583,
+          -0.02258972653816236,
+          -0.03375322268887593,
+          0.04957775966791585
+        ],
+        [
+          0.021737112814178935,
+          0.9994405754781508,
+          -0.02541719918493317,
+          0.038931017538985285
+        ],
+        [
+          0.03430850788736622,
+          0.02466252912484798,
+          0.9991069441975213,
+          -0.004725442734783709
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    }
+  ],
+  "source_recording": "saved-747dd29b27a745418524e2744ac29cb5",
+  "replay_commit": "53241c752",
+  "scope": "Full recorded history from initialization 2607 through frame 2741. Alternative trials call the same ImageConditionedFit.correct_surface_first on the same fitter with unchanged previous pose, rotation initialization, uncertainty settings and geometry checks. Only initial translation differs. Acceptance here is surface-fit acceptance, before downstream Kalman fusion or map updates.",
+  "mean_initialization": "candidate = proposal.copy(); candidate[:3, 3] = fitter.target.mean(0) - candidate[:3, :3] @ fitter.reference.mean(0)",
+  "median_initialization": "candidate = proposal.copy(); candidate[:3, 3] += median(fitter.target, axis=0) - median(move(fitter.reference, candidate), axis=0)",
+  "ground_truth": "No independent full-pose labels; accepted means passing the existing fit checks."
+}

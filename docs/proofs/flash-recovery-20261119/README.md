@@ -27,6 +27,37 @@ it does not restore or fake the original accumulated map/group state.
 
 ## Experiments
 
+### Missing initialization from the current surface centre
+
+The production path chooses one starting pose from image-tracked motion, a group
+prediction, or the previous estimate. It does not first align the stored surface
+centre with the current measured surface centre. The centring in
+`LibraryMatcher.prepare` changes coordinates for numerical computation;
+`LibraryMatcher.refine` converts the initial transform into those coordinates,
+preserving its original displacement. This is not the centre-alignment step.
+
+A separate controlled replay of cube frame 2741 kept the original starting
+rotation, previous pose, images, masks, depth and fit checks unchanged. Only the
+initial translation changed:
+
+| Initial translation   | Starting centre gap | Starting rotation change | Surface fit |
+| --------------------- | ------------------: | -----------------------: | ----------- |
+| Original              |             43.4 mm |                       0° | Rejected    |
+| Align surface means   |              0.0 mm |                       0° | Accepted    |
+| Align surface medians |              1.1 mm |                       0° | Accepted    |
+
+This identifies missing initialization from current geometry as a fixable
+implementation defect in this case. The old object's displacement is not an
+inherent barrier to recovery. Partial visibility can bias the visible surface
+centre, so a centred starting estimate still needs the normal fitting and checks.
+The controlled trials measure surface-fit acceptance before downstream filtering;
+they do not supply independent pose ground truth or establish all-case recovery.
+
+[Recorded trial inputs, outputs and exact translation formulas](center-initialization-ablation.json)
+retain this evidence separately from the earlier comparison of two fitted poses.
+
+### Recovery policies
+
 These policies exist only in the benchmark runner. No production source or
 live-server configuration was changed.
 
