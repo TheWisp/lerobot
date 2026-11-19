@@ -71,6 +71,15 @@ not proof that every panel is a separate bug or that fixing translation fixes al
 
 ## Why panel 1 loses image-derived motion
 
+![Old and current camera images: sixteen lost tracks, twenty-eight newer points, and one retained pair](01-lost-identities.png)
+
+All markers show **2D pixel positions** inside the saved SAM mask. Pink crosses
+mark the 16 old points whose tracks fail during the intervening frames; cyan
+circles mark 28 newer points with no recorded match back to frame 5372. The green
+arrow joins the one surviving [point track ID](../../../src/lerobot/policies/flash/docs/glossary.md#point-track-id),
+ID 6: an integer label for a hypothesized match, not proof of physical correctness.
+The audit stores each displayed ID and pixel coordinate in `object_image_points`.
+
 **Correction to the original panel:** zero validated image-motion inliers did not
 mean zero surviving point track IDs. A [shared-tracker replay](point-reacquisition-audit.json)
 from frame 5118 finds 17 object tracks at frame 5372. Sixteen fail LK before

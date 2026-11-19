@@ -10,6 +10,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import patheffects
+from matplotlib.patches import ConnectionPatch
 
 from benchmarks.flash_motion_recovery import read_recorded_frame
 from lerobot.policies.flash.surface_observation import move
@@ -75,25 +77,97 @@ def main(recording, evidence, output):
         fig.savefig(output / name, dpi=130)
         plt.close(fig)
 
-    def one(ax):
-        panel(ax[0], 5372, "Last accepted object image · frame 5372", (185, 240, 410, 380))
-        panel(ax[1], 5512, "Current image · frame 5512", (135, 240, 360, 380))
-        pair = records["5512"]["matches"]["objects"]["object"]["pair"]
-        uv = np.array(pair["target_uv"])
-        s = np.array(pair["stage"])
-        uv = uv[s >= 1]
-        ax[1].scatter(*uv.T, s=22, facecolors="none", edgecolors=CYAN, lw=1.1)
-
-    figure(
-        "1 · Visible again, but too few old point tracks remain",
-        [
-            "Yellow: saved SAM mask. Cyan circles: surviving short tracks from the immediately preceding processed image.",
-            "From frame 5372 to 5512, 16 of 17 old object tracks fail LK; one usable 3D pair remains. The motion fit needs six.",
-            "Confirmed in the trace/code: no fresh reference-to-current matching is attempted. Pictures alone cannot prove that omission.",
-        ],
-        "01-lost-identities.png",
-        one,
+    audit_path = Path(__file__).resolve().parents[1] / (
+        "docs/proofs/flash-recovery-20261119/point-reacquisition-audit.json"
     )
+    audit = json.loads(audit_path.read_text())
+    green = "#7dff92"
+    fig = plt.figure(figsize=(13, 8.8))
+    fig.text(0.045, 0.95, "#1: 29 points now, but only 1 connects back", fontsize=23, weight="bold")
+    fig.text(
+        0.045, 0.91, "Actual camera images · overlays are 2D pixel positions from the replay", fontsize=13
+    )
+    axs = [fig.add_axes((x, 0.32, 0.43, 0.54)) for x in (0.045, 0.525)]
+    for ax, n, title, crop, color in zip(
+        axs,
+        [5372, 5512],
+        ["Old accepted image · 17 points · frame 5372", "Current image · 29 points · frame 5512"],
+        [(260, 235, 355, 330), (200, 280, 295, 375)],
+        [PINK, CYAN],
+        strict=True,
+    ):
+        panel(ax, n, title, crop)
+        snapshot = audit["object_image_points"][str(n)]
+        uv = np.asarray(snapshot["uv_px"])
+        retained = np.isin(snapshot["track_ids"], audit["remaining_track_ids"])
+        if n == 5372:
+            ax.scatter(*uv[~retained].T, s=85, marker="x", c=color, lw=2.2)
+        else:
+            ax.scatter(*uv[~retained].T, s=60, facecolors="none", edgecolors=color, lw=1.9)
+        ax.scatter(*uv[retained].T, s=210, facecolors="none", edgecolors="#101922", lw=5)
+        ax.scatter(*uv[retained].T, s=210, facecolors="none", edgecolors=green, lw=2.8)
+        ax.annotate(
+            "ID 6",
+            uv[retained][0],
+            xytext=(-16, 18),
+            textcoords="offset points",
+            color=green,
+            fontsize=13,
+            weight="bold",
+            path_effects=[patheffects.withStroke(linewidth=4, foreground="#101922")],
+        )
+    link = ConnectionPatch(
+        xyA=audit["pair_evidence"]["source_uv"][0],
+        xyB=audit["pair_evidence"]["target_uv"][0],
+        coordsA="data",
+        coordsB="data",
+        axesA=axs[0],
+        axesB=axs[1],
+        arrowstyle="-|>",
+        mutation_scale=18,
+        color=green,
+        lw=2.2,
+        connectionstyle="arc3,rad=-0.12",
+        shrinkA=12,
+        shrinkB=12,
+        path_effects=[patheffects.withStroke(linewidth=4, foreground="#101922")],
+    )
+    fig.add_artist(link)
+    fig.text(0.045, 0.275, "×  16 old tracks lost", color=PINK, fontsize=17, weight="bold")
+    fig.text(0.045, 0.243, "LK rejects them during the intervening frames.", fontsize=12)
+    fig.text(0.525, 0.275, "○  28 newer points", color=CYAN, fontsize=17, weight="bold")
+    fig.text(0.525, 0.243, "No recorded match back to the left image.", fontsize=12)
+    fig.text(
+        0.5,
+        0.185,
+        "Green: only 1 retained pair. The motion fit requires 6.",
+        color=green,
+        fontsize=18,
+        weight="bold",
+        ha="center",
+    )
+    fig.text(
+        0.5,
+        0.13,
+        "Code gap: it does not try matching these two images again.",
+        fontsize=17,
+        ha="center",
+        bbox={"facecolor": "#263440", "edgecolor": "none", "pad": 10},
+    )
+    fig.text(
+        0.045,
+        0.065,
+        "Yellow: SAM outline. Green: LK’s retained match; its physical correctness is unverified.",
+        fontsize=11,
+    )
+    fig.text(
+        0.045,
+        0.035,
+        "Replay verifies the counts; code inspection verifies the missing matching step. This concerns the image-matching path.",
+        fontsize=10,
+    )
+    fig.savefig(output / "01-lost-identities.png", dpi=150)
+    plt.close(fig)
 
     def two(ax):
         for a in ax:
