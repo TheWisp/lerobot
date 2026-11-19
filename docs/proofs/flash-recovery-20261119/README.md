@@ -129,6 +129,30 @@ measurements, but all three disagree with the group's fitted motion. Consequentl
 15 has `GroupView.measured=True`. This flag means an accepted group inlier, not merely that a
 measurement exists. The earlier statement that all 15 lacked measurements was wrong.
 
+The [LK loss audit](old-point-loss-audit.json) traces these exact 15 IDs through the
+shared image tracker. All originated inside the cube mask. Twelve tracks failed LK's
+forward/backward consistency check: one at frame 5235, seven at 5345, one at 5352,
+two at 5359, and one at 5365. Their absence is not a depth-support failure.
+IDs 6, 591 and 592 survive through frames 5372 and 5381 with accepted LK matches
+and scene depth support. Track 592 lies just outside the current cube mask.
+These are 15 remembered IDs, not the complete set of current cube samples.
+
+![Three old LK tracks survive between the final two frames](03-lk-survivors.png)
+
+The following picture separates the three actual measured locations from all
+15 locations predicted by group 0. Dashed arrows connect the same ID's prediction
+and measurement; they are not estimated trajectories. The orange crosses come
+from the original saved group output, not from LK.
+
+![Group predictions and current measurements on the same camera image](03-predicted-versus-measured.png)
+
+Rebuild these pictures from the saved recording and the compact point audit:
+
+```sh
+PYTHONPATH=src:. python -m benchmarks.flash_recovery_point_figures /path/to/saved-recording \
+  docs/proofs/flash-recovery-20261119/old-point-loss-audit.json /tmp/group-pictures
+```
+
 The mechanism spans two stages:
 
 1. [Scene groups](../../../src/lerobot/policies/flash/motion_groups.py#L400) retain an inconsistent
