@@ -99,6 +99,37 @@ fit without enough pairs. Neither is the incorrect 3D membership retention in
 panel 3. The separate complete-loss regression deliberately removes every old
 track and remains distinct from this recorded panel.
 
+## What LK returns when these tracks fail
+
+![One cube point is matched onto a finger in the next processed image](01-lk-wrong-match.png)
+
+The [endpoint replay](lk-failure-detail.json) records what the matcher actually
+returns. At frame 5372 → 5381 (301 ms), point ID 1905 starts inside the cube mask
+at pixel (292.63, 252.28), but LK puts it on a finger at (350.24, 259.21).
+Only 35% of its finest-scale 21×21 matching window lies inside the source SAM mask.
+The backend uses grayscale patches without the mask; query membership does not
+restrict the pixels used for matching. Tracking backward misses the starting
+pixel by 56.2 pixels in the resized matching image, exceeding the one-pixel limit.
+The rejection is appropriate; it does not find the correct correspondence.
+Point ID 1908 also lands on a finger. Across all 16 losses, four forward endpoints
+are outside the current mask; all 16 fail the forward/backward check even though
+both OpenCV status flags report success. The remaining endpoints being inside
+the mask does not establish that they are the same physical surface points.
+
+The two images in panel 1 are **4.670 seconds and 19 processed transitions apart**.
+Old-track counts decline 17 → 12 → 11 → 6 → 3 → 2 → 1. In the original recording,
+all 19 object updates retain accepted image 5372. The first update already has
+only three usable pairs after surface filtering (panel 5) and rejects the fit
+started from the stale group suggestion (panel 3). Subsequent tracking losses
+therefore accumulate against the same accepted image. This connects the failures;
+it does not establish that correcting one mechanism resolves every later update.
+
+The image demonstrates a wrong match and a window containing multiple surfaces.
+Weak texture, changing occlusion, motion between processed images, and the window
+configuration are plausible contributors; no controlled experiment here isolates
+their individual contributions. This evidence does not justify loosening the
+consistency check or claiming a higher frame rate is the required fix.
+
 ## Why the pairs are rejected and sparse
 
 The [endpoint audit](pair-filter-audit.json) evaluates the saved SAM masks and model depth for

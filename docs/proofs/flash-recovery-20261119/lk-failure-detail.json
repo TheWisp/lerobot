@@ -1,0 +1,519 @@
+{
+  "timeline": [
+    {
+      "frame": 5372,
+      "dt_ms": 233.32313890568912,
+      "remaining_old": 17,
+      "old_in_object": 17,
+      "object_points": 17
+    },
+    {
+      "frame": 5381,
+      "dt_ms": 300.84894713945687,
+      "remaining_old": 12,
+      "old_in_object": 12,
+      "object_points": 17
+    },
+    {
+      "frame": 5387,
+      "dt_ms": 199.91545798256993,
+      "remaining_old": 12,
+      "old_in_object": 12,
+      "object_points": 19
+    },
+    {
+      "frame": 5395,
+      "dt_ms": 266.806268831715,
+      "remaining_old": 11,
+      "old_in_object": 11,
+      "object_points": 19
+    },
+    {
+      "frame": 5401,
+      "dt_ms": 200.3764610271901,
+      "remaining_old": 6,
+      "old_in_object": 5,
+      "object_points": 25
+    },
+    {
+      "frame": 5410,
+      "dt_ms": 299.74109400063753,
+      "remaining_old": 3,
+      "old_in_object": 3,
+      "object_points": 29
+    },
+    {
+      "frame": 5417,
+      "dt_ms": 233.41839504428208,
+      "remaining_old": 3,
+      "old_in_object": 3,
+      "object_points": 34
+    },
+    {
+      "frame": 5424,
+      "dt_ms": 233.48190495744348,
+      "remaining_old": 3,
+      "old_in_object": 3,
+      "object_points": 36
+    },
+    {
+      "frame": 5429,
+      "dt_ms": 171.93739512003958,
+      "remaining_old": 3,
+      "old_in_object": 3,
+      "object_points": 39
+    },
+    {
+      "frame": 5438,
+      "dt_ms": 295.7267640158534,
+      "remaining_old": 3,
+      "old_in_object": 3,
+      "object_points": 39
+    },
+    {
+      "frame": 5445,
+      "dt_ms": 233.70453994721174,
+      "remaining_old": 3,
+      "old_in_object": 3,
+      "object_points": 38
+    },
+    {
+      "frame": 5451,
+      "dt_ms": 204.85406601801515,
+      "remaining_old": 3,
+      "old_in_object": 3,
+      "object_points": 37
+    },
+    {
+      "frame": 5458,
+      "dt_ms": 228.06168301030993,
+      "remaining_old": 3,
+      "old_in_object": 3,
+      "object_points": 30
+    },
+    {
+      "frame": 5467,
+      "dt_ms": 300.1092120539397,
+      "remaining_old": 2,
+      "old_in_object": 2,
+      "object_points": 34
+    },
+    {
+      "frame": 5475,
+      "dt_ms": 266.83147391304374,
+      "remaining_old": 1,
+      "old_in_object": 1,
+      "object_points": 29
+    },
+    {
+      "frame": 5483,
+      "dt_ms": 267.0172918587923,
+      "remaining_old": 1,
+      "old_in_object": 1,
+      "object_points": 29
+    },
+    {
+      "frame": 5490,
+      "dt_ms": 233.56951703317463,
+      "remaining_old": 1,
+      "old_in_object": 1,
+      "object_points": 35
+    },
+    {
+      "frame": 5498,
+      "dt_ms": 266.66074502281845,
+      "remaining_old": 1,
+      "old_in_object": 1,
+      "object_points": 36
+    },
+    {
+      "frame": 5505,
+      "dt_ms": 233.5757079999894,
+      "remaining_old": 1,
+      "old_in_object": 1,
+      "object_points": 34
+    },
+    {
+      "frame": 5512,
+      "dt_ms": 233.52567409165204,
+      "remaining_old": 1,
+      "old_in_object": 1,
+      "object_points": 29
+    }
+  ],
+  "losses": [
+    {
+      "id": 1717,
+      "source_frame": 5372,
+      "target_frame": 5381,
+      "source_uv": [
+        305.459899520874,
+        268.5413771149862
+      ],
+      "target_uv": [
+        329.16069145202636,
+        298.89391078211327
+      ],
+      "back_uv": [
+        302.3935726165771,
+        270.7680407782286
+      ],
+      "fb_error_matching_px": 2.859288215637207,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.6675395369529724,
+      "dt_ms": 300.84894713945687
+    },
+    {
+      "id": 1903,
+      "source_frame": 5372,
+      "target_frame": 5381,
+      "source_uv": [
+        286.88357582092283,
+        264.2889397552659
+      ],
+      "target_uv": [
+        311.1865779876709,
+        294.3816255179558
+      ],
+      "back_uv": [
+        286.14812965393065,
+        266.09587712577695
+      ],
+      "fb_error_matching_px": 1.4714356660842896,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.4870341420173645,
+      "dt_ms": 300.84894713945687
+    },
+    {
+      "id": 1905,
+      "source_frame": 5372,
+      "target_frame": 5381,
+      "source_uv": [
+        292.62998695373534,
+        252.27896101303523
+      ],
+      "target_uv": [
+        350.23879776000973,
+        259.20690310989295
+      ],
+      "back_uv": [
+        272.0686096191406,
+        180.6504283926105
+      ],
+      "fb_error_matching_px": 56.20456314086914,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": false,
+      "fraction_window_inside_source_mask": 0.35025885701179504,
+      "dt_ms": 300.84894713945687
+    },
+    {
+      "id": 1908,
+      "source_frame": 5372,
+      "target_frame": 5381,
+      "source_uv": [
+        302.0938423156738,
+        251.245436863346
+      ],
+      "target_uv": [
+        383.5288970947265,
+        244.7662346771409
+      ],
+      "back_uv": [
+        407.31553421020504,
+        169.5508985993612
+      ],
+      "fb_error_matching_px": 100.51026153564453,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": false,
+      "fraction_window_inside_source_mask": 0.457782119512558,
+      "dt_ms": 300.84894713945687
+    },
+    {
+      "id": 1967,
+      "source_frame": 5372,
+      "target_frame": 5381,
+      "source_uv": [
+        286.0478691101074,
+        269.42271128280385
+      ],
+      "target_uv": [
+        311.6220512390137,
+        298.11495381560775
+      ],
+      "back_uv": [
+        286.67603912353513,
+        267.88685093663673
+      ],
+      "fb_error_matching_px": 1.2515623569488525,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.47238221764564514,
+      "dt_ms": 300.84894713945687
+    },
+    {
+      "id": 1968,
+      "source_frame": 5387,
+      "target_frame": 5395,
+      "source_uv": [
+        357.7275871276855,
+        313.0505532954938
+      ],
+      "target_uv": [
+        368.1460304260254,
+        327.24871320355663
+      ],
+      "back_uv": [
+        358.6271217346191,
+        311.71256825146753
+      ],
+      "fb_error_matching_px": 1.2161853313446045,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.5275449156761169,
+      "dt_ms": 266.806268831715
+    },
+    {
+      "id": 1718,
+      "source_frame": 5395,
+      "target_frame": 5401,
+      "source_uv": [
+        362.8859809875488,
+        330.2008184780732
+      ],
+      "target_uv": [
+        374.18786544799804,
+        339.8985292213398
+      ],
+      "back_uv": [
+        362.3303527832031,
+        326.86738847764155
+      ],
+      "fb_error_matching_px": 2.5486960411071777,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.6784122586250305,
+      "dt_ms": 200.3764610271901
+    },
+    {
+      "id": 1904,
+      "source_frame": 5395,
+      "target_frame": 5401,
+      "source_uv": [
+        349.95526199340816,
+        322.8409295688018
+      ],
+      "target_uv": [
+        354.54759521484374,
+        323.4893252546616
+      ],
+      "back_uv": [
+        345.1782989501953,
+        323.16220379402625
+      ],
+      "fb_error_matching_px": 3.6133878231048584,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.6915704011917114,
+      "dt_ms": 200.3764610271901
+    },
+    {
+      "id": 1910,
+      "source_frame": 5395,
+      "target_frame": 5401,
+      "source_uv": [
+        358.9860298156738,
+        319.9108778811291
+      ],
+      "target_uv": [
+        376.53589096069334,
+        321.67682390581837
+      ],
+      "back_uv": [
+        365.60201263427734,
+        320.2390514394855
+      ],
+      "fb_error_matching_px": 4.999324798583984,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.5920126438140869,
+      "dt_ms": 200.3764610271901
+    },
+    {
+      "id": 1966,
+      "source_frame": 5395,
+      "target_frame": 5401,
+      "source_uv": [
+        347.8510238647461,
+        334.9897245122583
+      ],
+      "target_uv": [
+        347.66845626831054,
+        341.2630999654696
+      ],
+      "back_uv": [
+        382.0020416259765,
+        288.78869426579763
+      ],
+      "fb_error_matching_px": 43.340179443359375,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.7651649713516235,
+      "dt_ms": 200.3764610271901
+    },
+    {
+      "id": 1969,
+      "source_frame": 5395,
+      "target_frame": 5401,
+      "source_uv": [
+        375.7027923583984,
+        322.1842789623619
+      ],
+      "target_uv": [
+        383.79771423339844,
+        332.5764955973757
+      ],
+      "back_uv": [
+        369.9141662597656,
+        325.32693532026934
+      ],
+      "fb_error_matching_px": 4.970261573791504,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": false,
+      "fraction_window_inside_source_mask": 0.31247901916503906,
+      "dt_ms": 200.3764610271901
+    },
+    {
+      "id": 15,
+      "source_frame": 5401,
+      "target_frame": 5410,
+      "source_uv": [
+        335.4447368621826,
+        349.8537206491713
+      ],
+      "target_uv": [
+        337.8251110076904,
+        356.26787487051104
+      ],
+      "back_uv": [
+        335.19332733154295,
+        346.67840879661605
+      ],
+      "fb_error_matching_px": 2.402219772338867,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.511863648891449,
+      "dt_ms": 299.74109400063753
+    },
+    {
+      "id": 591,
+      "source_frame": 5401,
+      "target_frame": 5410,
+      "source_uv": [
+        341.7941467285156,
+        345.9305291781768
+      ],
+      "target_uv": [
+        342.15370178222656,
+        335.8222777645891
+      ],
+      "back_uv": [
+        344.0043670654297,
+        327.11258794457876
+      ],
+      "fb_error_matching_px": 14.289560317993164,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.7472546696662903,
+      "dt_ms": 299.74109400063753
+    },
+    {
+      "id": 1902,
+      "source_frame": 5401,
+      "target_frame": 5410,
+      "source_uv": [
+        381.9275588989258,
+        322.00975213656767
+      ],
+      "target_uv": [
+        387.43568191528317,
+        347.86072384323205
+      ],
+      "back_uv": [
+        379.9025344848633,
+        320.05788830498966
+      ],
+      "fb_error_matching_px": 2.1219418048858643,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": false,
+      "fraction_window_inside_source_mask": 0.26717695593833923,
+      "dt_ms": 299.74109400063753
+    },
+    {
+      "id": 1251,
+      "source_frame": 5458,
+      "target_frame": 5467,
+      "source_uv": [
+        317.9298526763916,
+        333.97202229368094
+      ],
+      "target_uv": [
+        285.7120903015136,
+        344.83298892869476
+      ],
+      "back_uv": [
+        314.8567123413086,
+        351.6650687370511
+      ],
+      "fb_error_matching_px": 13.5435791015625,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.5636762380599976,
+      "dt_ms": 300.1092120539397
+    },
+    {
+      "id": 1907,
+      "source_frame": 5467,
+      "target_frame": 5475,
+      "source_uv": [
+        297.4169982910156,
+        341.2110211282804
+      ],
+      "target_uv": [
+        282.1879695892334,
+        332.440168011913
+      ],
+      "back_uv": [
+        295.4992904663086,
+        341.5826544155732
+      ],
+      "fb_error_matching_px": 1.4742141962051392,
+      "forward_ok": true,
+      "backward_ok": true,
+      "target_in_object": true,
+      "fraction_window_inside_source_mask": 0.8961294293403625,
+      "dt_ms": 266.83147391304374
+    }
+  ],
+  "span_s": 4.670162599068135,
+  "recording": "saved-747dd29b27a745418524e2744ac29cb5",
+  "code_commit": "415feced6",
+  "method": "Replay SharedFrameTracker sequentially from frame 5118. At each rejected source-object ID, rerun the same forward and backward OpenCV LK calls to retain endpoints/status. Window coverage uses the resized saved SAM mask and the 21 by 21 window at the source query. Pixel coordinates are in the original RGB image; forward/backward errors are in the resized matching image.",
+  "scope": "All 16 lost tracks fail forward/backward consistency; both OpenCV status flags are true for each. Four forward endpoints are outside the current SAM mask; the first two visibly lie on fingers. This shows incorrect/inconsistent tracking but does not isolate the dominant physical or configuration cause for every loss. All 19 recorded subsequent object updates retain accepted image 5372."
+}
