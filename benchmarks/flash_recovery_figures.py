@@ -85,10 +85,10 @@ def main(recording, evidence, output):
         ax[1].scatter(*uv.T, s=22, facecolors="none", edgecolors=CYAN, lw=1.1)
 
     figure(
-        "1 · Visible again, but the old point tracks are gone",
+        "1 · Visible again, but too few old point tracks remain",
         [
             "Yellow: saved SAM mask. Cyan circles: surviving short tracks from the immediately preceding processed image.",
-            "The object estimator still refers to frame 5372. Zero point track IDs connect that accepted image to frame 5512.",
+            "From frame 5372 to 5512, 16 of 17 old object tracks fail LK; one usable 3D pair remains. The motion fit needs six.",
             "Confirmed in the trace/code: no fresh reference-to-current matching is attempted. Pictures alone cannot prove that omission.",
         ],
         "01-lost-identities.png",

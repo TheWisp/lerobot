@@ -19,14 +19,14 @@ table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{pad
 <p><a href="README.md#current-regression-cases">Current regression cases and results (Markdown)</a> · <a href="../../../src/lerobot/policies/flash/docs/glossary.md">Tracking glossary — definitions and code citations (Markdown)</a></p>
 <p class="note">The five panels show interacting failure mechanisms, not five independent root causes. <a href="README.md#how-the-five-panels-relate">Relationship between the failures</a> · <a href="README.md#why-the-pairs-are-rejected-and-sparse">Endpoint filter and sampling audit</a>.</p>
 <nav aria-label="Choose a failure explanation">
-<button aria-pressed="true" data-file="01-lost-identities.png">1 · Lost point tracks</button>
+<button aria-pressed="true" data-file="01-lost-identities.png">1 · Too few old point tracks</button>
 <button aria-pressed="false" data-file="02-local-alignment.png">2 · Local surface fitting</button>
 <button aria-pressed="false" data-file="03-predicted-versus-measured.png">3 · Motion group and pose prediction</button>
 <button aria-pressed="false" data-file="04-filter-rejection.png">4 · Kalman pose update</button>
 <button aria-pressed="false" data-file="05-depth-pairs.png">5 · Usable 3D pairs</button>
 </nav>
-<p id="explanation" aria-live="polite">A <a href="../../../src/lerobot/policies/flash/docs/glossary.md#point-track-id">point track ID</a> labels one tracked image point. Here the object is visible, but no old IDs connect the last accepted image to the current image.</p>
-<figure><a id="full" href="01-lost-identities.png" target="_blank"><img id="evidence" src="01-lost-identities.png" alt="Lost point tracks: last accepted image and visible current object with new short tracks"></a>
+<p id="explanation" aria-live="polite">A <a href="../../../src/lerobot/policies/flash/docs/glossary.md#point-track-id">point track ID</a> labels one tracked image point. The object is visible. Replaying frames 5372–5512 shows 16 of 17 old object tracks fail LK; one usable 3D pair remains, below the six required for motion fitting. The shared path does not attempt fresh matching between these images.</p>
+<figure><a id="full" href="01-lost-identities.png" target="_blank"><img id="evidence" src="01-lost-identities.png" alt="Too few old point tracks: last accepted image and visible current object with new short tracks"></a>
 <figcaption>Click the image to open it at full size. These are actual camera frames with replay-derived overlays. Screenshots use the original full history; compact tests initialize freshly.</figcaption></figure>
 <details open><summary>Original experiments before the production translation fix</summary>
 <table><thead><tr><th>Intervention</th><th>Sparse cube / pointer</th><th>After all old point tracks are lost</th><th>Ring rejection</th></tr></thead><tbody>
@@ -44,7 +44,7 @@ table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}th,td{pad
 </main>
 <script>
 const descriptions={
-'01-lost-identities.png':'Lost point tracks: last accepted image and visible current object with new short tracks',
+'01-lost-identities.png':'Too few old point tracks: last accepted image and visible current object with new short tracks',
 '02-local-alignment.png':'Same cube frame: stale starting pose misses the object; fitting from another starting pose succeeds',
 '03-predicted-versus-measured.png':'Orange crosses show fifteen group predictions; colored circles show three current LK and depth measurements',
 '04-filter-rejection.png':'Ring: geometry-compatible fit and rejected Kalman-fused pose on the same camera image',
@@ -52,7 +52,7 @@ const descriptions={
 const glossary='../../../src/lerobot/policies/flash/docs/glossary.md';
 const term=(id,label)=>`<a href="${glossary}#${id}">${label}</a>`;
 const explanations={
-'01-lost-identities.png':`A ${term('point-track-id','point track ID')} labels one tracked image point. Here the object is visible, but no old IDs connect the ${term('accepted-observation--reference-image','last accepted image')} to the current image.`,
+'01-lost-identities.png':`A ${term('point-track-id','point track ID')} labels one tracked image point. From the ${term('accepted-observation--reference-image','last accepted image')} at frame 5372 to frame 5512, 16 of 17 old object tracks fail LK. One usable 3D pair remains; the motion fit needs six. New short tracks do not reconnect to the old image, and no fresh reference-to-current matching is attempted. The earlier zero-surviving-IDs caption was incorrect: zero validated motion inliers did not mean zero surviving tracks. <a href="point-reacquisition-audit.json">Replayed track audit</a>.`,
 '02-local-alignment.png':`${term('local-surface-fitting','Surface fitting')} moves and rotates stored 3D points to match current depth. The original implementation omitted initialization from the current surface centre; that defect is now corrected. A controlled replay aligned the centres by changing only the initial translation (43.4 mm), with 0° change to the starting rotation: the same fit and checks accepted the result. The picture below compares the original starting estimate and recovered fit. <a href="center-initialization-ablation.json">Controlled trial evidence</a>.`,
 '03-predicted-versus-measured.png':`A ${term('motion-group','motion group')} is a collection of 3D points assumed to move together rigidly. This group has 425 accepted environment measurements. Of its 15 remembered object points, 12 had already failed LK matching. The other 3 still match and have depth, but disagree with the group motion. Orange crosses below are the 15 group predictions; colored circles are the 3 current measurements. Dashed arrows connect the same ID, not successive frames. <a href="03-lk-survivors.png">See the three LK tracks in consecutive processed images</a>. In the original implementation, the object association still produced a pose suggestion from that group. The depth check now removes these contradicted memberships and clears that unsupported suggestion. <a href="README.md#depth-rejection-of-carried-group-points">Measured correction</a>. <a href="README.md#why-the-object-remains-attached-to-the-background-group">Mechanism and code citations</a>.`,
 '04-filter-rejection.png':`The ${term('kalman-pose-update','Kalman pose update')} combines the old prediction with the new surface fit. The resulting pose fails a depth check even though the new fit passed.`,

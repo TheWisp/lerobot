@@ -57,7 +57,7 @@ The preview reads each Markdown file on request, renders headings, tables and li
 
 | Panel                         | Mechanism                                                                                                                                 | Relationship                                                                                                              |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| 1: Lost point tracks          | No surviving IDs connect the accepted image to the current one; the shared path does not attempt fresh matching between those images      | One way to lose an image-derived motion estimate. Loss of tracks itself must be tolerated.                                |
+| 1: Too few old point tracks   | Only one usable pair connects frames 5372 and 5512; six are required, and the shared path does not attempt fresh matching                 | One way to lose an image-derived motion estimate. Loss of tracks itself must be tolerated.                                |
 | 5: Too few usable pairs       | Some IDs survive, but sparse queries and object-surface filters leave fewer than six 3D pairs                                             | Another way to lose the motion estimate; different immediate cause from panel 1.                                          |
 | 3: Stale group pose           | Old object membership survives missing or contradictory measurements; measured background motion still supplies an object-pose suggestion | Can supply the wrong fallback when image motion is unavailable.                                                           |
 | 2: Translation initialization | The original fitter starts from that suggestion without comparing translation against current object geometry                             | Turns a bad starting position into a failed local fit. The committed centre-translation comparison addresses this defect. |
@@ -68,6 +68,27 @@ so the stale group pose becomes the fit's starting estimate. The original fitter
 fitting from the previous pose succeeds in the recorded comparison. Panel 2 separately isolates
 missing centre-translation initialization on cube frame 2741. Thus these are interacting causes,
 not proof that every panel is a separate bug or that fixing translation fixes all five mechanisms.
+
+## Why panel 1 loses image-derived motion
+
+**Correction to the original panel:** zero validated image-motion inliers did not
+mean zero surviving point track IDs. A [shared-tracker replay](point-reacquisition-audit.json)
+from frame 5118 finds 17 object tracks at frame 5372. Sixteen fail LK before
+frame 5512; all sixteen exceed the configured one-pixel forward/backward error
+limit in the resized matching image. ID 6 survives and passes the object/depth
+filters, giving **one usable 3D pair**, below the six required for rigid-motion
+fitting. Frame 5512 has 29 current object tracks, but the new IDs cannot connect
+to the old image at frame 5372. This audit identifies the rejection condition,
+not the physical cause of each inconsistent LK match.
+
+The missing recovery operation is fresh matching between the last accepted image
+and the current image. `SharedFrameTracker.pairs` only joins surviving IDs; it
+does not run the image matcher again when too few survive. Panel 1 therefore
+shows match attrition plus missing reacquisition, while panel 5 shows additional
+loss of usable pairs through object-surface filtering. Both can leave the motion
+fit without enough pairs. Neither is the incorrect 3D membership retention in
+panel 3. The separate complete-loss regression deliberately removes every old
+track and remains distinct from this recorded panel.
 
 ## Why the pairs are rejected and sparse
 
