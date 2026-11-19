@@ -356,6 +356,8 @@ PYTHONPATH=src:. python -m benchmarks.flash_recovery_figures \
 
 ## Depth rejection of carried group points
 
+[Compute-path diagram, query scope and reuse measurements](depth-compute-path.md).
+
 Measured on 2026-11-19 against `44fc18138`, with the group-depth change in this
 branch. A [motion group](../../../src/lerobot/policies/flash/docs/glossary.md#motion-group)
 predicts a missing or rejected member's 3D position from the current group motion.
