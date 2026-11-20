@@ -1,5 +1,10 @@
 # Recovery regression and first experiments
 
+The [2026-11-20 prior-in-fit experiment](prior-in-fit/README.md) investigates
+issue 4 with native registration, noisy narrow-surface controls, full recorded
+history and paired timing. It is benchmark-only; the normal pipeline still
+has the ring fusion failure.
+
 This regression checks [tracking loss and recovery](../../../src/lerobot/policies/flash/docs/glossary.md#tracking-loss-and-recovery):
 obtaining a new accepted object observation after tracking fails. A carried
 [pose prediction](../../../src/lerobot/policies/flash/docs/glossary.md#pose-prediction--prior)
