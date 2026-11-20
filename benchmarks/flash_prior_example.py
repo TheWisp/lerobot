@@ -106,8 +106,14 @@ def capture(native, fixture):
 
         with patch.object(LiveSurfaceSession, "step", step):
             rows = replay("ring", fixture=fixture)
+        data["previous_accepted_pose"] = np.asarray(rows[1]["pose"])
         data["row"] = next(r for r in rows if r["frame"] == 4759)
+        assert data["row"]["details"]["accepted_frame_before"] == 4750
+        assert data["row"]["details"]["kalman"]["motion_source"] is None
+        np.testing.assert_array_equal(data["prior"], data["previous_accepted_pose"])
         records[method] = data
+    np.testing.assert_array_equal(fixture[1][4750][0].base_from_camera, fixture[1][4759][0].base_from_camera)
+    np.testing.assert_array_equal(fixture[1][4750][0].intrinsics, fixture[1][4759][0].intrinsics)
     for data in records.values():
         for name in ("prior", "prior_covariance", "reference", "seed"):
             np.testing.assert_allclose(data[name], records["baseline"][name], rtol=0, atol=1e-12)
@@ -147,6 +153,45 @@ def render(records, fixture, output):
         ax.contour(outline, levels=[0.5], colors=["#ffe259"], linewidths=1.2)
         ax.set(xlim=crop[::2], ylim=crop[3:0:-2])
         ax.axis("off")
+
+    elapsed = frames[4759][0].source_time_s - frames[4750][0].source_time_s
+    fig, axes = plt.subplots(1, 2, figsize=(10, 6.7))
+    fig.suptitle("Here, prediction means: assume the ring stayed where it was", fontsize=16, y=0.96)
+    fig.text(
+        0.5,
+        0.91,
+        f"Two actual camera frames, {elapsed:.2f} seconds apart. The camera did not move.",
+        ha="center",
+        fontsize=12,
+    )
+    uv = project(move(baseline["reference"], baseline["prior"]), k)
+    for ax, number, title, caption in zip(
+        axes,
+        (4750, 4759),
+        ("Earlier frame 4750", "Current frame 4759"),
+        ("Orange: previously accepted placement", "Same orange placement; the real ring has moved"),
+        strict=True,
+    ):
+        frame, masks = frames[number]
+        panel(ax, frame.rgb, masks["object"], (265, 280, 385, 410))
+        ax.scatter(*uv.T, s=9, color="#ffb04c", alpha=0.8)
+        ax.set_title(title, pad=12, fontsize=14)
+        ax.text(0.5, -0.075, caption, transform=ax.transAxes, ha="center", fontsize=11)
+    fig.subplots_adjust(left=0.04, right=0.96, top=0.82, bottom=0.2, wspace=0.12)
+    fig.text(
+        0.055,
+        0.095,
+        "The orange dots are stored 3D surface points, drawn at the same position and rotation in both photos.",
+        fontsize=11,
+    )
+    fig.text(
+        0.055,
+        0.05,
+        "Yellow: the ring found in each image. No motion update was applied to this prediction.",
+        fontsize=11,
+    )
+    fig.savefig(output / "ring-prediction-origin.png", dpi=145)
+    plt.close(fig)
 
     fig, axes = plt.subplots(2, 2, figsize=(10, 10.6))
     fig.suptitle("Actual ring frame 4759: where the result changes", fontsize=18, y=0.97)
@@ -262,7 +307,15 @@ def main(native_dir, output):
     for method, data in records.items():
         info["methods"][method] = {name: data[name] for name in ("prior_check", "fit_check", "after_check")}
         info["methods"][method].update(status=data["row"]["status"], details=data["row"]["details"])
-        for name in ("reference", "prior", "prior_covariance", "seed", "fit", "after"):
+        for name in (
+            "reference",
+            "previous_accepted_pose",
+            "prior",
+            "prior_covariance",
+            "seed",
+            "fit",
+            "after",
+        ):
             arrays[f"{method}_{name}"] = data[name]
         for kind in ("fit", "after"):
             for name in ("old_xyz", "old_uv", "bad"):

@@ -68,6 +68,15 @@ not restarted, and LK/group tracking receive no object-specific feedback.
 
 ### Actual camera example with the same incoming state
 
+![The prediction is the unchanged previously accepted placement](ring-prediction-origin.png)
+
+In this particular transition, the prediction is exactly the accepted position
+and rotation from frame 4750, carried unchanged into frame 4759, 0.300 seconds
+later. No group-motion update is supplied to the filter, and the recorded camera
+transform and intrinsics are unchanged. The runner verifies these facts and
+exact equality of the previous accepted placement and prediction. Separately,
+14 image-match pairs supply the starting placement used by fitting in frame 4759. That new starting placement is not the orange prediction.
+
 ![Actual ring placements on frame 4759](ring-real-placements.png)
 
 The [camera example runner](../../../../benchmarks/flash_prior_example.py) replays
