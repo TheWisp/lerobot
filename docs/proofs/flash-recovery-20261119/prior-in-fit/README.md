@@ -66,6 +66,46 @@ not restarted, and LK/group tracking receive no object-specific feedback.
 
 ## Measured results
 
+### Actual camera example with the same incoming state
+
+![Actual ring placements on frame 4759](ring-real-placements.png)
+
+The [camera example runner](../../../../benchmarks/flash_prior_example.py) replays
+the production path through frame 4750, then switches methods only for frame 4759. Assertions verify identical incoming prediction, covariance, starting
+placement and stored surface. These are the recorded RGB images and saved model
+depth; the overlays are computed 3D surface projections, not generated imagery.
+
+On this controlled frame, production, the matched native post-filter control,
+and the integrated prior all select **the same initial geometry-compatible
+placement**. The normal Kalman correction then changes its rotation by 8.10°
+and moves the stored surface centre by 0.57 mm. The corrected placement fails
+the depth check. The integrated experiment leaves the selected placement
+unchanged and accepts it. This example therefore demonstrates the benefit of
+avoiding a later conflicting pose correction; it **does not establish that the
+prior term improved the numerical fit**. The separate known-pose strip controls
+test that claim. The 8.10° here differs from the older full-history illustration's
+8.42° because the compact replay initializes at frame 4740.
+
+![Actual depth contradictions in retained frame 4750](ring-real-depth-rejection.png)
+
+The displayed pink crosses are current 3D measurements mapped back into camera
+frame 4750 using each proposed object placement. They are captured from the real
+depth-check code after its retained-surface exceptions. Fully contradicted
+samples increase from 9 to 24; only the latter distribution triggers the spatial
+support requirement for rejection. A nonzero sample count alone is not the rule.
+The current frame's own depth direction has no contradiction for either of these
+two placements. The actual veto is in the earlier camera view, so RGB overlap
+alone cannot explain the rejection.
+
+[Captured checks and outcomes](ring-real-example.json) and
+[numeric projections](ring-real-example.npz) retain the evidence. Reproduce with:
+
+```bash
+PYTHONPATH=src:. python -m benchmarks.flash_prior_example \
+  --native-dir /tmp/flash-prior-native \
+  --output docs/proofs/flash-recovery-20261119/prior-in-fit
+```
+
 ### Compact recorded regression
 
 The original 11 lossless observations produce eight post-initialization updates
