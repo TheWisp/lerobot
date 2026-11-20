@@ -27,6 +27,11 @@ it does not restore or fake the original accumulated map/group state.
 
 ## Current regression cases
 
+The [2026-11-20 constrained Kalman experiment](constrained-kalman/EVIDENCE.md)
+measures compatible corrections and added CPU cost on identical incoming states.
+It also preserves known-motion counterexamples: passing geometry does not ensure
+correct rotation under partial visibility. The experiment does not change production.
+
 | Case                                                              | Required behavior                                                                                                                                                            | Result at `41e1ff35c`                                                           |
 | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | Cube, frame 2741; pointer, frame 3000                             | Accept the moved object's observation and continue tracking subsequent frames                                                                                                | Pass                                                                            |
