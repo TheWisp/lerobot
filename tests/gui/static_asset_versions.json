@@ -64,28 +64,32 @@
     "v": "89"
   },
   "flash_editor.css": {
-    "v": "5",
-    "sha256_16": "22c050bf0f861c1a"
+    "sha256_16": "f2a64afe90cb882b",
+    "v": "9"
   },
   "flash_editor.js": {
-    "v": "7",
-    "sha256_16": "c4d0f925ed5fc88e"
+    "sha256_16": "bf529ad8489b8176",
+    "v": "15"
   },
   "flash_experiments.css": {
-    "sha256_16": "1a7a53e7357f8250",
-    "v": "30"
+    "sha256_16": "170a04f1194758d2",
+    "v": "37"
   },
   "flash_experiments.js": {
-    "sha256_16": "4928b080c38def76",
-    "v": "49"
+    "sha256_16": "775a0636803ef94e",
+    "v": "55"
   },
   "flash_live.js": {
-    "sha256_16": "f4f7f20d9f0c42d7",
-    "v": "44"
+    "sha256_16": "ccf05b9b5303a93a",
+    "v": "54"
   },
   "flash_pipeline_settings.js": {
     "sha256_16": "8421a902e8d84fb7",
     "v": "2"
+  },
+  "flash_trajectory.js": {
+    "sha256_16": "67f70f873a780f41",
+    "v": "5"
   },
   "live_video.js": {
     "sha256_16": "6c7352e2876a04e6",
@@ -132,8 +136,8 @@
     "v": "16"
   },
   "rgbd_scene.js": {
-    "sha256_16": "bc6d58e001983cdd",
-    "v": "11"
+    "sha256_16": "9d16a85570db9a13",
+    "v": "12"
   },
   "robot.js": {
     "sha256_16": "24e128f6381038d4",

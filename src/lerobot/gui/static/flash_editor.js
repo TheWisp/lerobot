@@ -453,7 +453,7 @@ function renderFlashEditor(){
     editorElement('run-demo').disabled=editorElement('apply').disabled||!doc?.keyframes.length||!flashEditor.library.demos.some(d=>d.id===flashEditor.entry?.id);
     editorElement('run-demo').title='Apply this demo directly to the robot';
     if(flashEditor.execution?.running)editorElement('record').disabled=true;
-    editorElement('save').disabled=!doc||busy;
+    editorElement('save').disabled=!doc||busy||!flashEditor.dirty;
     editorElement('save').textContent='Save changes';
     renderFlashDemoLibrary();
     editorElement('add-object').disabled=!doc||!flashEditor.player||doc.objects.length>=3||busy;

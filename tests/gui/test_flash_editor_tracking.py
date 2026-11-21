@@ -59,6 +59,7 @@ def test_tracked_episode_overlay_and_keyframe_edits(gui_page, rgbd_episode, tmp_
     }""")
     page.locator("#flash-editor-demos button").first.click()
     expect(page.locator("#flash-editor-tracking-status")).to_contain_text("Tracking complete", timeout=30_000)
+    expect(page.locator("#flash-editor-save")).to_be_disabled()
     page.wait_for_function("flashEditor.overlay?.frame === 0")
     page.locator("#flash-editor-position").fill("2")
     page.wait_for_function("flashEditor.overlay?.frame === 2")
@@ -128,12 +129,14 @@ def test_tracked_episode_overlay_and_keyframe_edits(gui_page, rgbd_episode, tmp_
     page.wait_for_function("flashEditor.overlay?.frame === 2")
     page.locator("#flash-editor-references").get_by_role("button", name="left", exact=True).click()
     page.locator("#flash-editor-mark").click()
+    expect(page.locator("#flash-editor-save")).to_be_enabled()
     assert page.evaluate("flashEditor.overlay?.frame === 2")
     assert page.evaluate(
         "document.getElementById('flash-editor-marks').getContext('2d').getImageData(0,0,128,96).data.some((v,i)=>i%4===3&&v>0)"
     )
     page.locator("#flash-editor-save").click()
     expect(page.locator("#flash-editor-save-state")).to_have_text("Saved")
+    expect(page.locator("#flash-editor-save")).to_be_disabled()
     # Marking a keyframe does not invalidate already measured poses or demand SAM again.
     result = page.request.get(
         f"{base}/api/run/flash/editor/tracking?dataset_id={rgbd_episode.root}&episode=0&frame=2"

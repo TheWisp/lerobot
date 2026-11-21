@@ -409,7 +409,8 @@ def test_editor_ui_edits_real_episode(gui_page, episode):
     page.wait_for_function("flashEditor.frame === 6")
     page.locator("#flash-editor-range-end").click()
     expect(page.locator("#flash-editor-status")).to_contain_text("another reference")
-    page.locator("#flash-editor-save").click()
+    # The rejected edit changes nothing, so there is nothing new to save.
+    expect(page.locator("#flash-editor-save")).to_be_disabled()
     expect(page.locator("#flash-editor-save-state")).to_have_text("Saved")
     assert load_document(episode, 0)[0].keyframes == saved.keyframes
     page.locator("#flash-editor-range-cancel").click()
@@ -572,8 +573,10 @@ def test_record_stop_auto_opens_episode_in_editor(gui_page, tmp_path, monkeypatc
         assert dataset.num_frames > 0
         assert dataset.meta.total_episodes == 1
         page.get_by_label("Demo name", exact=True).fill("Circle demo")
-        page.locator("#flash-editor-save").click()
+        # Renaming already saves on blur, without a separate save click.
+        page.get_by_label("Demo name", exact=True).press("Tab")
         expect(page.locator("#flash-editor-demos")).to_contain_text("Circle demo")
+        expect(page.locator("#flash-editor-save")).to_be_disabled()
         page.reload()
         expect(page.locator("#flash-editor-demos")).to_contain_text("Circle demo")
         page.locator("#flash-editor-demos button").click()
