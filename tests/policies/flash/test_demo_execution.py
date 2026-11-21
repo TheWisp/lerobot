@@ -590,7 +590,7 @@ def test_new_scene_visible_surface_is_not_vetoed_by_demo_background(tmp_path):
         tracker.close()
 
 
-def make_annotated_demo(robot, tmp_path, states=None):
+def make_annotated_demo(robot, tmp_path, states=None, *, gripper_commands=None):
     model = robot.cartesian_model()
     initial_state = ready_state(model)
     names = [*model.joint_names, model.gripper]
@@ -606,12 +606,13 @@ def make_annotated_demo(robot, tmp_path, states=None):
         "test/actions", root=tmp_path / "episode", fps=30, features=features, use_videos=False
     )
     attach_robot_geometry(ds.meta, robot)
-    for state in states or [initial_state] * 3:
+    for index, state in enumerate(states or [initial_state] * 3):
+        action = {**state, model.gripper: 10 if gripper_commands is None else gripper_commands[index]}
         ds.add_frame(
             {
                 "task": "move",
                 "observation.state": np.array([state[n] for n in names], np.float32),
-                "action": np.array([state[n] if n != model.gripper else 10 for n in names], np.float32),
+                "action": np.array([action[n] for n in names], np.float32),
                 "observation.images.camera": np.zeros((16, 16, 3), np.uint8),
             }
         )
@@ -665,6 +666,40 @@ def test_record_reopen_compile_uses_actual_measured_joints_and_selected_referenc
     atomic_json(bad, packet)
     with pytest.raises(ValueError, match="no usable pose"):
         compile_demo(ds, 0, document, folder, robot, "camera")
+
+
+def test_demo_preserves_recorded_gripper_sequence_and_timing(robot, motor_robot, tmp_path):
+    from lerobot.policies.flash.execution import ActionQueue, MotorLoop
+
+    ds, document, folder = make_annotated_demo(robot, tmp_path, gripper_commands=[80, 20, 75])
+    document.keyframes = [DemoKeyframe(frame=i, reference="world") for i in range(3)]
+    model = robot.cartesian_model()
+    plan = compile_demo(ds, 0, document, folder, robot, "camera")
+    planned = plan_demo_range(plan, model, 0, ready_state(model), {}, 1, fps=ds.fps)
+    demo_actions = [action for action in planned.actions if action.interval.startswith("demo:")]
+    gripper_index = ds.meta.features["action"]["names"].index(model.gripper)
+    recorded = [float(ds[i]["action"][gripper_index]) for i in range(3)]
+    assert [action.action[model.gripper] for action in demo_actions] == recorded
+    assert [action.interval for action in demo_actions] == ["demo:0", "demo:1", "demo:2"]
+    assert [action.tick - demo_actions[0].tick for action in demo_actions] == [0, 1, 2]
+
+    queue = ActionQueue()
+    queue.publish(0, list(planned.actions))
+    clock = [0.0]
+    receipts = []
+    motor = MotorLoop(
+        motor_robot,
+        queue,
+        receipts.append,
+        fps=ds.fps,
+        clock=lambda: clock[0],
+        sleep=lambda delay: clock.__setitem__(0, clock[0] + delay),
+    )
+    for _ in planned.actions:
+        motor.tick()
+    sent = [receipt for receipt in receipts if receipt.requested.interval.startswith("demo:")]
+    assert [receipt.accepted[model.gripper] for receipt in sent] == recorded
+    np.testing.assert_allclose(np.diff([receipt.dispatched_s for receipt in sent]), 1 / ds.fps)
 
 
 def test_rest_keyframe_uses_recorded_approach_speed(robot, tmp_path):
