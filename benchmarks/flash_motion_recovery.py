@@ -207,6 +207,9 @@ def replay(case, *, policy="baseline", fixture=None, missing=False, model=None, 
     meta, frames = fixture or load_fixture()
     settings = deepcopy(meta["settings"])
     settings["shared_matching"]["backend"] = backend
+    # Preserve the historical no-fallback baseline after the runtime default
+    # changes. checked_fit exercises the production fallback without patches.
+    settings["surface_experiment"]["allow_fitted_pose_fallback"] = policy == "checked_fit"
     if policy.endswith("_reset"):
         settings["surface_experiment"]["uncertainty"]["reset_on_geometry_conflict"] = True
     numbers = meta["cases"][case]

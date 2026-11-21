@@ -7,6 +7,7 @@ from the local fit failure, not independent evidence or real-world pose accuracy
 """
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +63,8 @@ def checkpoint():
 def test_recorded_stuck_controller_reaches_kalman_and_recovers_with_unchanged_pixels():
     pytest.importorskip("small_gicp")
     session, prepared, start = checkpoint()
+    # Preserve coverage of the original no-fallback recovery mechanism.
+    session.config = replace(session.config, allow_fitted_pose_fallback=False)
     assert session.shape_config.registration.backend == "small_gicp"
     before = session.store.points.copy()
     for index in range(26):
@@ -99,3 +102,57 @@ def test_recorded_stuck_controller_reaches_kalman_and_recovers_with_unchanged_pi
         break
     else:
         pytest.fail("The identical visible frame did not recover within five seconds")
+
+
+def test_recorded_fallback_updates_prediction_but_preserves_uncertainty_image_and_surface(monkeypatch):
+    pytest.importorskip("small_gicp")
+    session, prepared, start = checkpoint()
+    before_surface = session.store.points.copy()
+    before_version = session.store.version
+    before_frame = session.accepted_frame
+    before_observation = session.accepted_observation
+    before_accepted_pose = session.accepted_pose.copy()
+    before_intrinsics = session.accepted_intrinsics
+    predicted = {}
+    original_correct = PoseKalmanFilter.correct
+
+    def capture_prediction(filt, *args, **kwargs):
+        predicted["pose"] = filt.pose.copy()
+        predicted["covariance"] = filt.covariance.copy()
+        return original_correct(filt, *args, **kwargs)
+
+    monkeypatch.setattr(PoseKalmanFilter, "correct", capture_prediction)
+    geometry = session.prepare_geometry(prepared)
+    result = session.update(prepared, start, geometry=geometry)
+    assert result["diagnostics"]["pose_fallback"]["accepted"]
+    assert result["status"] == "observed_candidate"
+    published = np.asarray(result["camera_from_reference"])
+    assert geometry.check_pose(
+        published,
+        max_outlier_fraction=session.config.uncertainty.max_visible_outlier_fraction,
+        agreement_m=session.config.agreement_m,
+        min_overlap=session.config.min_overlap,
+    )["accepted"]
+    np.testing.assert_array_equal(session.pose, published)
+    np.testing.assert_array_equal(session.kalman.pose, published)
+    assert not np.allclose(published, predicted["pose"])
+    np.testing.assert_array_equal(session.kalman.covariance, predicted["covariance"])
+    assert session.accepted_frame == before_frame
+    assert session.accepted_observation is before_observation
+    assert session.accepted_intrinsics is before_intrinsics
+    np.testing.assert_array_equal(session.accepted_pose, before_accepted_pose)
+    np.testing.assert_array_equal(session.store.points, before_surface)
+    assert session.store.version == before_version
+
+    # Exercise the actual next update, rather than only inspecting stored state.
+    starts = []
+    original_predict = PoseKalmanFilter.predict
+
+    def capture_next_start(filt, *args, **kwargs):
+        starts.append(filt.pose.copy())
+        return original_predict(filt, *args, **kwargs)
+
+    monkeypatch.setattr(PoseKalmanFilter, "predict", capture_next_start)
+    session.update(dict(prepared, frame_id=prepared["frame_id"] + 1), start + 0.2)
+    assert len(starts) == 1
+    np.testing.assert_array_equal(starts[0], published)

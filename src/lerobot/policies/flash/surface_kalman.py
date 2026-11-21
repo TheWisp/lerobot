@@ -90,6 +90,26 @@ class PoseKalmanFilter:
         self.pose = state["pose"].copy()
         self.covariance = state["covariance"].copy()
 
+    def accept_checked_fit(self, observation_pose):
+        """Recenter a restored prediction after geometry rejects its fusion.
+
+        The caller must check the fit and reject the prediction first. Keep the
+        pre-correction covariance unchanged in its camera-axis basis. This
+        uncalibrated fallback adopts the checked pose without claiming the
+        rejected fusion's confidence or inventing additional uncertainty from
+        its pose disagreement. Subsequent prediction starts from this pose.
+        """
+        rotation = Rotation.from_matrix(observation_pose[:3, :3] @ self.pose[:3, :3].T).as_rotvec()
+        difference = np.r_[rotation, self.center(observation_pose) - self.center()]
+        self.pose = observation_pose.copy()
+        return {
+            "accepted": True,
+            "source": "checked_surface_fit",
+            "covariance_policy": "prediction_unchanged",
+            "difference": difference.tolist(),
+            "calibrated": False,
+        }
+
     def predict(self, time_s, camera_change, base_from_camera, motion=None):
         dt = time_s - self.time_s
         if dt <= 0:

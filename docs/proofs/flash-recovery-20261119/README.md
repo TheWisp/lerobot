@@ -1,5 +1,11 @@
 # Recovery regression and first experiments
 
+**2026-11-21 — accepted Kalman fallback:** the checked fit becomes the returned
+pose and next internal pose; predicted covariance, previous matching image and
+stored surface are retained. Production replay exactly reproduces the selected
+experiment on nine recordings and 54 known-pose cases.
+[Landing behavior, verification and known limitation](kalman-fallback-landing.md).
+
 This regression checks [tracking loss and recovery](../../../src/lerobot/policies/flash/docs/glossary.md#tracking-loss-and-recovery):
 obtaining a new accepted object observation after tracking fails. A carried
 [pose prediction](../../../src/lerobot/policies/flash/docs/glossary.md#pose-prediction--prior)

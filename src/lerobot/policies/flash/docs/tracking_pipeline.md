@@ -478,9 +478,28 @@ The innovation score records disagreement relative to their combined uncertainty
 it is diagnostic, not a publication decision. Large disagreement does not
 automatically increase posterior covariance.
 
-The final fused pose is checked against depth and mask again. When no fitted
-pose or independent prediction passes the applicable geometry checks, the output
-is lost. Predictions and rejected corrections never add surface measurements.
+The final fused pose is checked against depth and mask again. If it fails, the
+filter restores its prediction and covariance. A prediction passing the current
+checks takes precedence. When the prediction also fails, the already checked
+fitted pose becomes the published pose and filter pose, subject to any downstream
+group check. This fallback retains the previous accepted image and its pose,
+and neither grows nor refreshes the stored surface. It performs no extra
+fit and reuses the cached geometry checks. A filter refusal such as zero
+measurement information does not trigger this fallback.
+
+For a fitted-pose fallback, covariance remains `P_prediction`, the uncertainty
+before the rejected correction. The fallback neither takes the rejected fusion's
+reduced covariance nor adds pose disagreement as artificial uncertainty.
+Subsequent prediction starts at the fitted pose. Subsequent image matching still
+uses the previous accepted image and its associated pose; ordinary accepted
+corrections can again update that image and the surface. Keeping the image and
+map unchanged limits how much an ambiguous fit can alter subsequent fitting,
+but the new internal pose can still influence later estimates.
+
+The legacy comparison setting `allow_fitted_pose_fallback = false` preserves
+loss when both fusion and prediction fail even if the raw fit passed. The default
+publishes no pose when neither the fit nor a prediction passes the applicable checks.
+Predictions and rejected corrections never add surface measurements.
 Fresh shared sessions keep the prior for weighted correction; the legacy
 `reset_on_geometry_conflict` option is disabled.
 
@@ -491,6 +510,9 @@ Visibility-aware matching now separates missing/newly visible surface from
 known empty-space conflicts, but imperfect masks, depth and stored geometry can
 still make that distinction wrong. The 25% aggregate allowance is not a pose
 accuracy guarantee.
+The fitted-pose fallback can therefore accept an ambiguous partial view or a
+symmetric wrong pose even though it passes geometry; retaining covariance does
+not establish the correctness of that pose.
 Noise settings are assumptions, not calibration. Shared evidence
 between group motion and fitting, and errors correlated across time, are not
 fully modeled. Wrong normals, a wrong reconstructed surface, a local optimizer

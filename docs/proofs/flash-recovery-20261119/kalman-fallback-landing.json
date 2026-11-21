@@ -1,0 +1,236 @@
+{
+  "date": "2026-11-21",
+  "policy": "Publish checked fit, adopt it internally; retain predicted covariance, accepted matching image/pose and surface on fallback frames.",
+  "production_source_sha256": {
+    "src/lerobot/policies/flash/experimental_surface_session.py": "69dddb99abc795fd24e1f8c6af1c130dbd6eb065d6bc3795764960c377e3a3f8",
+    "src/lerobot/policies/flash/surface_kalman.py": "0deb40b34c3df4e8f5e42775a11b097160713e8663661ab637fdc767a0eb96cd"
+  },
+  "live_equivalence": {
+    "clips": 9,
+    "object_updates": 2221,
+    "selections": 16,
+    "exact": true,
+    "registration_threads": 1,
+    "production_policy_monkeypatch": false
+  },
+  "control_equivalence": {
+    "cases": 54,
+    "scored_frames": 804,
+    "exact": true,
+    "production_policy_monkeypatch": false
+  },
+  "comparison_by_object_selection": [
+    {
+      "clip": "saved-0a53bbf92fd04b01b63e23c758a7a120",
+      "label": "Nov 16 \u2014 ring",
+      "selection": 0,
+      "role": "object",
+      "first_frame": 90,
+      "last_frame": 865,
+      "baseline_lost_seconds": 0.7326815337873995,
+      "landed_lost_seconds": 0.6657253978773952,
+      "discarded_output_only_lost_seconds": 0.565744835883379
+    },
+    {
+      "clip": "saved-0d602873edbf49c3886fd2cf69aae57f",
+      "label": "Nov 14 \u2014 dowel",
+      "selection": 0,
+      "role": "object",
+      "first_frame": 263,
+      "last_frame": 1549,
+      "baseline_lost_seconds": 1.267559961648658,
+      "landed_lost_seconds": 0.6001759909559041,
+      "discarded_output_only_lost_seconds": 0.9338412669021636
+    },
+    {
+      "clip": "saved-14a68e75c4bc47388628c786427cea78",
+      "label": "Nov 11 morning \u2014 helicopter",
+      "selection": 0,
+      "role": "object",
+      "first_frame": 545,
+      "last_frame": 1844,
+      "baseline_lost_seconds": 5.906838068854995,
+      "landed_lost_seconds": 0.4685608400031924,
+      "discarded_output_only_lost_seconds": 1.1351224009413272
+    },
+    {
+      "clip": "saved-1711711bc1c0496f9fbd46df60217c49",
+      "label": "Nov 20 \u2014 latest three-object run",
+      "selection": 0,
+      "role": "object",
+      "first_frame": 572,
+      "last_frame": 1739,
+      "baseline_lost_seconds": 0.16681971913203597,
+      "landed_lost_seconds": 0,
+      "discarded_output_only_lost_seconds": 0
+    },
+    {
+      "clip": "saved-1711711bc1c0496f9fbd46df60217c49",
+      "label": "Nov 20 \u2014 latest three-object run",
+      "selection": 1,
+      "role": "object",
+      "first_frame": 1747,
+      "last_frame": 2689,
+      "baseline_lost_seconds": 0.20012929500080645,
+      "landed_lost_seconds": 0.20012929500080645,
+      "discarded_output_only_lost_seconds": 0.20012929500080645
+    },
+    {
+      "clip": "saved-1711711bc1c0496f9fbd46df60217c49",
+      "label": "Nov 20 \u2014 latest three-object run",
+      "selection": 2,
+      "role": "object",
+      "first_frame": 2683,
+      "last_frame": 3851,
+      "baseline_lost_seconds": 15.225320211146027,
+      "landed_lost_seconds": 1.5675489350687712,
+      "discarded_output_only_lost_seconds": 10.04323624400422
+    },
+    {
+      "clip": "saved-3b9b9f3d70a74fbda3d65772f3f32b9c",
+      "label": "Nov 9 \u2014 cube",
+      "selection": 0,
+      "role": "object",
+      "first_frame": 1617,
+      "last_frame": 3396,
+      "baseline_lost_seconds": 0,
+      "landed_lost_seconds": 0,
+      "discarded_output_only_lost_seconds": 0
+    },
+    {
+      "clip": "saved-4710ff450ed54995bfb2cbca12d049f4",
+      "label": "Nov 11 evening \u2014 helicopter",
+      "selection": 0,
+      "role": "object",
+      "first_frame": 1658,
+      "last_frame": 3442,
+      "baseline_lost_seconds": 24.745415239827707,
+      "landed_lost_seconds": 5.970567217795178,
+      "discarded_output_only_lost_seconds": 24.483299961895682
+    },
+    {
+      "clip": "saved-747dd29b27a745418524e2744ac29cb5",
+      "label": "Nov 17 \u2014 original regression run",
+      "selection": 0,
+      "role": "object",
+      "first_frame": 2244,
+      "last_frame": 2614,
+      "baseline_lost_seconds": 0,
+      "landed_lost_seconds": 0,
+      "discarded_output_only_lost_seconds": 0
+    },
+    {
+      "clip": "saved-747dd29b27a745418524e2744ac29cb5",
+      "label": "Nov 17 \u2014 original regression run",
+      "selection": 1,
+      "role": "object",
+      "first_frame": 2607,
+      "last_frame": 2918,
+      "baseline_lost_seconds": 0,
+      "landed_lost_seconds": 0,
+      "discarded_output_only_lost_seconds": 0
+    },
+    {
+      "clip": "saved-747dd29b27a745418524e2744ac29cb5",
+      "label": "Nov 17 \u2014 original regression run",
+      "selection": 2,
+      "role": "object",
+      "first_frame": 2911,
+      "last_frame": 4165,
+      "baseline_lost_seconds": 20.647587962215766,
+      "landed_lost_seconds": 3.903980532893911,
+      "discarded_output_only_lost_seconds": 6.1366060462314636
+    },
+    {
+      "clip": "saved-747dd29b27a745418524e2744ac29cb5",
+      "label": "Nov 17 \u2014 original regression run",
+      "selection": 3,
+      "role": "object",
+      "first_frame": 4173,
+      "last_frame": 5127,
+      "baseline_lost_seconds": 4.203013679943979,
+      "landed_lost_seconds": 3.10467569809407,
+      "discarded_output_only_lost_seconds": 3.13992615416646
+    },
+    {
+      "clip": "saved-747dd29b27a745418524e2744ac29cb5",
+      "label": "Nov 17 \u2014 original regression run",
+      "selection": 4,
+      "role": "object",
+      "first_frame": 5118,
+      "last_frame": 5830,
+      "baseline_lost_seconds": 0,
+      "landed_lost_seconds": 0,
+      "discarded_output_only_lost_seconds": 0
+    },
+    {
+      "clip": "saved-74c941dc98d54c5aa03279ea1e9585b4",
+      "label": "Nov 8 \u2014 ring, sensor depth",
+      "selection": 0,
+      "role": "object",
+      "first_frame": 1180,
+      "last_frame": 1794,
+      "baseline_lost_seconds": 0,
+      "landed_lost_seconds": 0,
+      "discarded_output_only_lost_seconds": 0
+    },
+    {
+      "clip": "saved-8803c8852a8c49e3a6f749dc17682a5c",
+      "label": "Nov 15 \u2014 controller and ring together",
+      "selection": 0,
+      "role": "object_1",
+      "first_frame": 16,
+      "last_frame": 285,
+      "baseline_lost_seconds": 0,
+      "landed_lost_seconds": 0,
+      "discarded_output_only_lost_seconds": 0
+    },
+    {
+      "clip": "saved-8803c8852a8c49e3a6f749dc17682a5c",
+      "label": "Nov 15 \u2014 controller and ring together",
+      "selection": 0,
+      "role": "object_2",
+      "first_frame": 16,
+      "last_frame": 285,
+      "baseline_lost_seconds": 0.6003516667988151,
+      "landed_lost_seconds": 0.3002233519218862,
+      "discarded_output_only_lost_seconds": 0.16662123380228877
+    }
+  ],
+  "recording_input_and_result_manifest_sha256": {
+    "saved-0a53bbf92fd04b01b63e23c758a7a120/0-retained.json": "974fbe258e7b363d1008ec599c99ae635f72e697cab6616634c79bbf35ae85f3",
+    "saved-0d602873edbf49c3886fd2cf69aae57f/0-retained.json": "4ad6ab26838139ac0cc444b6c4c96e9bb28e7c91551a5915bf611634422f9c9f",
+    "saved-14a68e75c4bc47388628c786427cea78/0-retained.json": "a5cf84c4242a399fafe7b81185694f1bff8c23cacdc5c13326d1fedc728abf7a",
+    "saved-1711711bc1c0496f9fbd46df60217c49/0-retained.json": "7516f8132f6134c2ef193e50d61f5c7bcf5aab2dbc121cf73c5e77fa6ba688ff",
+    "saved-1711711bc1c0496f9fbd46df60217c49/1-retained.json": "3d269896533c832187e4756d5ac32a6c097ca3065bf612dbf9c91130fee0e12b",
+    "saved-1711711bc1c0496f9fbd46df60217c49/2-retained.json": "8eca18c29a1094234beaffd665739765f34bf354504f222f7162e1ef1df2ab39",
+    "saved-3b9b9f3d70a74fbda3d65772f3f32b9c/0-retained.json": "ff9a40034f81cb31984ff1797bb53cb76a12484d1a612f7195bc8f4ceaf9d21e",
+    "saved-4710ff450ed54995bfb2cbca12d049f4/0-retained.json": "3448d35fddb10ccdb0d92ff6e31010df7986e8634eebe2bacdd611930aa40aba",
+    "saved-747dd29b27a745418524e2744ac29cb5/0-retained.json": "dd9dabb26be88f21067b5a20731178369227e874dc9bfbd9979e5516f6865ea5",
+    "saved-747dd29b27a745418524e2744ac29cb5/1-retained.json": "ab579f8d5b6bca57338b7eb15d6be1df2aaa13b0cce1a154de5801907eef9c6b",
+    "saved-747dd29b27a745418524e2744ac29cb5/2-retained.json": "606ba2b2f1d0f03d6cb99e5aab63f4951a4aa5338a6d19d524dd155297b833f5",
+    "saved-747dd29b27a745418524e2744ac29cb5/3-retained.json": "7946e5002fbfa2276462d322ed748879419d2bff3e609e200d041d84f4484f3e",
+    "saved-747dd29b27a745418524e2744ac29cb5/4-retained.json": "221d22e0d3e301ea28b2efdb13aaa13888067218ccd97d9fff9aac5cc165624d",
+    "saved-74c941dc98d54c5aa03279ea1e9585b4/0-retained.json": "0bf5c37fff94089c367b0f008c7022c9b2ed181877b5945c731636238a39d0bd",
+    "saved-8803c8852a8c49e3a6f749dc17682a5c/0-retained.json": "a51837802b49a7a0b52cdc7233bf34f5bf0933d59bf8d6764ae4f7a41d086dd6"
+  },
+  "raw_live_results": "/tmp/flash-fallback-landed-live",
+  "raw_control_results": "/tmp/flash-fallback-landed-controls",
+  "mutations_detected": [
+    "inflate covariance by squared pose disagreement",
+    "advance matching image during fallback",
+    "retain rejected prediction internally after returning fit"
+  ],
+  "known_limitation": "24-pixel strip after a 25-degree turn: fit passes geometry but has 8.009 mm median 3D point error for eight returned poses over 1.75 seconds; baseline rejects those eight poses.",
+  "tests": {
+    "passed": 181,
+    "skipped": 4,
+    "expected_failures": 2,
+    "log": "/tmp/flash-fallback-landing-tests.log",
+    "expected_failure_reasons": [
+      "historical no-fallback ring recovery",
+      "known 8.009 mm thin-strip accuracy gap"
+    ],
+    "skipped_reason": "UFM model unavailable"
+  }
+}

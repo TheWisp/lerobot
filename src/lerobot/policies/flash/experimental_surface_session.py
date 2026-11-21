@@ -83,6 +83,9 @@ class GrowingSurfaceConfig:
     max_points: int = 8192
     grow: bool = True
     retain_unobserved_pose: bool = False
+    # Recover a rejected fusion with its checked fit while retaining the
+    # predicted uncertainty, accepted matching image, and stored surface.
+    allow_fitted_pose_fallback: bool = True
     uncertainty: PoseUncertaintyConfig = field(
         default_factory=lambda: PoseUncertaintyConfig(
             enabled=True, mode="kalman", max_visible_outlier_fraction=0.25
@@ -132,6 +135,7 @@ class GrowingSurfaceConfig:
             for key in (
                 "grow",
                 "retain_unobserved_pose",
+                "allow_fitted_pose_fallback",
                 "surface_priority",
                 "partial_surface_matching",
                 "local_growth_enabled",
@@ -958,6 +962,7 @@ class GrowingSurfaceSession:
         # 4. Fuse only a geometry-compatible fit. A fused pose can differ from
         # both inputs, so it must pass the same geometry check before publication.
         kalman_prior = None
+        fitted_fallback = False
         if self.kalman is not None:
             prior_check = check_pose(self.pose)
             kalman_prior = self.kalman.snapshot()
@@ -972,11 +977,20 @@ class GrowingSurfaceSession:
                 contradicted=not prior_check["geometry_accepted"],
             )
             details["kalman"] = correction
+            fitted_pose = candidate
             candidate = self.kalman.pose.copy()
             if correction["accepted"] and not check_pose(candidate)["accepted"]:
                 self._rollback_correction(kalman_prior, details, "fused_pose_contradicts_observation")
+                # Prefer a prediction supported by this frame. Otherwise use
+                # the already checked fit; never run another solve or relax a
+                # geometry check. Preserve the failed fusion in diagnostics.
+                if self.config.allow_fitted_pose_fallback and not prior_check["accepted"]:
+                    details["prediction_geometry"] = prior_check
+                    details["pose_fallback"] = self.kalman.accept_checked_fit(fitted_pose)
+                    candidate = self.kalman.pose.copy()
+                    fitted_fallback = True
             self.pose = self.kalman.pose.copy()
-            if not details["kalman"]["accepted"]:
+            if not details["kalman"]["accepted"] and not fitted_fallback:
                 details["fit"] = fit
                 return self._publish_prediction(
                     hint,
@@ -1009,14 +1023,17 @@ class GrowingSurfaceSession:
                 if not accepted:
                     if kalman_prior is not None:
                         self._rollback_correction(kalman_prior, details, "surface_group_disagreement")
+                    if fitted_fallback:
+                        details["pose_fallback"].update(accepted=False, reason="surface_group_disagreement")
                     return self._publish_prediction(
                         hint, time_s, details, "surface_group_disagreement", geometry=fitter
                     )
-        # 5. Commit only the accepted measured result. Predicted/lost paths
-        # return above and cannot advance this reference or confirm map patches.
+        # 5. Adopt the checked pose. A fitted fallback changes the next pose
+        # prediction but cannot replace the matching image or confirm map patches.
         self.pose = candidate
         self.last_observed_time = self.last_supported_time = time_s
-        self._remember_observation(prepared)
+        if not fitted_fallback:
+            self._remember_observation(prepared)
         info = measured_surface_information(
             self.store.points,
             self.pose,
@@ -1030,7 +1047,11 @@ class GrowingSurfaceSession:
             "pivot_m": info.pivot.tolist(),
             "matched_points": info.matched_points,
         }
-        if self.config.grow:
+        if fitted_fallback:
+            # Preserve the matching image and map until an ordinary correction
+            # passes geometry; the checked pose still starts the next prediction.
+            details["growth"] = {"accepted": False, "reason": "fitted_pose_fallback"}
+        elif self.config.grow:
             details["growth"] = self.store.extend(
                 points,
                 self.pose,

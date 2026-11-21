@@ -227,3 +227,85 @@ def test_group_rotation_is_measured_from_visible_points():
     f.predict(0.1, np.eye(4), np.eye(4), MeasuredGroupMotion(p, move(p, motion_pose), 0.0, 0.1, "support"))
     np.testing.assert_allclose(f.pose, motion_pose, atol=1e-12)
     assert np.linalg.eigvalsh(f.covariance).min() > 0
+
+
+def test_checked_fit_updates_prediction_without_claiming_measurement_certainty():
+    center = np.array([0.2, -0.1, 0.6])
+    f = PoseKalmanFilter(np.eye(4), center, 0.0, config())
+    prior = f.snapshot()
+    measured = transform(x=0.02)
+    measured[:3, :3] = Rotation.from_euler("y", 30, degrees=True).as_matrix()
+    measured[:3, 3] += center - measured[:3, :3] @ center
+    f.accept_checked_fit(measured)
+    np.testing.assert_array_equal(f.pose, measured)
+    np.testing.assert_array_equal(f.covariance, prior["covariance"])
+    # Prediction must start from the fallback, including camera compensation.
+    camera = transform(z=0.01)
+    f.predict(0.1, camera, np.eye(4))
+    np.testing.assert_allclose(f.pose, camera @ measured)
+
+
+@pytest.mark.parametrize("prediction_supported", [True, False])
+@pytest.mark.parametrize("group_veto", [False, True])
+def test_rejected_fusion_prefers_checked_prediction_then_checked_fit(
+    monkeypatch, prediction_supported, group_veto
+):
+    prepare, rgb, depth, mask, k = prepared_frames(monkeypatch)
+    session = GrowingSurfaceSession(
+        prepare.shape_config,
+        GrowingSurfaceConfig(
+            uncertainty=config(reset_on_geometry_conflict=False), allow_fitted_pose_fallback=True
+        ),
+    )
+    session.update(prepare.prepare(rgb, depth, mask, k, 0), 0.0)
+    surface = session.store.points.copy()
+    version = session.store.version
+    if not prediction_supported:
+        session.pose = session.kalman.pose = transform(z=0.1)
+    real_correct = session.kalman.correct
+
+    def bad_fusion(*args, **kwargs):
+        result = real_correct(*args, **kwargs)
+        assert result["accepted"]
+        session.kalman.pose = transform(z=0.2)
+        return result
+
+    # Force only the fused result to contradict depth. The fitter and every
+    # candidate/prediction acceptance check still consume actual RGB-D geometry.
+    monkeypatch.setattr(session.kalman, "correct", bad_fusion)
+    result = session.update(
+        prepare.prepare(rgb, depth, mask, k, 1),
+        0.1,
+        hint=PoseHint(np.eye(4), "group", 0.1, 0.0, 0) if group_veto else None,
+        candidate_check=(lambda *_: (False, {})) if group_veto else None,
+    )
+    vetoed_fit = group_veto and not prediction_supported
+    assert result["diagnostics"]["kalman"]["reason"] == (
+        "surface_group_disagreement" if vetoed_fit else "fused_pose_contradicts_observation"
+    )
+    assert not result["diagnostics"]["kalman"]["accepted"]
+    assert session.store.version == version
+    np.testing.assert_array_equal(session.store.points, surface)
+    if vetoed_fit:
+        assert result["status"] == "lost"
+        assert not result["diagnostics"]["pose_fallback"]["accepted"]
+        assert session.accepted_frame == 0
+        np.testing.assert_allclose(session.pose, transform(z=0.1))
+        np.testing.assert_allclose(session.kalman.pose, session.pose)
+        np.testing.assert_allclose(
+            session.kalman.covariance, session.kalman.last_prediction["prior_covariance"]
+        )
+    elif prediction_supported:
+        np.testing.assert_allclose(result["camera_from_reference"], session.kalman.pose)
+        assert result["status"] == "predicted"
+        assert session.accepted_frame == 0
+        assert "pose_fallback" not in result["diagnostics"]
+    else:
+        np.testing.assert_allclose(result["camera_from_reference"], session.kalman.pose)
+        assert result["status"] == "observed_candidate"
+        assert result["diagnostics"]["pose_fallback"]["accepted"]
+        assert session.accepted_frame == 0
+        np.testing.assert_array_equal(
+            session.kalman.covariance, session.kalman.last_prediction["prior_covariance"]
+        )
+        assert abs(session.pose[2, 3]) < 0.005

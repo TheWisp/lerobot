@@ -263,7 +263,7 @@ A prediction and a fit's [starting pose](#local-surface-fitting) need not be the
 pose can instead come from current image matches. Publishing a predicted pose does not mean the
 object was measured this frame.
 
-Code: [`PoseKalmanFilter.predict`](../surface_kalman.py#L93),
+Code: [`PoseKalmanFilter.predict`](../surface_kalman.py#L113),
 [`ObjectGroupAssociation.query`](../object_group_association.py#L129), and
 [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L851).
 
@@ -281,12 +281,20 @@ correction. The optional `reset_on_geometry_conflict` setting instead permits a 
 measured geometry contradicts the prior.
 
 The fused pose can differ from both input poses, so it must pass the geometry checks again.
-If it fails, the tracker restores the prior filter state and checks whether a prediction can
-be published; otherwise it reports lost.
+If it fails, the tracker restores the prior filter state. A prediction that passes the current
+checks takes precedence. When the prediction also fails, the already checked surface-fit pose
+becomes the published pose and the filter's starting pose for the next frame. This fitted-pose
+fallback keeps the prediction's covariance unchanged and retains the previous accepted image
+and its pose. It does not grow or refresh the stored surface. A subsequent ordinary accepted
+correction can update the image and surface again. The legacy comparison setting
+`allow_fitted_pose_fallback = false` suppresses this fallback.
+These checks test compatibility with measured geometry, not unique or correct 6D pose.
+When neither a fit nor a prediction passes the applicable checks, the result is lost.
 
-Code: [`PoseKalmanFilter.correct`](../surface_kalman.py#L148) and
-[`_correct`](../surface_kalman.py#L161);
-[`GrowingSurfaceSession.update`](../experimental_surface_session.py#L958) checks the fused pose.
+Code: [`PoseKalmanFilter.correct`](../surface_kalman.py#L168),
+[`_correct`](../surface_kalman.py#L181), and
+[`accept_checked_fit`](../surface_kalman.py#L93);
+[`GrowingSurfaceSession.update`](../experimental_surface_session.py#L962) checks the fused pose.
 
 ## Accepted observation / reference image
 
@@ -300,7 +308,7 @@ The last accepted image may be older than the previous processed image. Acceptin
 not redefine the fixed [object coordinates](#object-coordinates-and-pose). “Accepted” reports the
 estimator's decision; it is not independent ground-truth verification.
 
-Code: [`GrowingSurfaceSession._remember_observation`](../experimental_surface_session.py#L1049)
+Code: [`GrowingSurfaceSession._remember_observation`](../experimental_surface_session.py#L1070)
 stores `accepted_frame`, `accepted_pose`, and `accepted_observation`.
 
 ## Tracking loss and recovery
@@ -309,8 +317,10 @@ stores `accepted_frame`, `accepted_pose`, and `accepted_observation`.
 Specify what was lost: old point tracks, the mask, usable depth, or an accepted pose. Those are
 different failures.
 
-An **observed pose** (`observed_candidate`) has passed the current object-observation checks
-and advances the accepted image. A **predicted pose** (`predicted`) is available without a newly
+An **observed pose** (`observed_candidate`) has passed the current object-observation checks.
+An ordinary accepted correction advances the accepted image; the fitted-pose fallback described
+under [Kalman pose update](#kalman-pose-update) retains that image and the stored surface.
+A **predicted pose** (`predicted`) is available without a newly
 accepted object observation. Publishing a prediction is distinct from recovering an observed pose.
 `lost` means no pose is published, even if an internal estimate is retained. These statuses
 describe estimator decisions, not independent pose accuracy.

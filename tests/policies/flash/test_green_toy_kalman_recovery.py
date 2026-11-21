@@ -112,7 +112,8 @@ def test_recorded_rotation_recovers_without_innovation_veto_and_passes_geometry(
     assert not geometry.check_pose(shifted)["accepted"]
 
 
-def test_disabling_innovation_gate_does_not_publish_a_geometry_invalid_blend():
+@pytest.mark.parametrize("fallback", [False, True])
+def test_disabling_innovation_gate_does_not_publish_a_geometry_invalid_blend(fallback):
     session, prepared, meta, data = checkpoint(False)
     # A deliberately overconfident wrong prior makes ordinary fusion stay
     # close to that prior even though the independent surface fit is valid.
@@ -122,7 +123,7 @@ def test_disabling_innovation_gate_does_not_publish_a_geometry_invalid_blend():
         rotation_process_std_deg_sqrt_s=0.0001,
         position_process_std_m_sqrt_s=0.000001,
     )
-    session.config = replace(session.config, uncertainty=config)
+    session.config = replace(session.config, uncertainty=config, allow_fitted_pose_fallback=fallback)
     session.kalman.config = config
     session.kalman.covariance = np.eye(6) * 1e-12
     geometry = session.prepare_geometry(prepared)
@@ -130,9 +131,22 @@ def test_disabling_innovation_gate_does_not_publish_a_geometry_invalid_blend():
     k = result["diagnostics"]["kalman"]
     assert k["filter_reason"] == "corrected"
     assert k["reason"] == "fused_pose_contradicts_observation"
-    assert not k["accepted"] and result["camera_from_reference"] is None
+    assert not k["accepted"]
     np.testing.assert_allclose(k["observation_pose"], data["recorded_fitted_pose"], atol=1e-9, rtol=0)
-    np.testing.assert_array_equal(session.pose, data["prior_pose"])
+    if fallback:
+        assert result["diagnostics"]["pose_fallback"]["accepted"]
+        published = np.asarray(result["camera_from_reference"])
+        np.testing.assert_allclose(published, k["observation_pose"], atol=1e-9, rtol=0)
+        assert geometry.check_pose(
+            published,
+            max_outlier_fraction=session.config.uncertainty.max_visible_outlier_fraction,
+            agreement_m=session.config.agreement_m,
+            min_overlap=session.config.min_overlap,
+        )["accepted"]
+        np.testing.assert_array_equal(session.pose, published)
+    else:
+        assert result["camera_from_reference"] is None
+        np.testing.assert_array_equal(session.pose, data["prior_pose"])
     np.testing.assert_array_equal(session.kalman.covariance, k["prior_covariance"])
     np.testing.assert_array_equal(session.store.points, data["surface"])
     assert session.accepted_frame == meta["accepted_frame"]

@@ -1,7 +1,7 @@
 """Real sparse RGB-D inputs, followed through matching, pose and map consumers.
 
-Known production failures stay strict xfails. The opt-in benchmark policy is
-also checked here so the proposed recovery must satisfy the SAME assertions.
+The production path and opt-in benchmark policies satisfy the same recovery
+assertions; fallback state and surface protection are checked separately.
 No saved pose, expected surface fit, or future image enters the estimator.
 """
 
@@ -67,7 +67,10 @@ def assert_visible_recovery(rows, recorded, first_observed_index):
         measured = depth[masks["object"] & np.isfinite(depth) & (depth > 0)]
         assert len(measured) > 0
         assert abs(center[2] - np.median(measured)) < 0.02, (n, center[2], np.median(measured))
-        assert row["accepted_frame"] == n, "A carried prediction is not a recovered observation"
+        if row["details"].get("pose_fallback", {}).get("accepted"):
+            assert row["accepted_frame"] == row["details"]["accepted_frame_before"]
+        else:
+            assert row["accepted_frame"] == n, "A carried prediction is not a recovered observation"
         assert row["map_version"] > rows[0]["map_version"]
 
 
@@ -79,8 +82,13 @@ def assert_visible_recovery(rows, recorded, first_observed_index):
         pytest.param(
             "ring",
             "baseline",
-            marks=pytest.mark.xfail(strict=True, reason="Kalman fusion rejects recovered ring geometry"),
+            marks=pytest.mark.xfail(
+                strict=True, reason="Historical no-fallback Kalman fusion rejects recovered ring geometry"
+            ),
         ),
+        ("cube", "checked_fit"),
+        ("pointer", "checked_fit"),
+        ("ring", "checked_fit"),
         ("cube", "recover_reset"),
         ("pointer", "recover_reset"),
         ("ring", "recover_reset"),
@@ -90,6 +98,24 @@ def test_sparse_recording_recovers_and_tracks_following_frames(case, policy, run
     rows = runs(case, policy)
     assert rows[0]["status"] == "initialized"
     assert_visible_recovery(rows, recorded, 1)
+
+
+def test_ring_fallback_keeps_matching_reference_and_surface_until_normal_correction(runs):
+    rows = runs("ring", "checked_fit")
+    before, recovered, following = rows[1:]
+    assert recovered["frame"] == 4759
+    assert recovered["status"] == "observed_candidate"
+    assert recovered["details"]["pose_fallback"]["accepted"]
+    assert not recovered["details"]["kalman"]["accepted"]
+    assert not recovered["details"]["prediction_geometry"]["accepted"]
+    assert recovered["accepted_frame"] == before["accepted_frame"]
+    assert recovered["map_version"] == before["map_version"]
+    np.testing.assert_array_equal(recovered["surface"], before["surface"])
+    # The next frame consumes the retained matching image, with the new pose.
+    assert following["details"]["accepted_frame_before"] == before["accepted_frame"]
+    assert following["status"] == "observed_candidate"
+    assert following["accepted_frame"] == following["frame"]
+    assert following["map_version"] > recovered["map_version"]
 
 
 @pytest.mark.parametrize("case", ["cube", "pointer"])
@@ -135,7 +161,7 @@ def test_fixture_contains_only_eleven_lossless_observations(recorded):
         assert masks["object"].shape == frame.depth.shape == frame.rgb.shape[:2]
 
 
-@pytest.mark.parametrize("policy", ["baseline", "recover_reset", "rematch_reset"])
+@pytest.mark.parametrize("policy", ["baseline", "checked_fit", "recover_reset", "rematch_reset"])
 def test_recovery_does_not_accept_the_green_ring_as_the_cube(policy, recorded):
     meta, frames = recorded
     meta = deepcopy(meta)

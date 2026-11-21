@@ -108,24 +108,61 @@ def scene(
     return frames
 
 
-def run_scene(frames, mode, *, grow=False, config=None, filter_factory=None):
+def changed_scene(angle, *, strip=None, gap=0.25, translation=0.0, noise=0.0):
+    """Abrupt turn from 20 degrees, optionally behind a screen or with noisy depth."""
+    frames = scene(0, occluded=False)[: WARMUP + 8]
+    initial = box_observation(20)[2]
+    rng = np.random.default_rng(20261120)
+    for frame in frames:
+        index = frame["index"]
+        frame["time_s"] = index / 30 if index < WARMUP else (WARMUP - 1) / 30 + (index - WARMUP + 1) * gap
+        if index < WARMUP:
+            continue
+        current, _, pose = box_observation(angle, displacement_m=[translation, 0, 0])
+        depth, mask = current["depth"].copy(), current["mask"].copy()
+        if noise:
+            depth[mask] += rng.normal(0, noise, mask.sum())
+        if strip is not None:
+            left = np.where(mask)[1].min()
+            screen = np.indices(mask.shape)[1] >= left + strip
+            depth[screen] = 0.5
+            mask[screen] = False
+        frame.update(depth=depth, mask=mask, truth=pose @ np.linalg.inv(initial), hidden=not mask.any())
+        frame["rgb"] = np.full((*mask.shape, 3), 40, np.uint8)
+        frame["rgb"][mask] = (190, 170, 120)
+    return frames
+
+
+def run_scene(frames, mode, *, grow=False, config=None, filter_factory=None, pipeline_config=None):
     if mode not in MODES:
         raise ValueError(mode)
     uncertainty = PoseUncertaintyConfig(enabled=True, mode="kalman", max_visible_outlier_fraction=0.25)
     if mode == "strict_broader_motion":
         uncertainty = replace(uncertainty, position_process_std_m_sqrt_s=0.03)
-    shape = ShapeConfig()
+    shape = ShapeConfig() if pipeline_config is None else pipeline_config.shape
     config = config or GrowingSurfaceConfig(
         grow=grow, partial_surface_matching=True, retain_unobserved_pose=True
     )
-    config = replace(config, uncertainty=uncertainty)
+    if pipeline_config is None:
+        config = replace(config, uncertainty=uncertainty)
     session = GrowingSurfaceSession(shape, config)
     rows = []
     for frame in frames:
         started = perf_counter()
         # A fresh observation builder deliberately supplies no image matches.
         # The GrowingSurfaceSession still retains the real temporal pose/map.
-        preparation = SurfaceTrackingSession(None, shape_config=shape)
+        preparation = SurfaceTrackingSession(
+            None,
+            shape_config=shape,
+            **(
+                {}
+                if pipeline_config is None
+                else {
+                    "observation_config": pipeline_config.observation,
+                    "motion_config": pipeline_config.motion,
+                }
+            ),
+        )
         prepared = preparation.prepare(
             frame["rgb"], frame["depth"], frame["mask"], frame["intrinsics"], frame["index"]
         )
@@ -163,6 +200,8 @@ def run_scene(frames, mode, *, grow=False, config=None, filter_factory=None):
         candidate = (
             details.get("fit", {}).get("uncertainty", {}).get("camera_from_reference_at_linearization")
         )
+        published = result["camera_from_reference"]
+        evaluated_pose = session.pose if published is None else np.asarray(published)
         row = {
             "index": frame["index"],
             "time_s": frame["time_s"],
@@ -171,7 +210,10 @@ def run_scene(frames, mode, *, grow=False, config=None, filter_factory=None):
             "status": result["status"],
             "available": result["camera_from_reference"] is not None,
             "reason": details.get("reason"),
-            "pose": session.pose.tolist(),
+            "pose": evaluated_pose.tolist(),
+            "published_pose": published,
+            "internal_pose": session.pose.tolist(),
+            "error_basis": "internal_unpublished" if published is None else "published",
             "map_points": len(session.store.points),
             "map_version": session.store.version,
             "retained_patches": len(session.store.patches),
@@ -180,6 +222,7 @@ def run_scene(frames, mode, *, grow=False, config=None, filter_factory=None):
             "covariance": session.kalman.covariance.tolist(),
             "velocity": session.kalman.velocity.tolist() if hasattr(session.kalman, "velocity") else None,
             "growth": details.get("growth"),
+            "fallback": details.get("pose_fallback"),
             "measurement_count": details.get("fit", {}).get("uncertainty", {}).get("measurement_count"),
             "kalman": {
                 key: details.get("kalman", {}).get(key)
@@ -193,12 +236,19 @@ def run_scene(frames, mode, *, grow=False, config=None, filter_factory=None):
                     "filter_reason",
                 ]
             },
-            "error": pose_error(session.reference, session.pose, frame["truth"]),
+            "error": pose_error(session.reference, evaluated_pose, frame["truth"]),
         }
         if candidate is not None:
             row["candidate_error"] = pose_error(session.reference, np.array(candidate), frame["truth"])
         rows.append(row)
-    return {"mode": mode, "config": asdict(config), "rows": rows}
+    return {
+        "mode": mode,
+        "config": asdict(config),
+        "effective_surface_config": asdict(session.config),
+        "effective_filter_config": asdict(session.kalman.config),
+        "effective_shape_config": asdict(shape),
+        "rows": rows,
+    }
 
 
 def summarize(result):
