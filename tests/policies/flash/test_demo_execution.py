@@ -281,6 +281,125 @@ def test_saved_rest_is_simulated_without_physical_access(robot, tmp_path, monkey
     robot.send_action.assert_not_called()
 
 
+def test_gain_failure_closes_open_bus_without_demo_commands_or_retry(robot, tmp_path, monkeypatch):
+    # Reproduce the recorded setup failure through the actual follower's
+    # connect/configure/torque context. Only serial I/O is replaced.
+    port = SimpleNamespace(is_open=False)
+    monkeypatch.setattr(robot.bus, "port_handler", port)
+    monkeypatch.setattr(robot.bus, "connect", Mock(side_effect=lambda: setattr(port, "is_open", True)))
+    monkeypatch.setattr(robot.bus, "configure_motors", Mock())
+    monkeypatch.setattr(robot.bus, "read_calibration", lambda: robot.calibration)
+    monkeypatch.setattr(robot.bus, "disable_torque", Mock())
+    monkeypatch.setattr(robot.bus, "enable_torque", Mock())
+    monkeypatch.setattr(robot.bus, "disconnect", Mock(side_effect=lambda _: setattr(port, "is_open", False)))
+    robot.config.disable_torque_on_disconnect = False
+
+    def write(register, motor, value):
+        if register == "P_Coefficient" and robot.bus.motors[motor].id == 6:
+            assert motor == "wrist_roll"
+            raise ConnectionError("There is no status packet!")
+
+    monkeypatch.setattr(robot.bus, "write", Mock(side_effect=write))
+    monkeypatch.setattr(robot, "connect", type(robot).connect.__get__(robot))
+    loop = ExecutionLoop(
+        plan_for(robot),
+        robot,
+        tmp_path,
+        Event(),
+        simulate=False,
+        rest_position=ready_state(robot.cartesian_model()),
+    )
+    loop.start()
+    loop.thread.join(timeout=3)
+    loop.close()
+    assert isinstance(loop.error, ConnectionError)
+    assert loop.commands_sent == 0
+    robot.send_action.assert_not_called()
+    assert robot.bus.motors["gripper"].id == 7
+    assert (
+        sum(call.args[:2] == ("P_Coefficient", "wrist_roll") for call in robot.bus.write.call_args_list) == 1
+    )
+    robot.bus.enable_torque.assert_called_once()
+    robot.bus.disconnect.assert_called_once_with(False)
+    assert not port.is_open
+    assert json.loads((tmp_path / "execution.json").read_text())["state"] == "failed"
+
+
+@pytest.mark.parametrize("outcome", ["complete", "stop_after_last_command", "disconnect_failure"])
+def test_worker_terminal_records_agree_after_cleanup(motor_robot, tmp_path, monkeypatch, outcome):
+    from lerobot.gui.api import robot as robot_api
+    from lerobot.policies.flash import demo_live_worker as worker
+
+    plan = plan_for(motor_robot, reference="world")
+    plan["document"] = {"objects": []}
+    atomic_json(tmp_path / "plan.json", plan)
+    atomic_json(tmp_path / "run.json", {"state": "running"})
+    np.savez(
+        tmp_path / "reference.npz",
+        rgb=np.zeros((2, 2, 3), np.uint8),
+        depth=np.ones((2, 2)),
+        intrinsics=np.eye(3),
+    )
+    rest = ready_state(motor_robot.cartesian_model())
+    atomic_json(
+        tmp_path / "config.json",
+        {
+            "demo_execution": {
+                "plan_directory": str(tmp_path),
+                "robot": {"rest_position": rest},
+                "simulate": False,
+            }
+        },
+    )
+    stop = Event()
+    monkeypatch.setattr(stop, "wait", lambda _: stop.is_set())
+    monkeypatch.setattr(worker, "Event", lambda: stop)
+    monkeypatch.setattr(worker.signal, "signal", lambda *_: None)
+    monkeypatch.setattr(worker.sys, "argv", ["demo_live_worker", str(tmp_path)])
+    monkeypatch.setattr(robot_api, "_make_robot_from_profile", lambda _: motor_robot)
+    if outcome == "disconnect_failure":
+        motor_robot.disconnect = Mock(side_effect=ConnectionError("cleanup failed"))
+    record = ExecutionLoop._record_motor_tick
+
+    def tick(loop, value):
+        record(loop, value)
+        if (
+            outcome == "stop_after_last_command"
+            and value.receipt
+            and value.receipt.requested.interval_complete
+        ):
+            stop.set()
+
+    monkeypatch.setattr(ExecutionLoop, "_record_motor_tick", tick)
+
+    def camera_run(_directory, _config, **kwargs):
+        kwargs["on_camera_ready"]()
+        loop = kwargs["on_camera_ready"].__self__
+        deadline = perf_counter() + 3
+        while loop.status != "complete" and not stop.is_set() and perf_counter() < deadline:
+            sleep(0.01)
+        assert loop.status == "complete" or stop.is_set()
+
+    monkeypatch.setattr(worker, "run", camera_run)
+    if outcome == "disconnect_failure":
+        with pytest.raises(ConnectionError, match="cleanup failed"):
+            worker.main()
+    else:
+        worker.main()
+    run_status = json.loads((tmp_path / "run.json").read_text())
+    execution_status = json.loads((tmp_path / "execution.json").read_text())
+    expected = {"complete": "complete", "stop_after_last_command": "stopped", "disconnect_failure": "failed"}[
+        outcome
+    ]
+    assert run_status["state"] == execution_status["state"] == expected
+    assert run_status["outcome"] == "unknown"
+    assert run_status["keyframe"] == len(plan["keyframes"])
+    # No automatic rest motion at the end: the last command remains the demo's.
+    assert len(motor_robot.sent) == 150 + run_status["commands"]
+    assert motor_robot.sent[-1]["gripper.pos"] == plan["keyframes"][-1]["gripper"]
+    motor_robot.disconnect.assert_called_once()
+
+
 def test_live_moved_reference_retargets_real_ik_without_connecting(robot, tmp_path):
     plan = plan_for(robot)
     loop = ExecutionLoop(plan, robot, tmp_path, Event(), simulate=True)
@@ -918,6 +1037,8 @@ def test_simulation_thread_never_opens_or_writes_robot(robot, tmp_path):
         loop.close()
     assert loop.error is None
     assert loop.commands_sent > 0
+    assert loop.status == "complete"
+    assert json.loads((tmp_path / "execution.json").read_text())["state"] == "complete"
     assert len(loop._completed_ranges) == 1
     assert loop._completed_ranges[0]["recorded_demo_duration_s"] == 0
     assert loop._completed_ranges[0]["commanded_demo_duration_s"] >= 0

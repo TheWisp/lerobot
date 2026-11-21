@@ -142,7 +142,7 @@ async function startFlashEditorPreview(){
 async function selectFlashEditorLive(){
     if(flashEditor.dirty && !(await saveFlashDemo()))return;
     flashEditor.player?.pause();flashEditor.mode='live';flashEditor.entry=null;renderFlashEditor();
-    if(flashEditor.execution?.running)mountFlashEditorPreview();
+    if(flashEditor.execution?.running){if(flashEditor.execution.operation!=='rest')mountFlashEditorPreview();}
     else if(!flashEditor.recording)await startFlashEditorPreview();
 }
 async function refreshFlashDemoLibrary(){
@@ -440,8 +440,8 @@ function renderFlashEditor(){
     editorElement('workspace').classList.toggle('flash-editor-rollout',rollout);
     editorElement('live-actions').hidden=!live;editorElement('demo-actions').hidden=live||rollout;
     editorElement('edit-view').hidden=live||rollout||!doc;
-    editorElement('run-log').hidden=!rollout;
-    editorElement('output-divider').hidden=!rollout||!editorElement('run-log').open;
+    editorElement('run-log').hidden=!rollout&&!live;
+    editorElement('output-divider').hidden=editorElement('run-log').hidden||!editorElement('run-log').open;
     editorElement('live-host').hidden=!live||!flashEditor.recording;
     editorElement('preview-host').hidden=(!live&&!rollout)||!flashEditor.previewHome||!!flashEditor.recording;
     editorElement('empty').hidden=!live||!!flashEditor.recording||!!flashEditor.previewHome;
@@ -450,6 +450,7 @@ function renderFlashEditor(){
     editorElement('start').hidden=!!flashEditor.previewRunning||!!flashEditor.recording||!!flashEditor.execution?.running;
     editorElement('start').disabled=busy||!!flashEditor.trackingPid;
     editorElement('apply').disabled=busy||!!flashEditor.recording||!!flashEditor.trackingPid||!!flashEditor.execution?.running;
+    editorElement('rest').disabled=busy||!flashEditor.setup?.robot||!!flashEditor.recording||!!flashEditor.trackingPid||!!flashEditor.execution?.running|| (!!flashEditor.runActive&&!flashEditor.previewRunning);
     editorElement('run-demo').disabled=editorElement('apply').disabled||!doc?.keyframes.length||!flashEditor.library.demos.some(d=>d.id===flashEditor.entry?.id);
     editorElement('run-demo').title='Apply this demo directly to the robot';
     if(flashEditor.execution?.running)editorElement('record').disabled=true;
@@ -624,9 +625,50 @@ async function stopFlashDemo(){
         }else if(flashEditor.recording){
             editorStatus('Saving demo…');
             await editorRequest('/api/run/flash/editor/stop',{pid:flashEditor.recording.pid});
+        }else if(flashEditor.execution?.running){
+            await editorRequest('/api/run/flash/editor/execution/stop',{pid:flashEditor.execution.pid});
+            editorStatus('Robot operation stopped.');
         }else{await stopFlashEditorPreview();editorStatus('Camera stopped.');}
     }catch(error){editorStatus(error.message);}
     await pollFlashDemo();
+}
+async function returnFlashRobotToRest(){
+    if(flashEditor.busy)return;
+    if(flashEditor.dirty&&!(await saveFlashDemo()))return;
+    flashEditor.busy=true;renderFlashEditor();
+    try{
+        await editorRequest('/api/run/flash/editor/return-to-rest',{});
+        flashEditor.player?.pause();detachFlashEditorPreview();
+        flashEditor.mode='live';flashEditor.entry=null;
+        editorStatus('Returning to saved rest. Stop cancels the move.');
+    }catch(error){editorStatus(error.message);}
+    finally{flashEditor.busy=false;await pollFlashDemo();}
+}
+function flashEditorLogUrl(){
+    return flashEditor.mode==='rollout'&&flashEditor.entry?
+        `/api/run/flash/editor/rollouts/${flashEditor.entry.id}/log`:
+        flashEditor.mode==='live'?flashEditor.execution?.log_url:null;
+}
+async function refreshFlashEditorOutput(){
+    const url=flashEditorLogUrl();
+    if(!url){if(flashEditor.mode==='live')editorElement('terminal').textContent='No robot output yet.';return;}
+    const changed=flashEditor.logUrl!==url;
+    if(changed){flashEditor.logUrl=url;editorElement('terminal').textContent='Loading output…';}
+    const failed=flashEditor.mode==='rollout'?flashEditor.entry?.state==='failed':flashEditor.execution?.state==='failed';
+    const failureKey=failed?url:null;
+    if(changed||failureKey&&flashEditor.logFailure!==failureKey)editorElement('run-log').open=true;
+    flashEditor.logFailure=failureKey;
+    try{
+        const result=await editorRequest(url);
+        if(flashEditorLogUrl()!==url)return;
+        const terminal=editorElement('terminal');
+        const atEnd=terminal.scrollHeight-terminal.scrollTop-terminal.clientHeight<30;
+        if(terminal.textContent!==result.text){
+            const line=document.createElement('div');line.className='terminal-line';line.textContent=result.text;
+            terminal.replaceChildren(line);
+        }
+        if(atEnd)terminal.scrollTop=terminal.scrollHeight;
+    }catch(error){if(flashEditorLogUrl()===url)editorElement('terminal').textContent=error.message;}
 }
 async function pollFlashDemo(){
     clearTimeout(flashEditor.timer);
@@ -642,11 +684,11 @@ async function pollFlashDemo(){
         liveElement('panel').classList.toggle('flash-demo-execution',!!execution.running);
         if(editorElement('status').textContent==='Failed to fetch')editorStatus('Connected.');
         editorElement('execution').hidden=flashEditor.mode!=='live'||(!execution.running&&execution.returncode===undefined);
-        const executionState=execution.state==='complete'?'path complete — check placement':execution.state;
-        editorElement('execution').textContent=execution.running?
-            `${execution.mode==='robot'?'Robot':'Test run · no motion'} · ${executionState} · ${Math.min((execution.keyframe||0)+1,execution.total||1)} / ${execution.total||'…'}`:
-            (execution.returncode===0?'Run stopped.':execution.reason||'Run ended.');
-        if(wasExecuting&&!execution.running&&flashEditor.mode==='live')editorStatus('Rollout saved. Select it under Rollouts to inspect the run.');
+        const rest=execution.operation==='rest';
+        const executionState=execution.state==='complete'?(rest?'rest commands complete':'path complete — check placement'):execution.state;
+        editorElement('execution').textContent=execution.reason||`${rest?'Return to saved rest':execution.mode==='robot'?'Robot':'Test run · no motion'} · ${executionState||'idle'}${execution.total?` · ${Math.min((execution.keyframe||0)+1,execution.total)} / ${execution.total}`:''}${execution.running&&execution.state==='complete'&&!rest?' · Press Stop to end the run':''}`;
+        if(wasExecuting&&!execution.running&&flashEditor.mode==='live')editorStatus(execution.reason||(rest?'Rest operation ended.': 'Rollout saved. Check placement in the recorded frames.'));
+        await refreshFlashEditorOutput();
         editorElement('stop').disabled=!own?.running&&!data.preview_running&&!execution.running&&!flashEditor.rebuildPid;
         for(const id of ['robot','teleop','setup-camera','fps','matching','matcher','depth-source','settings-save'])editorElement(id).disabled=!!status.running;
         flashEditor.settingsForm?.update();
@@ -711,21 +753,17 @@ async function openFlashRollout(entry){
         if(!flashEditor.execution?.running)await stopFlashEditorPreview();
         flashEditor.player?.pause();
         flashEditor.mode='rollout';flashEditor.entry=entry;
-        editorElement('terminal').textContent='Loading output…';
         mountFlashEditorPreview();renderFlashEditor();
         flashLive.streamMode='processed';setFlashLiveView('2d');syncFlashLiveControls();
         await selectFlashHistory(entry.id);
-        editorStatus(`Recorded ${new Date(entry.created_at*1000).toLocaleString()}`);
+        editorStatus(`${entry.state==='complete'?'Path complete — check placement':entry.state} · ${new Date(entry.created_at*1000).toLocaleString()}${entry.reason?' · '+entry.reason:''}`);
         const results=await Promise.allSettled([
             editorRequest(`/api/run/flash/editor/rollouts/${entry.id}/trajectory`),
-            editorRequest(`/api/run/flash/editor/rollouts/${entry.id}/log`)]);
+            refreshFlashEditorOutput()]);
         if(!flashEditor.visible||!flashEditor.previewHome||flashEditor.mode!=='rollout'||flashEditor.entry?.id!==entry.id)return;
         if(results[0].status==='fulfilled')setFlashLiveTrajectory(results[0].value);
         else {liveElement('trajectory-tools').hidden=false;liveElement('trajectory').disabled=true;
             liveElement('trajectory-tools').title=results[0].reason.message;}
-        const line=document.createElement('div');line.className='terminal-line';
-        line.textContent=results[1].status==='fulfilled'?results[1].value.text:results[1].reason.message;
-        editorElement('terminal').replaceChildren(line);
     }catch(error){editorStatus(error.message);}
     finally{flashEditor.busy=false;renderFlashEditor();}
 }

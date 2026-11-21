@@ -383,8 +383,13 @@ class ExecutionLoop:
             try:
                 if not self.simulate and self.robot.is_connected:
                     self.robot.disconnect()
+            except Exception as exc:
+                self.error = self.error or exc
+                self.stop_event.set()
             finally:
-                if self.error is None:
+                if self.error is not None:
+                    self._status = "failed"
+                elif self.status != "complete":
                     self._status = "stopped"
                 # Startup can fail before a valid joint read. Publishing the
                 # terminal state must not require FK or delay motor cleanup.
@@ -480,17 +485,13 @@ def main():
         try:
             if motor:
                 motor.close()
+                if motor.error:
+                    raise motor.error
         except BaseException as exc:
             failure = exc
             raise
         finally:
-            state = (
-                "failed"
-                if failure
-                else "complete"
-                if motor and motor.index == len(plan["keyframes"])
-                else "stopped"
-            )
+            state = "failed" if failure else "complete" if motor and motor.status == "complete" else "stopped"
             try:
                 try:
                     journal.emit(

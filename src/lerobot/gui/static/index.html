@@ -467,7 +467,6 @@
                     <div id="flash-editor-live-actions" class="flash-editor-actions">
                         <button id="flash-editor-start" onclick="startFlashEditorPreview()">Start camera</button>
                         <button id="flash-editor-record" class="btn-launch" onclick="recordFlashDemo()">Record · teleop</button>
-                        <button id="flash-editor-stop" class="btn-stop" onclick="stopFlashDemo()" disabled>Stop</button>
                         <span class="flash-editor-toolbar-divider"></span>
                         <select id="flash-editor-apply-demo" aria-label="Demo to apply"><option value="">Choose a demo</option></select>
                         <button id="flash-editor-apply" onclick="applyFlashDemo()">Apply to robot</button>
@@ -477,18 +476,22 @@
                         <button id="flash-editor-save" onclick="keepFlashDemo()" title="Save demo name, objects and keyframes" disabled>Save changes</button><span id="flash-editor-save-state"></span>
                         <button id="flash-editor-run-demo" onclick="runSelectedFlashDemo()" disabled>Apply to robot</button>
                     </div>
+                    <div class="flash-editor-actions">
+                        <button id="flash-editor-rest" onclick="returnFlashRobotToRest()" title="Move the robot to the rest position saved in its profile. Stop cancels the move.">Return to saved rest</button>
+                        <button id="flash-editor-stop" class="btn-stop" onclick="stopFlashDemo()" disabled>Stop</button>
+                    </div>
                 </header>
                 <p id="flash-editor-status" role="status">Choose your setup in Settings, then open Live.</p>
                 <p id="flash-editor-execution" role="status" hidden></p>
                 <div id="flash-editor-live-host" hidden></div>
                 <div id="flash-editor-preview-host" hidden></div>
                 <div id="flash-editor-empty"><strong>Record a demonstration</strong><p>Use teleoperation to show the task. Stop saves it automatically in Demos.</p></div>
-                <div id="flash-editor-output-divider" class="section-resize-handle" role="separator" aria-label="Resize rollout output" aria-orientation="horizontal" aria-controls="flash-editor-run-log" tabindex="0" hidden></div>
+                <div id="flash-editor-output-divider" class="section-resize-handle" role="separator" aria-label="Resize robot output" aria-orientation="horizontal" aria-controls="flash-editor-run-log" tabindex="0" hidden></div>
                 <details id="flash-editor-run-log" hidden>
-                    <summary>Output</summary>
+                    <summary>Output · robot logs</summary>
                     <div class="run-terminal-panel">
-                        <div class="run-terminal-header"><span>Rollout output</span><span class="terminal-actions"><button class="btn-terminal" type="button" onclick="copyTerminal('flash-editor-terminal')" title="Copy" aria-label="Copy rollout log">Copy</button></span></div>
-                        <div class="run-terminal" id="flash-editor-terminal" role="log" aria-label="Rollout output"><div class="terminal-line">Loading output…</div></div>
+                        <div class="run-terminal-header"><span>Robot output</span><span class="terminal-actions"><button class="btn-terminal" type="button" onclick="copyTerminal('flash-editor-terminal')" title="Copy" aria-label="Copy robot log">Copy</button></span></div>
+                        <div class="run-terminal" id="flash-editor-terminal" role="log" aria-label="Robot output"><div class="terminal-line">No robot output yet.</div></div>
                     </div>
                 </details>
                 <div id="flash-editor-edit-view" hidden>

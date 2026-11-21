@@ -210,6 +210,7 @@ def test_apply_starts_robot_directly_and_shows_execution(
 
     async def start(request, **kwargs):
         assert kwargs["extra"]["demo_execution"]["simulate"] is False
+        (tmp_path / "output.log").write_text("Connecting to robot\n")
         monkeypatch.setattr(run, "_active_process", SimpleNamespace(pid=456, returncode=None))
         monkeypatch.setattr(flash_tracking, "_directory", tmp_path)
         atomic_json(
@@ -240,6 +241,9 @@ def test_apply_starts_robot_directly_and_shows_execution(
     expect(page.locator("#flash-editor-apply-dialog")).to_have_count(0)
     expect(page.locator("#flash-editor-rollouts button")).to_have_count(1)
     expect(page.locator("#flash-editor-execution")).to_contain_text("resetting to rest position")
+    expect(page.locator("#flash-editor-run-log")).to_be_visible()
+    expect(page.locator("#flash-editor-terminal")).to_contain_text("Connecting to robot")
+    expect(page.locator("#flash-editor-rest")).to_be_disabled()
     atomic_json(
         tmp_path / "execution.json",
         {"mode": "robot", "state": "waiting: object_1 needs a pose", "keyframe": 0, "total": 3},
@@ -250,4 +254,61 @@ def test_apply_starts_robot_directly_and_shows_execution(
         {"mode": "robot", "state": "complete", "keyframe": 3, "total": 3},
     )
     expect(page.locator("#flash-editor-execution")).to_contain_text("path complete — check placement")
+    expect(page.locator("#flash-editor-rest")).to_be_disabled()
+    process = flash_editor._execution_process
+    process.returncode = 0
+    expect(page.locator("#flash-editor-rest")).to_be_enabled()
+    expect(page.locator("#flash-editor-execution")).to_contain_text("path complete — check placement")
+    # A subsequent setup failure must reopen the same output panel and show
+    # the saved traceback even when no demo command was issued.
+    page.locator("#flash-editor-run-log summary").click()
+    (tmp_path / "output.log").write_text("ConnectionError: wrist_roll (id=6): no status packet\n")
+    atomic_json(
+        tmp_path / "execution.json", {"mode": "robot", "state": "failed", "reason": "no status packet"}
+    )
+    process.returncode = 1
+    expect(page.locator("#flash-editor-terminal")).to_be_visible()
+    expect(page.locator("#flash-editor-terminal")).to_contain_text("wrist_roll (id=6)")
+    expect(page.locator("#flash-editor-execution")).to_contain_text("no status packet")
+    page.evaluate("window._copyTextToClipboard = async text => {window.copiedRobotLog=text; return true;}")
+    page.get_by_role("button", name="Copy robot log").click()
+    assert "wrist_roll (id=6)" in page.evaluate("window.copiedRobotLog")
     assert not errors
+
+
+def test_saved_failure_keeps_output_and_rest_controls_within_view(gui_page, prepared, tmp_path):
+    from tests.policies.flash.test_tracking_history import new_history, submit
+
+    identity = "rollout-" + "d" * 32
+    directory = flash_editor.EDITOR_DIR / "rollouts" / identity
+    history = new_history(directory / "camera")
+    submit(history, 0, 1)
+    history.close()
+    atomic_json(
+        directory / "run.json",
+        {
+            "id": identity,
+            "name": "Failed setup",
+            "state": "failed",
+            "reason": "No motor reply",
+            "created_at": 1,
+        },
+    )
+    (directory / "output.log").write_text("Robot configuration failed\n" + "traceback detail\n" * 30)
+    page = gui_page
+    page.get_by_role("button", name="FLASH", exact=True).click()
+    page.get_by_role("button", name="Demo editor", exact=True).click()
+    page.locator("#flash-editor-rollouts button").click()
+    expect(page.locator("#flash-editor-terminal")).to_be_visible()
+    expect(page.locator("#flash-editor-terminal")).to_contain_text("Robot configuration failed")
+    expect(page.locator("#flash-editor-status")).to_contain_text("No motor reply")
+    expect(page.locator("#flash-editor-rest")).to_be_visible()
+    expect(page.locator("#flash-editor-stop")).to_be_visible()
+    divider = page.locator("#flash-editor-output-divider")
+    divider.focus()
+    divider.press("ArrowUp")
+    terminal = page.locator("#flash-editor-run-log").bounding_box()
+    workspace = page.locator("#flash-editor-main").bounding_box()
+    assert terminal["y"] + terminal["height"] <= workspace["y"] + workspace["height"]
+    assert page.locator("#flash-editor-preview-host").bounding_box()["height"] >= 120
+    page.locator("#flash-editor-workspace").screenshot(path=str(tmp_path / "saved-failure-output.png"))

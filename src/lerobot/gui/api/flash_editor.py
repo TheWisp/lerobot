@@ -669,6 +669,66 @@ _execution_process = None
 _execution_directory = None
 
 
+@router.post("/return-to-rest")
+async def return_to_rest():
+    """Launch one cancellable rest move under the same ownership as demo execution."""
+    global _execution_process, _execution_directory
+
+    def prepare():
+        profile, _ = _profiles(_read_settings(), require_teleop=False)
+        if not profile.get("rest_position"):
+            raise HTTPException(400, "Save a rest position in the robot profile before returning to rest")
+        directory = EDITOR_DIR / "rest-moves" / uuid.uuid4().hex
+        atomic_json(directory / "config.json", {"robot": profile})
+        atomic_json(directory / "execution.json", {"operation": "rest", "mode": "robot", "state": "starting"})
+        return directory
+
+    async with run._launch_lock:
+        # An idle camera preview may be released, but a demo retains motor
+        # ownership until its process exits, including after path completion.
+        if _preview_process is not _execution_process:
+            await stop_preview()
+        run._ensure_no_active_process()
+        directory = await asyncio.get_running_loop().run_in_executor(_io, prepare)
+        from .robot import release_preview_cameras
+
+        await asyncio.get_running_loop().run_in_executor(_io, release_preview_cameras)
+        await run._launch_subprocess(
+            [sys.executable, "-u", "-m", "lerobot.policies.flash.demo_rest_worker", str(directory)],
+            command="flash_return_to_rest",
+            config={},
+            output_log=directory / "output.log",
+        )
+        _execution_process = run._active_process
+        _execution_directory = directory
+    return {"pid": _execution_process.pid}
+
+
+@router.post("/execution/stop")
+async def stop_execution(request: StopRecording):
+    async with run._launch_lock:
+        if (
+            _execution_process is not None
+            and _execution_process.pid == request.pid
+            and run._active_process is _execution_process
+            and _execution_process.returncode is None
+        ):
+            return await run.stop_process()
+    raise HTTPException(409, "This robot operation is no longer running")
+
+
+@router.get("/execution/log")
+async def execution_log(pid: int):
+    if _execution_process is None or _execution_process.pid != pid:
+        raise HTTPException(409, "Robot operation changed; refresh its output")
+    path = _execution_directory / "output.log"
+
+    def read():
+        return {"text": path.read_text(errors="replace") if path.exists() else "Waiting for robot output…"}
+
+    return await asyncio.get_running_loop().run_in_executor(_io, read)
+
+
 @router.post("/run-demo")
 async def run_demo(request: PrepareDemo):
     """One user action; preparation and validation still precede robot launch."""
@@ -971,11 +1031,16 @@ async def execution():
             return {"running": False}
         path = _execution_directory / "execution.json"
         value = json.loads(path.read_text()) if path.exists() else {"state": "starting"}
+        if _execution_process.returncode not in (None, 0) and value.get("state") != "failed":
+            value.update(
+                state="failed", reason="Robot operation exited unexpectedly. See Output for details."
+            )
         return {
             **value,
             "running": _execution_process.returncode is None,
             "pid": _execution_process.pid,
             "returncode": _execution_process.returncode,
+            "log_url": f"/api/run/flash/editor/execution/log?pid={_execution_process.pid}",
         }
 
     return await asyncio.get_running_loop().run_in_executor(_io, read)
