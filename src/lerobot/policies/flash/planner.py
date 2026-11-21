@@ -351,7 +351,12 @@ class JointPlanner:
                     raise DemonstratedEntryDiscontinuityError(
                         f"demonstrated entry exceeds joint speed limit at tick {tick}"
                     )
-                raise InfeasibleTrajectoryError(f"joint speed exceeds configured limit at tick {tick}")
+                joint = int(np.argmax(speed / self.limits.joint_speed_deg_s))
+                raise InfeasibleTrajectoryError(
+                    f"joint speed exceeds configured limit at tick {tick}: "
+                    f"{self.arm_joint_names[joint]} needs {speed[joint]:.1f} deg/s "
+                    f"(limit {self.limits.joint_speed_deg_s[joint]:.1f})"
+                )
             reached = transform(self.kinematics.forward_kinematics(solved))
             translation_error = np.linalg.norm(reached[:3, 3] - pose[:3, 3])
             angle_error = np.arccos(np.clip((np.trace(reached[:3, :3].T @ pose[:3, :3]) - 1) / 2, -1, 1))
@@ -359,7 +364,10 @@ class JointPlanner:
                 translation_error > self.limits.position_error_m
                 or angle_error > self.limits.rotation_error_rad
             ):
-                raise InfeasibleTrajectoryError(f"IK goal error exceeds configured tolerance at tick {tick}")
+                raise InfeasibleTrajectoryError(
+                    f"IK goal error exceeds configured tolerance at tick {tick}: "
+                    f"{translation_error * 1000:.1f} mm / {np.rad2deg(angle_error):.1f} deg"
+                )
             command = {
                 f"{name}.pos": float(value) for name, value in zip(self.arm_joint_names, solved, strict=True)
             }
