@@ -17,6 +17,7 @@ from .experimental_surface_session import GrowingSurfaceConfig, GrowingSurfaceSe
 from .flow_paths import DenseFlow, FlowPaths
 from .motion_groups import SceneMotionGroups
 from .object_group_association import ObjectGroupAssociation, ObjectMotionSource
+from .pipeline_version import PIPELINE_VERSION
 from .scene_depth import SceneDepth
 from .scene_groups import ScenePointTracker
 from .shared_image_tracking import SharedFrameTracker
@@ -353,7 +354,13 @@ class SurfaceFrameSession:
         references = self.references
         reference_frames = self.reference_frames
         object_pool = self.object_pool
-        row = {"frame": frame.frame_id, "time_s": frame.source_time_s, "mask_ms": mask_ms, "objects": {}}
+        row = {
+            "pipeline_version": PIPELINE_VERSION,
+            "frame": frame.frame_id,
+            "time_s": frame.source_time_s,
+            "mask_ms": mask_ms,
+            "objects": {},
+        }
         if shared is not None:
             scene = shared.update(frame, masks)
             row["shared_matching"] = dict(shared.diagnostics)

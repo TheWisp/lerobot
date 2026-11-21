@@ -6,6 +6,8 @@ import struct
 import cv2
 import numpy as np
 
+from lerobot.policies.flash.pipeline_version import PIPELINE_VERSION
+
 from .flash_pose_overlay import reference_axes
 
 
@@ -177,6 +179,7 @@ def live_scene_packet(
             "frame": frame.frame_id,
             "time_s": frame.source_time_s,
             "method": live.method,
+            "pipeline_version": PIPELINE_VERSION,
             "objects": objects,
             "scene_group_tracks": (
                 group_overlay.update(

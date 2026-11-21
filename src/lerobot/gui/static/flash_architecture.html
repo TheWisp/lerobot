@@ -1431,6 +1431,15 @@
       </section>
       <section class="panel" id="demo-execution">
         <h2>Demo editor → robot action</h2>
+        <p>Computed results carry the integer <code>PIPELINE_VERSION</code> from
+          <code>policies/flash/pipeline_version.py</code>. Increment it whenever processing,
+          grouping, association, pose estimation or saved display evidence changes.
+          Opening a demo compares this version, object selection, tracking settings and depth source;
+          missing or outdated results rebuild from the recorded inputs. Apply waits for a successful
+          rebuild and prepares a new plan. The server rejects outdated results and plans even if a
+          client bypasses this flow. Failed rebuilds require an explicit Track retry.
+          Recorded rollout and live-history results retain their original version and evidence;
+          a server restart does not rewrite what happened during a run.</p>
         <p>The editor obtains a live object pose from the tracker above. A recorded robot episode
           supplies marked tool poses and gripper commands; each tool pose is stored relative to
           its selected object or the robot base.</p>

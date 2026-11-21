@@ -23,8 +23,9 @@ from lerobot.policies.flash.demo_document import (
     document_path,
     load_document,
     save_document,
-    tracking_selection,
+    tracking_stale_reason,
 )
+from lerobot.policies.flash.pipeline_version import PIPELINE_VERSION, is_current
 
 from . import run
 
@@ -387,39 +388,97 @@ class SaveDemo(BaseModel):
     document: DemoDocument
 
 
+def _tracking_result(dataset, episode, document, setup):
+    """Read local artifacts only. Starting a rebuild is always a POST."""
+    folder = document_path(dataset, episode).with_suffix("")
+    latest = folder / "latest.json"
+    if not latest.exists():
+        return None, {"state": "none", "current_pipeline_version": PIPELINE_VERSION}
+    destination = folder / json.loads(latest.read_text())["directory"]
+    if destination.parent != folder:
+        raise ValueError("Invalid tracking output directory")
+    status = json.loads((destination / "status.json").read_text())
+    status.update(result_id=destination.name, current_pipeline_version=PIPELINE_VERSION)
+    active = _tracking_job and _tracking_job[0] == destination and _tracking_job[1].returncode is None
+    if active:
+        status["pid"] = _tracking_job[1].pid
+        if status["state"] == "complete":
+            status["state"] = "running"  # Wait for the worker to release Run before Apply.
+    elif status["state"] in {"loading", "running"}:
+        status.update(state="failed", reason="Tracking worker stopped. Track again to retry.")
+    path = destination / "input.json"
+    inputs = json.loads(path.read_text()) if path.exists() else {}
+    reason = tracking_stale_reason(
+        inputs,
+        document,
+        settings=setup.model_dump(mode="json")["pipeline_settings"],
+        depth_source=setup.depth_source,
+    )
+    status.update(
+        pipeline_version=inputs.get("pipeline_version"), stale=reason is not None, stale_reason=reason
+    )
+    return destination, status
+
+
 class TrackDemo(BaseModel):
     dataset_id: str
     episode: int = Field(ge=0)
     revision: int = Field(ge=1)
+    ensure_current: bool = False
 
 
 @router.post("/track")
 async def track(request: TrackDemo):
+    return await _track_demo(_dataset(request.dataset_id), request)
+
+
+async def _track_demo(dataset, request):
     global _tracking_job
-    dataset = _dataset(request.dataset_id)
     async with run._launch_lock:
-        run._ensure_no_active_process()
 
-        def prepare():
-            from lerobot.policies.flash.demo_tracking import DemoFrames
-
+        def inspect():
             document, _ = load_document(dataset, request.episode)
             if document.revision != request.revision:
                 raise ValueError("Save the current edit before tracking")
             if not document.objects:
                 raise ValueError("Select at least one object")
-            frames = DemoFrames(dataset, request.episode, document)
             setup = _read_settings()
+            _, status = _tracking_result(dataset, request.episode, document, setup)
+            return document, setup, status
+
+        try:
+            document, setup, status = await asyncio.get_running_loop().run_in_executor(_io, inspect)
+        except (KeyError, ValueError, OSError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        # Join an existing job; never launch duplicate work or retry a failed
+        # current-version job forever. The explicit Track button retries it.
+        if request.ensure_current and not status.get("stale") and status["state"] != "none":
+            return status
+        run._ensure_no_active_process()
+
+        def prepare():
+            from lerobot.policies.flash.demo_tracking import DemoFrames
+
+            frames = DemoFrames(dataset, request.episode, document)
             frames.require_depth_source(setup.depth_source)
             folder = document_path(dataset, request.episode).with_suffix("")
             destination = folder / uuid.uuid4().hex
-            atomic_json(folder / "latest.json", {"directory": destination.name})
+            atomic_json(
+                destination / "input.json",
+                {
+                    "pipeline_version": PIPELINE_VERSION,
+                    "document": document.model_dump(mode="json"),
+                    "settings": setup.model_dump(mode="json")["pipeline_settings"],
+                    "depth_source": setup.depth_source,
+                },
+            )
             atomic_json(destination / "status.json", {"state": "loading", "done": 0})
             atomic_json(destination / "settings.json", setup.pipeline_settings)
-            return destination, setup.depth_source
+            atomic_json(folder / "latest.json", {"directory": destination.name})
+            return destination
 
         try:
-            destination, depth_source = await asyncio.get_running_loop().run_in_executor(_io, prepare)
+            destination = await asyncio.get_running_loop().run_in_executor(_io, prepare)
         except (KeyError, ValueError, OSError) as exc:
             raise HTTPException(400, str(exc)) from exc
         args = [
@@ -437,11 +496,29 @@ async def track(request: TrackDemo):
             "--settings",
             str(destination / "settings.json"),
             "--depth-source",
-            depth_source,
+            setup.depth_source,
         ]
-        await run._launch_subprocess(args, command="flash_editor", config=request.model_dump())
+        try:
+            await run._launch_subprocess(args, command="flash_editor", config=request.model_dump())
+        except BaseException:
+            await asyncio.get_running_loop().run_in_executor(
+                _io,
+                partial(
+                    atomic_json,
+                    destination / "status.json",
+                    {"state": "failed", "reason": "Tracking could not start. Track again to retry."},
+                ),
+            )
+            raise
         _tracking_job = (destination, run._active_process)
-        return {"pid": run._active_process.pid}
+        return {
+            "state": "loading",
+            "pid": run._active_process.pid,
+            "result_id": destination.name,
+            "pipeline_version": PIPELINE_VERSION,
+            "current_pipeline_version": PIPELINE_VERSION,
+            "stale": False,
+        }
 
 
 @router.post("/cancel-tracking")
@@ -461,26 +538,7 @@ async def tracking(dataset_id: str, episode: int = 0, frame: int | None = None):
 
     def read():
         document, _ = load_document(dataset, episode)
-        folder = document_path(dataset, episode).with_suffix("")
-        latest = folder / "latest.json"
-        if not latest.exists():
-            return {"state": "none"}
-        destination = folder / json.loads(latest.read_text())["directory"]
-        if destination.parent != folder:
-            raise ValueError("Invalid tracking output directory")
-        status = json.loads((destination / "status.json").read_text())
-        status["result_id"] = destination.name
-        if _tracking_job and _tracking_job[0] == destination:
-            proc = _tracking_job[1]
-            status["pid"] = proc.pid
-            if proc.returncode is not None and status["state"] in {"loading", "running"}:
-                status.update(state="failed", reason="Tracking worker stopped. See Run output.")
-        inputs = destination / "input.json"
-        if inputs.exists():
-            previous = json.loads(inputs.read_text())["document"]
-            status["stale"] = tracking_selection(DemoDocument.model_validate(previous)) != tracking_selection(
-                document
-            )
+        destination, status = _tracking_result(dataset, episode, document, _read_settings())
         if frame is not None and status["state"] == "complete" and not status.get("stale"):
             packet = destination / "frames" / f"{frame:06d}.json"
             if packet.exists():
@@ -508,20 +566,8 @@ async def display_frames(
         document, source = load_document(dataset, episode)
         if start + count > source["length"]:
             raise ValueError("Display interval is outside the episode")
-        folder = document_path(dataset, episode).with_suffix("")
-        latest = folder / "latest.json"
-        if not latest.exists():
-            return Response(json.dumps([None] * count), media_type="application/json")
-        destination = folder / json.loads(latest.read_text())["directory"]
-        if destination.parent != folder:
-            raise ValueError("Invalid tracking output directory")
-        status = json.loads((destination / "status.json").read_text())
-        if status["state"] != "complete":
-            return Response(json.dumps([None] * count), media_type="application/json")
-        previous = DemoDocument.model_validate(
-            json.loads((destination / "input.json").read_text())["document"]
-        )
-        if tracking_selection(previous) != tracking_selection(document):
+        destination, status = _tracking_result(dataset, episode, document, _read_settings())
+        if status["state"] != "complete" or status.get("stale"):
             return Response(json.dumps([None] * count), media_type="application/json")
         if scene and not status.get("display_schema"):
             raise ValueError("Track this demo again to save processed depth and surfaces")
@@ -821,6 +867,8 @@ async def apply_demo(request: ApplyDemo):
 
         folder = EDITOR_DIR / "plans" / request.plan
         plan = json.loads((folder / "plan.json").read_text())
+        if not is_current(plan):
+            raise ValueError("Tracking code changed; rebuild tracking and prepare the demo again")
         if plan.get("version") != PLAN_VERSION:
             raise ValueError("Execution rules changed; prepare the demo again")
         source = json.loads((folder / "source.json").read_text())
@@ -878,6 +926,7 @@ async def apply_demo(request: ApplyDemo):
             destination / "run.json",
             {
                 "schema_version": 1,
+                "pipeline_version": PIPELINE_VERSION,
                 "id": identity,
                 "name": source["entry"]["name"],
                 "demo_id": source["entry"]["id"],

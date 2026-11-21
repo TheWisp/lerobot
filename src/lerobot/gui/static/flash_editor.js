@@ -34,6 +34,7 @@ async function showFlashEditor() {
         await loadFlashEditorSettings();
         await refreshFlashDemoLibrary();
         await pollFlashDemo();
+        if(flashEditor.mode==='demo'&&flashEditor.dataset)void pollFlashDemoTracking(true);
     }catch(error){editorStatus(error.message);}
     renderFlashEditor();
 }
@@ -68,6 +69,7 @@ async function saveFlashEditorSettings(){
         flashEditor.setup=await editorRequest('/api/run/flash/editor/settings',setup,'PUT');
         editorElement('settings-dialog').close();
         editorStatus('Setup saved.');renderFlashEditor();
+        if(flashEditor.mode==='demo')void pollFlashDemoTracking(true);
     }catch(error){editorElement('settings-status').textContent=error.message;}
 }
 async function checkFlashDemoGeometry(){
@@ -88,7 +90,7 @@ async function checkFlashDemoGeometry(){
     renderFlashEditor();
 }
 function hideFlashEditor() {
-    flashEditor.visible=false;
+    flashEditor.visible=false;flashEditor.generation++;
     editorElement('workspace').hidden=true;
     flashEditor.player?.pause();
     clearTimeout(flashEditor.trackingTimer);
@@ -246,7 +248,7 @@ async function selectFlashEditorEpisode(episode=0) {
         editorElement('save-state').textContent='';
         renderFlashEditor();const playable=openFlashDemoPlayer();
         void loadFlashDemoTrajectory();
-        void pollFlashDemoTracking();
+        void pollFlashDemoTracking(true);
         if(playable)editorStatus(data.source.has_robot?'Select up to three objects, then mark keyframes.':'This replay contains no robot actions.');
         return true;
     }catch(error){editorStatus(error.message);return false;}
@@ -615,7 +617,11 @@ async function recordFlashDemo(){
 async function stopFlashDemo(){
     editorElement('stop').disabled=true;
     try{
-        if(flashEditor.recording){
+        if(flashEditor.rebuildPid){
+            flashEditor.generation++;
+            await editorRequest('/api/run/flash/editor/cancel-tracking',{pid:flashEditor.rebuildPid});
+            editorStatus('Tracking stopped.');
+        }else if(flashEditor.recording){
             editorStatus('Saving demo…');
             await editorRequest('/api/run/flash/editor/stop',{pid:flashEditor.recording.pid});
         }else{await stopFlashEditorPreview();editorStatus('Camera stopped.');}
@@ -641,7 +647,7 @@ async function pollFlashDemo(){
             `${execution.mode==='robot'?'Robot':'Test run · no motion'} · ${executionState} · ${Math.min((execution.keyframe||0)+1,execution.total||1)} / ${execution.total||'…'}`:
             (execution.returncode===0?'Run stopped.':execution.reason||'Run ended.');
         if(wasExecuting&&!execution.running&&flashEditor.mode==='live')editorStatus('Rollout saved. Select it under Rollouts to inspect the run.');
-        editorElement('stop').disabled=!own?.running&&!data.preview_running&&!execution.running;
+        editorElement('stop').disabled=!own?.running&&!data.preview_running&&!execution.running&&!flashEditor.rebuildPid;
         for(const id of ['robot','teleop','setup-camera','fps','matching','matcher','depth-source','settings-save'])editorElement(id).disabled=!!status.running;
         flashEditor.settingsForm?.update();
         if(own?.running){flashEditor.mode='live';await showFlashDemoViewer();}
@@ -666,15 +672,35 @@ async function applyFlashDemo(id=editorElement('apply-demo').value){
     if(flashEditor.busy)return;
     if(!id){editorStatus('Choose a demo to apply.');return;}
     if(flashEditor.dirty&&!(await saveFlashDemo()))return;
-    flashEditor.busy=true;renderFlashEditor();editorStatus('Starting robot…');
+    flashEditor.busy=true;renderFlashEditor();editorStatus('Checking demo tracking…');
+    const generation=flashEditor.generation;
     try{
+        if(flashEditor.execution?.running)throw new Error('Stop the current run before applying another demo.');
+        await stopFlashEditorPreview();
+        const entry=flashEditor.library.demos.find(d=>d.id===id);
+        if(!entry)throw new Error('Choose a saved demo.');
+        const dataset=await editorRequest('/api/datasets',{local_path:entry.root});
+        const {document:doc}=await editorRequest(`/api/run/flash/editor/document?dataset_id=${encodeURIComponent(dataset.id)}&episode=${entry.episode}`);
+        let status=await editorRequest('/api/run/flash/editor/track',{
+            dataset_id:dataset.id,episode:entry.episode,revision:doc.revision,ensure_current:true});
+        while(['loading','running'].includes(status.state)){
+            flashEditor.rebuildPid=status.pid;editorElement('stop').disabled=false;
+            editorElement('cancel-track').hidden=false;
+            editorStatus(`Updating demo tracking: ${status.done||0}${status.total?' / '+status.total:''} frames…`);
+            await new Promise(resolve=>setTimeout(resolve,1000));
+            if(!flashEditor.visible||generation!==flashEditor.generation)throw new Error('Apply cancelled. Click Apply again when ready.');
+            status=await editorRequest(`/api/run/flash/editor/tracking?dataset_id=${encodeURIComponent(dataset.id)}&episode=${entry.episode}`);
+        }
+        if(status.state!=='complete'||status.stale)throw new Error(status.stale_reason||status.reason||'Tracking must complete. Open the demo and Track again.');
+        if(!flashEditor.visible||generation!==flashEditor.generation)throw new Error('Apply cancelled. Click Apply again when ready.');
+        editorStatus('Starting robot…');
         await editorRequest('/api/run/flash/editor/run-demo',{id});
         flashEditor.player?.pause();flashEditor.mode='live';flashEditor.entry=null;renderFlashEditor();
         editorElement('apply-demo').value=id;
         mountFlashEditorPreview();
         editorStatus('Running robot. Rollout is being saved. Stop ends execution.');
     }catch(error){editorStatus(error.message);}
-    finally{flashEditor.busy=false;renderFlashEditor();void pollFlashDemo();}
+    finally{flashEditor.rebuildPid=null;flashEditor.busy=false;renderFlashEditor();void pollFlashDemo();}
 }
 
 async function openFlashRollout(entry){
@@ -782,27 +808,41 @@ async function trackFlashDemo(){
     }catch(error){editorElement('tracking-status').textContent=error.message;}
     renderFlashEditor();
 }
-async function pollFlashDemoTracking(){
+async function pollFlashDemoTracking(ensureCurrent=false){
     clearTimeout(flashEditor.trackingTimer);
     if(!flashEditor.dataset)return;
     const generation=flashEditor.generation;
     try{
-        const status=await editorRequest(`/api/run/flash/editor/tracking?dataset_id=${encodeURIComponent(flashEditor.dataset.id)}&episode=${flashEditor.episode}`);
+        let status=await editorRequest(`/api/run/flash/editor/tracking?dataset_id=${encodeURIComponent(flashEditor.dataset.id)}&episode=${flashEditor.episode}`);
         if(generation!==flashEditor.generation)return;
+        if(ensureCurrent&&!flashEditor.dirty&&flashEditor.document?.revision&&flashEditor.document.objects.length&&
+            (status.stale||status.state==='none')){
+            editorElement('tracking-status').textContent=(status.stale_reason||'Tracking missing')+'. Updating…';
+            flashEditor.overlay=null;flashEditor.displaySchema=false;flashEditor.displayResult=null;
+            openFlashDemoPlayer();
+            status=await editorRequest('/api/run/flash/editor/track',{
+                dataset_id:flashEditor.dataset.id,episode:flashEditor.episode,revision:flashEditor.document.revision,ensure_current:true});
+            if(generation!==flashEditor.generation)return;
+        }
         const running=['loading','running'].includes(status.state);
+        if((status.stale||status.state!=='complete')&&flashEditor.displayResult){
+            flashEditor.overlay=null;flashEditor.displayResult=null;openFlashDemoPlayer();
+        }
         flashEditor.trackingPid=running?status.pid:null;
         editorElement('cancel-track').hidden=!running;
-        editorElement('tracking-status').textContent=status.stale?'Object selection changed. Track again.':status.state==='complete'?'Tracking complete. Scrub to inspect masks and poses.':status.state==='failed'?status.reason:running?`Tracking ${status.done||0}${status.total?' / '+status.total:''} frames…`:'';
+        editorElement('tracking-status').textContent=status.stale?`${status.stale_reason}. Updating required.`:status.state==='complete'?`Tracking complete · pipeline v${status.pipeline_version}. Scrub to inspect masks and poses.`:status.state==='failed'?status.reason:running?`Tracking ${status.done||0}${status.total?' / '+status.total:''} frames…`:'';
         flashEditor.displaySchema=status.state==='complete'&&!status.stale&&!!status.display_schema;
         if(status.state==='complete'&&!status.stale&&flashEditor.displayResult!==status.result_id){
             flashEditor.displayResult=status.result_id;openFlashDemoPlayer();
         }
         renderFlashEditor();
-        if(running && flashEditor.visible)flashEditor.trackingTimer=setTimeout(pollFlashDemoTracking,1000);
+        if(running && flashEditor.visible)flashEditor.trackingTimer=setTimeout(()=>pollFlashDemoTracking(),1000);
     }catch(error){editorElement('tracking-status').textContent=error.message;}
 }
 async function cancelFlashDemoTracking(){
-    if(!flashEditor.trackingPid)return;
-    try{await editorRequest('/api/run/flash/editor/cancel-tracking',{pid:flashEditor.trackingPid});await pollFlashDemoTracking();}
+    const pid=flashEditor.rebuildPid||flashEditor.trackingPid;
+    if(!pid)return;
+    if(flashEditor.rebuildPid)flashEditor.generation++;
+    try{await editorRequest('/api/run/flash/editor/cancel-tracking',{pid});await pollFlashDemoTracking();}
     catch(error){editorElement('tracking-status').textContent=error.message;}
 }

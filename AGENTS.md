@@ -153,6 +153,10 @@ how several defects went unnoticed for months.
   change when altering frame inputs, group evidence, fitting, pose publication,
   or surface growth. Keep it descriptive of code that runs; put proposed
   behavior elsewhere.
+  Increment `PIPELINE_VERSION` in `src/lerobot/policies/flash/pipeline_version.py`
+  when frame processing, grouping, association, pose estimation or saved display
+  evidence changes. The editor uses it to invalidate and rebuild saved demo results;
+  file schema and execution-plan versions do not replace this behavior version.
 - **`scripts/`** — CLI entry points (`lerobot-train`, `lerobot-eval`, `lerobot-record`, etc.), mapped in `pyproject.toml [project.scripts]`.
 - **`configs/`** — Dataclass configs parsed by draccus. `train.py` has `TrainPipelineConfig` (top-level). `policies.py` has `PreTrainedConfig` base. Polymorphism via `draccus.ChoiceRegistry` with `@register_subclass("name")` decorators.
 - **`policies/`** — Each policy in its own subdir. All inherit `PreTrainedPolicy` (`nn.Module` + `HubMixin`) from `pretrained.py`. Factory with lazy imports in `factory.py`.

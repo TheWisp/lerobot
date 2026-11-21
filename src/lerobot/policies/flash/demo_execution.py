@@ -14,12 +14,13 @@ from pathlib import Path
 
 import numpy as np
 
-from .demo_document import DemoDocument, tracking_selection
+from .demo_document import tracking_stale_reason
 from .execution import TimedAction
 from .experimental_surface_session import PoseHint
 from .geometry import transform
 from .live_surface_session import LIVE_METHOD, LiveSurfaceSession
 from .perception import RGBDFrame
+from .pipeline_version import PIPELINE_VERSION
 from .surface_kalman import PoseKalmanFilter
 
 PLAN_VERSION = 2
@@ -57,10 +58,11 @@ def compile_demo(dataset, episode, document, tracking_directory: Path, robot, ca
         raise ValueError("The selected camera differs from the demo camera")
     inputs = json.loads((tracking_directory / "input.json").read_text())
     status = json.loads((tracking_directory / "status.json").read_text())
-    if status["state"] != "complete" or tracking_selection(
-        DemoDocument.model_validate(inputs["document"])
-    ) != tracking_selection(document):
-        raise ValueError("Track the current object selection before applying this demo")
+    if status["state"] != "complete":
+        raise ValueError("Tracking must complete before applying this demo")
+    reason = tracking_stale_reason(inputs, document)
+    if reason:
+        raise ValueError(f"{reason}; rebuild tracking before applying this demo")
     # One visible reference frame makes the demo->run object coordinates
     # reproducible. Later initialization would require another saved reference.
     roles = {key.reference for key in document.keyframes} - {"world"}
@@ -135,6 +137,7 @@ def compile_demo(dataset, episode, document, tracking_directory: Path, robot, ca
         previous = key
     return {
         "version": PLAN_VERSION,
+        "pipeline_version": PIPELINE_VERSION,
         "document": document.model_dump(mode="json"),
         "robot_geometry": robot.geometry.to_dict(),
         "robot_cartesian": model.description(),

@@ -27,6 +27,7 @@ from lerobot.policies.flash.demo_execution import (
 from lerobot.policies.flash.demo_live_worker import ExecutionLoop
 from lerobot.policies.flash.demo_tracking import track_demo
 from lerobot.policies.flash.live_surface_session import LIVE_METHOD
+from lerobot.policies.flash.pipeline_version import PIPELINE_VERSION
 from lerobot.policies.flash.surface_session_config import defaults
 from lerobot.robots.so107_follower_gravity import SO107FollowerGravity, SO107FollowerGravityRobotConfig
 from tests.policies.flash.test_demo_tracking import Masks, rgbd_episode  # noqa: F401
@@ -625,7 +626,12 @@ def make_annotated_demo(robot, tmp_path, states=None, *, gripper_commands=None):
     folder = tmp_path / "tracked"
     atomic_json(
         folder / "input.json",
-        {"document": document.model_dump(mode="json"), "settings": defaults(), "depth_source": "sensor"},
+        {
+            "pipeline_version": PIPELINE_VERSION,
+            "document": document.model_dump(mode="json"),
+            "settings": defaults(),
+            "depth_source": "sensor",
+        },
     )
     atomic_json(
         folder / "status.json", {"state": "complete", "reference_frames": {o.id: 0 for o in document.objects}}

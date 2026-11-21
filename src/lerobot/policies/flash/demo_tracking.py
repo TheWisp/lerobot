@@ -17,6 +17,7 @@ import numpy as np
 from .demo_document import DemoDocument, atomic_json, load_document
 from .live_surface_session import LIVE_METHOD, LiveSurfaceSession
 from .perception import RGBDFrame
+from .pipeline_version import PIPELINE_VERSION
 from .surface_session_config import defaults, validate
 
 
@@ -142,12 +143,21 @@ def track_demo(
     destination.mkdir(parents=True, exist_ok=True)
     atomic_json(
         destination / "input.json",
-        {"document": document.model_dump(mode="json"), "settings": settings, "depth_source": depth_source},
+        {
+            "pipeline_version": PIPELINE_VERSION,
+            "document": document.model_dump(mode="json"),
+            "settings": settings,
+            "depth_source": depth_source,
+        },
     )
     depth_model = make_depth_source(depth_source)
     session = LiveSurfaceSession(settings, source)
     group_overlay = SceneGroupOverlay()
-    metadata = {"total": frames.length - document.reference_frame, "done": 0}
+    metadata = {
+        "pipeline_version": PIPELINE_VERSION,
+        "total": frames.length - document.reference_frame,
+        "done": 0,
+    }
     atomic_json(destination / "status.json", {**metadata, "state": "running"})
     previous_time = None
     result = None
@@ -192,6 +202,7 @@ def track_demo(
             scenes.mkdir(exist_ok=True)
             (scenes / f"{frame.frame_id:06d}.bin.gz").write_bytes(gzip.compress(packet, compresslevel=1))
             result = {
+                "pipeline_version": PIPELINE_VERSION,
                 "frame": frame.frame_id,
                 "observation_frame": frame.frame_id,
                 "time_s": frame.source_time_s,

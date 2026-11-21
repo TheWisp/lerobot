@@ -221,11 +221,14 @@ async def start_worker(
                 # safe-destruct: replace only this application's stopped rolling buffer.
                 shutil.rmtree(recent)
             recent.mkdir(parents=True)
-            (recent / "config.json").write_text(req.model_dump_json())
+            from lerobot.policies.flash.pipeline_version import PIPELINE_VERSION
+
+            config = {**req.model_dump(), "pipeline_version": PIPELINE_VERSION}
+            (recent / "config.json").write_text(json.dumps(config))
             (directory / "config.json").write_text(
                 json.dumps(
                     {
-                        **req.model_dump(),
+                        **config,
                         "history_directory": str(recent),
                         **(extra or {}),
                         **({"history_seconds": None} if output_directory else {}),

@@ -155,6 +155,21 @@ def save_document(dataset, episode: int, document: DemoDocument) -> DemoDocument
     return saved
 
 
+def tracking_stale_reason(inputs, document, *, settings=None, depth_source=None):
+    """One freshness rule for display, regeneration and execution preparation."""
+    from .pipeline_version import is_current
+
+    if not is_current(inputs):
+        return "Tracking code changed"
+    if tracking_selection(DemoDocument.model_validate(inputs["document"])) != tracking_selection(document):
+        return "Object selection changed"
+    if settings is not None and inputs.get("settings") != settings:
+        return "Tracking settings changed"
+    if depth_source is not None and inputs.get("depth_source") != depth_source:
+        return "Depth source changed"
+    return None
+
+
 def atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None

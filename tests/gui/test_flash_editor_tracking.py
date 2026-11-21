@@ -16,6 +16,10 @@ from tests.policies.flash.test_demo_tracking import Masks, rgbd_episode  # noqa:
 
 
 def test_tracked_episode_overlay_and_keyframe_edits(gui_page, rgbd_episode, tmp_path):  # noqa: F811 - imported pytest fixture
+    atomic_json(
+        flash_editor.EDITOR_DIR / "settings.json",
+        flash_editor.EditorSettings(depth_source="sensor").model_dump(),
+    )
     document, _ = load_document(rgbd_episode, 0)
     document.objects = [DemoObject(id="object_1", name="left"), DemoObject(id="object_2", name="right")]
     document = save_document(rgbd_episode, 0, document)
