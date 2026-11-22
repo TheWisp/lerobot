@@ -1,0 +1,12 @@
+
+Testing with DEVICE='cuda'
+........................................................................ [ 67%]
+...................................                                      [100%]
+107 passed, 450 warnings in 246.44s (0:04:06)
+
+After the startup-label correction:
+
+Testing with DEVICE='cuda'
+.........                                                                [100%]
+9 passed, 70 warnings in 33.74s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

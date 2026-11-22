@@ -1,0 +1,60 @@
+FLASH editor UI review, 2026-11-22
+
+Scope: UI playback, frame labels, range explanations, operation-specific Stop
+labels and Reset controls. No physical robot was connected or commanded.
+No tracking/pose algorithm or demo execution-planning fix is claimed here.
+
+01-before-playback.png and 02-after-playback.png show the actual application
+through Playwright on tests/gui/test_flash_editor.py's synthetic 10-frame,
+10-fps, 96x64 RGB recording. Each frame varies the red channel and contains
+a green rectangle. These are raw RGB frames with no tracking result.
+The saved document contains exactly one keyframe, frame 2, relative to World.
+
+Before: restore the old single-keyframe playback behavior in a browser route
+serving a temporary copy of flash_editor.js. The running user server and its
+files are never mutated. The test fails because Full recording is unchecked.
+Then click Play, wait for at least two wraps, and capture the actual editor.
+before-metrics.json records only frame 2 painted across three wraps.
+
+After: test_single_keyframe_does_not_freeze_playback[open-single-key] passes
+with the shipped player, video decode, real server and saved document. Play
+paints at least four distinct frames; the test then pauses, seeks to frame 8,
+and captures the UI. The saved document still contains only keyframe 2.
+The [delete-down-to-one] case separately removes keyframe 7 through the UI,
+saves and checks the same playback behavior.
+
+03-playback-comparison.png is a rendered HTML annotation of crops from these
+captures. playback-comparison.html retains the crop positions and captions.
+No screenshot content was painted or regenerated.
+
+04-reset-complete.png, 05-reset-stopped.png and 06-reset-error.png are real
+GUI captures from test_reset_button_reaches_real_virtual_robot. That test
+clicks Reset, starts the real Python subprocess and constructs virtual_bi_so107
+through the real profile factory. Completion verifies 150 accepted commands
+ending at left_shoulder_pan.pos=25; Stop interrupts before the target; an
+invalid saved joint produces no accepted command and visible error output.
+These verify the virtual driver path, not physical robot motion or accuracy.
+
+Fast unit tests run the production editor in a Node VM at its DOM, ChunkPlayer
+callback and fetch boundaries. Browser regressions cover the real player,
+durable edits, labels, run lifecycle and Reset subprocess. No unit test
+substitutes for the real browser or worker checks.
+
+Verification commands (from repository root, with the project Python runtime):
+  node --test tests/gui/flash_editor_controls.test.js
+  python -m pytest -q tests/gui/test_flash_editor_controls_js.py tests/gui/test_flash_editor.py tests/gui/test_flash_editor_execution.py tests/gui/test_flash_editor_rest.py tests/gui/test_flash_live_preview_playwright.py tests/gui/test_flash_demo_versions.py tests/gui/test_flash_rollouts.py tests/gui/test_chunk_player_js.py tests/policies/flash/test_demo_execution.py
+  python -m pytest -q tests/gui/test_flash_editor_execution.py tests/gui/test_flash_editor_controls_js.py
+
+The broad run passed 107 tests. After the final startup-label correction,
+the affected execution and control suite passed 9 tests. The Node suite has
+12 cases. Python lint/format, JavaScript syntax and git diff checks pass.
+verification.txt retains the pytest summaries; mutations.txt names the failing
+checks when old defects are restored. Mutations run only in temporary copies.
+The startup mutation's primary failure was the visible false "no motion"
+label; its unfinished mock process also logged a teardown AttributeError.
+
+To reproduce the before screenshot (expected pytest exit 1):
+  PYTHONPATH=docs/proofs/flash-ui-review-20261122:src:. python -m pytest -q -p capture_before 'tests/gui/test_flash_editor.py::test_single_keyframe_does_not_freeze_playback[open-single-key]'
+The capture plugin writes before-playback.png and before-metrics.json under
+the test's isolated temporary directory. Its normal successful run writes the after screenshot
+under pytest's temporary directory. Render the comparison HTML in Chromium.

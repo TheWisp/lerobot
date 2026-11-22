@@ -1,0 +1,7 @@
+single-key-playback: not ok 1 - one keyframe and deletion down to one keep the full recording playable
+buffering-replacement: not ok 2 - replacing a buffering player restores the status and ignores its old callbacks
+idle-stop: not ok 11 - browsing an idle demo or a saved run has no Stop operation
+range-explanation: not ok 3 - range keeps its starting reference and explains conflicts without changing keys
+frame-count: not ok 2 - replacing a buffering player restores the status and ignores its old callbacks
+reset-end-run-label: not ok 8 - Stop describes and cancels the active reset cleanup
+unknown-startup-mode: test_apply_starts_robot_directly_and_shows_execution[live] failed: expected 'Run · starting', got 'Test run · no motion · starting'

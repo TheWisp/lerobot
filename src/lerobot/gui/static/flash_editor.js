@@ -164,7 +164,7 @@ function renderFlashDemoLibrary(){
         const date=document.createElement('small');date.textContent=new Date(entry.created_at*1000).toLocaleString();button.append(date);
         editorElement('demos').append(button);
     }
-    if(!library.demos.length){const hint=document.createElement('p');hint.textContent='Record with teleop. Stop saves your demo here.';editorElement('demos').append(hint);}
+    if(!library.demos.length){const hint=document.createElement('p');hint.textContent='Record with teleop, then choose Finish recording to save your demo here.';editorElement('demos').append(hint);}
     editorElement('rollouts').replaceChildren();
     for(const entry of flashEditor.rollouts){
         const button=editorButton(entry.name,()=>openFlashRollout(entry));button.className='flash-demo-nav';
@@ -237,7 +237,7 @@ async function selectFlashEditorEpisode(episode=0) {
         if(generation!==flashEditor.generation)return false;
         flashEditor.viewer?.dispose();flashEditor.viewer=null;
         Object.assign(flashEditor,{mode:'demo',document:data.document,source:data.source,episode,dirty:false,frame:data.document.keyframes[0]?.frame||0,picking:null,reference:'world',rangeStart:null,overlay:null,view:'2d',displayResult:null,displaySchema:false,depthColorRange:null});
-        editorElement('full-recording').checked=!data.document.keyframes.length;
+        editorElement('full-recording').checked=data.document.keyframes.length<2;
         const preferredCamera='observation.images.'+flashEditor.setup?.camera;
         if(!data.document.revision && data.source.cameras[preferredCamera])data.document.camera=preferredCamera;
         editorElement('name').value=data.document.name==='Untitled demo'?'':data.document.name;
@@ -271,12 +271,13 @@ function openFlashDemoPlayer() {
         tiles:()=>editorElement('image'),onPaint:(frame,episode,evidence)=>{
             if(flashEditor.player!==player)return;
             flashEditor.frame=frame;flashEditor.overlay=evidence;flashEditor.overlaySelection=selection;editorElement('position').value=frame;
-            editorElement('time').textContent=`${(frame/source.fps).toFixed(2)} s · ${frame}`;
+            editorElement('time').textContent=`Frame ${frame} · ${source.length} frames · ${(frame/source.fps).toFixed(2)} s`;
             showFlashDemoKeyframe();drawFlashDemoMarks();
         },onHold:held=>{
             if(flashEditor.player!==player)return;
             if(held){
-                flashEditor.beforeBuffer=editorElement('status').textContent;
+                if(editorElement('status').textContent!=='Buffering recording…')
+                    flashEditor.beforeBuffer=editorElement('status').textContent;
                 editorStatus('Buffering recording…');
             }else if(editorElement('status').textContent==='Buffering recording…'){
                 editorStatus(flashEditor.beforeBuffer||'');
@@ -293,7 +294,10 @@ function updateFlashDemoPlaybackRange(){
     const keys=flashEditor.document?.keyframes,source=flashEditor.source;
     if(!keys||!source)return;
     const full=editorElement('full-recording');
-    full.disabled=!keys.length;
+    // A single keyframe defines a pose, not a playable time span. Keep the
+    // whole recording available, including after removing a marked range.
+    full.disabled=keys.length<2;
+    if(full.disabled)full.checked=true;
     const start=keys.length&&!full.checked?keys[0].frame:0;
     const end=keys.length&&!full.checked?keys.at(-1).frame:source.length-1;
     const slider=editorElement('position');slider.min=start;slider.max=end;
@@ -404,7 +408,7 @@ function finishFlashDemoRange(){
     const existing=new Map(doc.keyframes.map(k=>[k.frame,k]));
     for(let frame=start.frame;frame<=end;frame++){
         if(existing.has(frame)&&existing.get(frame).reference!==start.reference){
-            editorStatus('This range overlaps keyframes with another reference. Remove that range first.');return;
+            editorStatus(`Frame ${frame} uses another reference: ${flashDemoReferenceName(existing.get(frame).reference)}. This range uses ${flashDemoReferenceName(start.reference)}. Choose the matching reference and mark the start again, or remove that keyframe.`);return;
         }
     }
     for(let frame=start.frame;frame<=end;frame++){
@@ -451,6 +455,12 @@ function renderFlashEditor(){
     editorElement('start').disabled=busy||!!flashEditor.trackingPid;
     editorElement('apply').disabled=busy||!!flashEditor.recording||!!flashEditor.trackingPid||!!flashEditor.execution?.running;
     editorElement('rest').disabled=busy||!flashEditor.setup?.robot||!!flashEditor.recording||!!flashEditor.trackingPid||!!flashEditor.execution?.running|| (!!flashEditor.runActive&&!flashEditor.previewRunning);
+    const stopLabel=flashEditor.rebuildPid?'Cancel tracking':flashEditor.recording?'Finish recording':
+        flashEditor.execution?.running?(flashEditor.execution.state==='complete'&&flashEditor.execution.operation!=='rest'?'End run':flashEditor.execution.mode==='robot'?'Stop robot':flashEditor.execution.mode==='simulation'?'Stop test run':'Stop run'):
+        flashEditor.previewRunning?'Stop camera':null;
+    editorElement('stop').hidden=!stopLabel;
+    editorElement('stop').disabled=!stopLabel;
+    if(stopLabel)editorElement('stop').textContent=stopLabel;
     editorElement('run-demo').disabled=editorElement('apply').disabled||!doc?.keyframes.length||!flashEditor.library.demos.some(d=>d.id===flashEditor.entry?.id);
     editorElement('run-demo').title='Apply this demo directly to the robot';
     if(flashEditor.execution?.running)editorElement('record').disabled=true;
@@ -463,7 +473,7 @@ function renderFlashEditor(){
     editorElement('range-start').disabled=!doc||!flashEditor.player||busy;
     editorElement('range-end').disabled=!doc||!flashEditor.player||busy||!flashEditor.rangeStart;
     editorElement('range-cancel').hidden=!flashEditor.rangeStart;
-    editorElement('range-hint').textContent=flashEditor.rangeStart?`Start: frame ${flashEditor.rangeStart.frame}. Seek to the end, then mark it.`:'Both endpoints included. Every frame is retained.';
+    editorElement('range-hint').textContent=flashEditor.rangeStart?`Start: frame ${flashEditor.rangeStart.frame} · Relative to ${flashDemoReferenceName(flashEditor.rangeStart.reference)}. Seek to the end, then mark it.`:'Both endpoints included. Every frame is retained.';
     editorElement('reference').disabled=!doc||!flashEditor.player||!!doc.objects.length;
     editorElement('objects').replaceChildren();editorElement('keys').replaceChildren();editorElement('references').replaceChildren();
     if(!doc)return;
@@ -611,7 +621,7 @@ async function recordFlashDemo(){
         const response=await editorRequest('/api/run/flash/editor/record-current',{});
         flashEditor.player?.pause();flashEditor.mode='live';
         flashEditor.recording=response;
-        await showFlashDemoViewer();editorStatus('Recording. Use teleoperation, then press Stop.');
+        await showFlashDemoViewer();editorStatus('Recording. Use teleoperation, then choose Finish recording.');
     }catch(error){editorStatus(error.message);}
     finally{flashEditor.busy=false;void pollFlashDemo();}
 }
@@ -640,7 +650,7 @@ async function returnFlashRobotToRest(){
         await editorRequest('/api/run/flash/editor/return-to-rest',{});
         flashEditor.player?.pause();detachFlashEditorPreview();
         flashEditor.mode='live';flashEditor.entry=null;
-        editorStatus('Returning to saved rest. Stop cancels the move.');
+        editorStatus('Resetting robot to its saved starting position. Stop robot cancels the move.');
     }catch(error){editorStatus(error.message);}
     finally{flashEditor.busy=false;await pollFlashDemo();}
 }
@@ -685,11 +695,10 @@ async function pollFlashDemo(){
         if(editorElement('status').textContent==='Failed to fetch')editorStatus('Connected.');
         editorElement('execution').hidden=flashEditor.mode!=='live'||(!execution.running&&execution.returncode===undefined);
         const rest=execution.operation==='rest';
-        const executionState=execution.state==='complete'?(rest?'rest commands complete':'path complete — check placement'):execution.state;
-        editorElement('execution').textContent=execution.reason||`${rest?'Return to saved rest':execution.mode==='robot'?'Robot':'Test run · no motion'} · ${executionState||'idle'}${execution.total?` · ${Math.min((execution.keyframe||0)+1,execution.total)} / ${execution.total}`:''}${execution.running&&execution.state==='complete'&&!rest?' · Press Stop to end the run':''}`;
-        if(wasExecuting&&!execution.running&&flashEditor.mode==='live')editorStatus(execution.reason||(rest?'Rest operation ended.': 'Rollout saved. Check placement in the recorded frames.'));
+        const executionState=execution.state==='complete'?(rest?'complete':'path complete — check placement'):execution.state;
+        editorElement('execution').textContent=execution.reason||`${rest?'Reset robot':execution.mode==='robot'?'Robot':execution.mode==='simulation'?'Test run · no motion':'Run'} · ${executionState||'idle'}${execution.total?` · ${Math.min((execution.keyframe||0)+1,execution.total)} / ${execution.total}`:''}${execution.running&&execution.state==='complete'&&!rest?' · Choose End run to finish':''}`;
+        if(wasExecuting&&!execution.running&&flashEditor.mode==='live')editorStatus(execution.reason||(rest?'Robot reset ended.': 'Rollout saved. Check placement in the recorded frames.'));
         await refreshFlashEditorOutput();
-        editorElement('stop').disabled=!own?.running&&!data.preview_running&&!execution.running&&!flashEditor.rebuildPid;
         for(const id of ['robot','teleop','setup-camera','fps','matching','matcher','depth-source','settings-save'])editorElement(id).disabled=!!status.running;
         flashEditor.settingsForm?.update();
         if(own?.running){flashEditor.mode='live';await showFlashDemoViewer();}
@@ -726,7 +735,7 @@ async function applyFlashDemo(id=editorElement('apply-demo').value){
         let status=await editorRequest('/api/run/flash/editor/track',{
             dataset_id:dataset.id,episode:entry.episode,revision:doc.revision,ensure_current:true});
         while(['loading','running'].includes(status.state)){
-            flashEditor.rebuildPid=status.pid;editorElement('stop').disabled=false;
+            flashEditor.rebuildPid=status.pid;renderFlashEditor();
             editorElement('cancel-track').hidden=false;
             editorStatus(`Updating demo tracking: ${status.done||0}${status.total?' / '+status.total:''} frames…`);
             await new Promise(resolve=>setTimeout(resolve,1000));
@@ -740,7 +749,7 @@ async function applyFlashDemo(id=editorElement('apply-demo').value){
         flashEditor.player?.pause();flashEditor.mode='live';flashEditor.entry=null;renderFlashEditor();
         editorElement('apply-demo').value=id;
         mountFlashEditorPreview();
-        editorStatus('Running robot. Rollout is being saved. Stop ends execution.');
+        editorStatus('Running robot. Rollout is being saved. Stop robot ends execution.');
     }catch(error){editorStatus(error.message);}
     finally{flashEditor.rebuildPid=null;flashEditor.busy=false;renderFlashEditor();void pollFlashDemo();}
 }

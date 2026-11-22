@@ -453,6 +453,8 @@ async function drawFlashLive() {
         overlay=state.streamMode==='processed'?state.overlay:null,
         image=state.episodePlayer ? state.episodeImage : state.bitmap;
     if(!image || !state.visible) return;
+    liveElement('play-frame').textContent=state.historyActive && state.rawFrames?.length
+        ? `Frame ${state.frame.frame_id} · ${state.rawFrames.length} frames` : '';
     const resolution=liveElement('resolution-overlay');
     const rollout=liveElement('panel').parentElement?.id==='flash-editor-preview-host' &&
         typeof flashEditor!=='undefined' && flashEditor.mode==='rollout';

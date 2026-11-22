@@ -213,15 +213,6 @@ def test_apply_starts_robot_directly_and_shows_execution(
         (tmp_path / "output.log").write_text("Connecting to robot\n")
         monkeypatch.setattr(run, "_active_process", SimpleNamespace(pid=456, returncode=None))
         monkeypatch.setattr(flash_tracking, "_directory", tmp_path)
-        atomic_json(
-            tmp_path / "execution.json",
-            {
-                "mode": "robot",
-                "state": "resetting to rest position",
-                "keyframe": 0,
-                "total": 3,
-            },
-        )
 
     monkeypatch.setattr(flash_tracking, "start_worker", start)
     page = gui_page
@@ -240,7 +231,16 @@ def test_apply_starts_robot_directly_and_shows_execution(
         page.locator("#flash-editor-apply").click()
     expect(page.locator("#flash-editor-apply-dialog")).to_have_count(0)
     expect(page.locator("#flash-editor-rollouts button")).to_have_count(1)
+    # A new worker may be importing/loading before writing execution.json.
+    # Missing mode must not be presented as a simulation with "no motion".
+    expect(page.locator("#flash-editor-execution")).to_have_text("Run · starting")
+    expect(page.get_by_role("button", name="Stop run", exact=True)).to_be_visible()
+    atomic_json(
+        tmp_path / "execution.json",
+        {"mode": "robot", "state": "resetting to rest position", "keyframe": 0, "total": 3},
+    )
     expect(page.locator("#flash-editor-execution")).to_contain_text("resetting to rest position")
+    expect(page.get_by_role("button", name="Stop robot", exact=True)).to_be_visible()
     expect(page.locator("#flash-editor-run-log")).to_be_visible()
     expect(page.locator("#flash-editor-terminal")).to_contain_text("Connecting to robot")
     expect(page.locator("#flash-editor-rest")).to_be_disabled()
@@ -254,6 +254,7 @@ def test_apply_starts_robot_directly_and_shows_execution(
         {"mode": "robot", "state": "complete", "keyframe": 3, "total": 3},
     )
     expect(page.locator("#flash-editor-execution")).to_contain_text("path complete — check placement")
+    expect(page.get_by_role("button", name="End run", exact=True)).to_be_visible()
     expect(page.locator("#flash-editor-rest")).to_be_disabled()
     process = flash_editor._execution_process
     process.returncode = 0
@@ -303,7 +304,7 @@ def test_saved_failure_keeps_output_and_rest_controls_within_view(gui_page, prep
     expect(page.locator("#flash-editor-terminal")).to_contain_text("Robot configuration failed")
     expect(page.locator("#flash-editor-status")).to_contain_text("No motor reply")
     expect(page.locator("#flash-editor-rest")).to_be_visible()
-    expect(page.locator("#flash-editor-stop")).to_be_visible()
+    expect(page.locator("#flash-editor-stop")).to_be_hidden()
     divider = page.locator("#flash-editor-output-divider")
     divider.focus()
     divider.press("ArrowUp")

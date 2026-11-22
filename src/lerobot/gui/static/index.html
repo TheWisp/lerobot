@@ -477,15 +477,15 @@
                         <button id="flash-editor-run-demo" onclick="runSelectedFlashDemo()" disabled>Apply to robot</button>
                     </div>
                     <div class="flash-editor-actions">
-                        <button id="flash-editor-rest" onclick="returnFlashRobotToRest()" title="Move the robot to the rest position saved in its profile. Stop cancels the move.">Return to saved rest</button>
-                        <button id="flash-editor-stop" class="btn-stop" onclick="stopFlashDemo()" disabled>Stop</button>
+                        <button id="flash-editor-rest" onclick="returnFlashRobotToRest()" title="Move the robot back to its saved starting position. Stop robot cancels the move.">Reset robot</button>
+                        <button id="flash-editor-stop" class="btn-stop" onclick="stopFlashDemo()" disabled hidden>Stop robot</button>
                     </div>
                 </header>
                 <p id="flash-editor-status" role="status">Choose your setup in Settings, then open Live.</p>
                 <p id="flash-editor-execution" role="status" hidden></p>
                 <div id="flash-editor-live-host" hidden></div>
                 <div id="flash-editor-preview-host" hidden></div>
-                <div id="flash-editor-empty"><strong>Record a demonstration</strong><p>Use teleoperation to show the task. Stop saves it automatically in Demos.</p></div>
+                <div id="flash-editor-empty"><strong>Record a demonstration</strong><p>Use teleoperation to show the task, then choose Finish recording to save it in Demos.</p></div>
                 <div id="flash-editor-output-divider" class="section-resize-handle" role="separator" aria-label="Resize robot output" aria-orientation="horizontal" aria-controls="flash-editor-run-log" tabindex="0" hidden></div>
                 <details id="flash-editor-run-log" hidden>
                     <summary>Output · robot logs</summary>
@@ -516,7 +516,7 @@
                             <button id="flash-editor-reference" onclick="setFlashDemoReference()" disabled>Use this frame for objects</button>
                             <p class="training-field-hint" id="flash-editor-reference-hint"></p>
                             <button id="flash-editor-track" onclick="trackFlashDemo()" disabled>Track objects</button>
-                            <button id="flash-editor-cancel-track" onclick="cancelFlashDemoTracking()" hidden>Stop tracking</button>
+                            <button id="flash-editor-cancel-track" onclick="cancelFlashDemoTracking()" hidden>Cancel tracking</button>
                             <p id="flash-editor-tracking-status" role="status"></p>
                         </section>
                         <section><h2>Keyframes <small id="flash-editor-key-count"></small></h2>
@@ -656,8 +656,8 @@
                     <p class="training-field-hint">Settings apply when opening the camera. During a run, they are read-only.</p>
                     <label>Recent history (seconds)<input id="flash-live-history-seconds" type="number" min="1" max="600" value="60"></label>
                     <div class="run-actions">
-                        <button class="btn-launch" id="flash-live-start" type="button" onclick="startFlashLive()">Start</button>
-                        <button class="btn-stop" id="flash-live-stop" type="button" onclick="stopFlashLive()" disabled>Stop</button>
+                        <button class="btn-launch" id="flash-live-start" type="button" onclick="startFlashLive()" title="Start the camera and object tracking">Start camera</button>
+                        <button class="btn-stop" id="flash-live-stop" type="button" onclick="stopFlashLive()" title="Stop the camera and object tracking" disabled>Stop camera</button>
                     </div>
                 </div>
                 <div class="section-resize-handle flash-live-section-resize" role="separator" aria-label="Resize camera setup and recordings" tabindex="0"></div>
@@ -700,6 +700,7 @@
                         <button type="button" id="flash-live-return-camera" onclick="followFlashLive()" hidden>Return to camera</button>
                         <button type="button" id="flash-live-play" onclick="playFlashHistory()" aria-label="Play recording">Play</button>
                         <input id="flash-live-history-position" type="range" min="0" max="0" value="0" aria-label="Recorded frame" oninput="loadFlashHistory(Number(this.value))" disabled>
+                        <span id="flash-live-play-frame"></span>
                         <span id="flash-live-play-time"></span>
                     </div>
                 </section>
@@ -1065,8 +1066,8 @@ nebius iam auth-public-key generate \
     <script src="/static/flash_experiments.js?v=55"></script>
     <script src="/static/flash_pipeline_settings.js?v=2"></script>
     <script src="/static/flash_trajectory.js?v=5"></script>
-    <script src="/static/flash_live.js?v=54"></script>
-    <script src="/static/flash_editor.js?v=15"></script>
+    <script src="/static/flash_live.js?v=55"></script>
+    <script src="/static/flash_editor.js?v=18"></script>
     <script src="/static/overlay_gate.js?v=1"></script>
     <script src="/static/mask_seed.js?v=4"></script>
     <script src="/static/overlay_pull_gate.js?v=3"></script>

@@ -548,6 +548,7 @@ def test_replay_holds_last_processed_overlay_and_recordings_can_be_renamed(gui_p
     gui_page.get_by_role("button", name="FLASH", exact=True).click()
     gui_page.locator("#flash-source-live").click()
     gui_page.wait_for_function("flashLive.packet?.frame === 2 && flashLive.overlay?.frame === 1")
+    assert gui_page.locator("#flash-live-play-frame").inner_text() == "Frame 2 · 3 frames"
     preferred = gui_page.evaluate(
         "async () => (await (await fetch('/api/run/flash/tracking/shared-defaults')).json()).default_depth_source"
     )
@@ -558,6 +559,7 @@ def test_replay_holds_last_processed_overlay_and_recordings_can_be_renamed(gui_p
     ) != [40, 40, 40, 255]
     gui_page.evaluate("void loadFlashHistory(0)")
     gui_page.wait_for_function("flashLive.packet?.frame === 0 && flashLive.overlay === null")
+    assert gui_page.locator("#flash-live-play-frame").inner_text() == "Frame 0 · 3 frames"
     gui_page.evaluate("void loadFlashHistory(2)")
     gui_page.wait_for_function("flashLive.packet?.frame === 2 && flashLive.overlay?.frame === 1")
     # The camera is stopped. Polling it must not replace recording status or
@@ -587,8 +589,8 @@ def test_replay_holds_last_processed_overlay_and_recordings_can_be_renamed(gui_p
     assert (
         rows.nth(0).bounding_box()["width"] <= gui_page.locator("#flash-live-sidebar").bounding_box()["width"]
     )
-    assert gui_page.locator("#flash-live-start").inner_text() == "Start"
-    assert gui_page.locator("#flash-live-stop").inner_text() == "Stop"
+    assert gui_page.locator("#flash-live-start").inner_text() == "Start camera"
+    assert gui_page.locator("#flash-live-stop").inner_text() == "Stop camera"
 
 
 def test_raw_and_processed_timelines_replay_recent_and_saved_clip(gui_page, tmp_path, monkeypatch):

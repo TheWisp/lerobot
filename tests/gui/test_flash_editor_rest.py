@@ -1,8 +1,10 @@
-"""The explicit rest control crosses the API/worker boundary with fake motor I/O."""
+"""Reset through the GUI and real worker, plus injected motor failures."""
 
 import asyncio
 import json
+import os
 from threading import Event
+from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -199,12 +201,98 @@ def test_rest_button_runs_and_stops_owned_operation(gui_page, rest_setup, monkey
     page = gui_page
     page.get_by_role("button", name="FLASH", exact=True).click()
     page.get_by_role("button", name="Demo editor", exact=True).click()
-    page.get_by_role("button", name="Return to saved rest", exact=True).click()
+    expect(page.locator("#flash-editor-stop")).to_be_hidden()
+    page.get_by_role("button", name="Reset robot", exact=True).click()
     expect(page.locator("#flash-editor-terminal")).to_contain_text("Returning to saved rest")
     expect(page.locator("#flash-editor-rest")).to_be_disabled()
     expect(page.locator("#flash-editor-apply")).to_be_disabled()
-    page.locator("#flash-editor-stop").click()
+    page.get_by_role("button", name="Stop robot", exact=True).click()
     expect(page.locator("#flash-editor-rest")).to_be_enabled()
     expect(page.locator("#flash-editor-execution")).to_contain_text("stopped")
     expect(page.locator("#flash-editor-terminal")).to_be_visible()
+    expect(page.locator("#flash-editor-stop")).to_be_hidden()
     page.screenshot(path=str(tmp_path / "rest-control.png"))
+
+
+@pytest.mark.parametrize("outcome", ["complete", "stop", "invalid_joint"])
+def test_reset_button_reaches_real_virtual_robot(gui_page, monkeypatch, tmp_path, outcome):
+    """Keep the launcher, fresh-process imports, profile factory and motor driver real."""
+    monkeypatch.setattr(run, "_active_process", None)
+    monkeypatch.setattr(run, "_launch_lock", asyncio.Lock())
+    monkeypatch.setattr(flash_editor, "_execution_process", None)
+    monkeypatch.setattr(flash_editor, "_preview_process", None)
+    page = gui_page
+    base = page.url.split("#")[0].rstrip("/")
+    target = {"left_shoulder_pan.pos": 25.0}
+    if outcome == "invalid_joint":
+        target = {"nonexistent_joint.pos": 25.0}
+    response = page.request.post(
+        f"{base}/api/robot/profiles",
+        data={
+            "name": "virtual-reset",
+            "type": "virtual_bi_so107",
+            "fields": {"id": "virtual-reset", "calibration_dir": str(tmp_path / "calibration")},
+            "rest_position": target,
+        },
+    )
+    assert response.ok, response.text()
+    response = page.request.put(f"{base}/api/run/flash/editor/settings", data={"robot": "virtual-reset"})
+    assert response.ok, response.text()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.get_by_role("button", name="FLASH", exact=True).click()
+    page.get_by_role("button", name="Demo editor", exact=True).click()
+    expect(page.locator("#flash-editor-stop")).to_be_hidden()
+    page.get_by_role("button", name="Reset robot", exact=True).click()
+    try:
+        expect(page.locator("#flash-editor-rest")).to_be_disabled()
+        expect(page.get_by_role("button", name="Stop robot", exact=True)).to_be_visible()
+        deadline = monotonic() + 30
+        stopped = False
+        while monotonic() < deadline:
+            status = page.request.get(f"{base}/api/run/flash/editor/execution").json()
+            directory = flash_editor._execution_directory
+            events_path = directory / "events.jsonl"
+            events = (
+                [json.loads(line) for line in events_path.read_text().splitlines()]
+                if events_path.exists()
+                else []
+            )
+            accepted = [event["accepted"] for event in events if event["kind"] == "robot.command_accepted"]
+            if outcome == "stop" and len(accepted) >= 2 and not stopped:
+                page.get_by_role("button", name="Stop robot", exact=True).click()
+                stopped = True
+            if status.get("pid") and not status["running"]:
+                break
+            page.wait_for_timeout(50)
+        else:
+            pytest.fail(f"Reset did not finish: {status}\n{(directory / 'output.log').read_text()}")
+
+        assert status["pid"] != os.getpid()
+        expected_state = {"complete": "complete", "stop": "stopped", "invalid_joint": "failed"}[outcome]
+        assert status["state"] == expected_state, (directory / "output.log").read_text()
+        assert status["returncode"] == (1 if outcome == "invalid_joint" else 0)
+        assert events[-1]["state"] == expected_state
+        if outcome == "invalid_joint":
+            assert accepted == []
+            expect(page.locator("#flash-editor-execution")).to_contain_text("nonexistent_joint.pos")
+            expect(page.locator("#flash-editor-terminal")).to_contain_text("ValueError")
+        else:
+            joint = "left_shoulder_pan.pos"
+            initial = next(event["observed"][joint] for event in events if event["kind"] == "robot.read")
+            assert accepted[0][joint] != initial
+            if outcome == "complete":
+                assert len(accepted) == 150
+                assert accepted[-1][joint] == target[joint]
+            else:
+                assert stopped and 2 <= len(accepted) < 150
+                assert accepted[-1][joint] != target[joint]
+            expect(page.locator("#flash-editor-execution")).to_contain_text(expected_state)
+        expect(page.locator("#flash-editor-rest")).to_be_enabled()
+        expect(page.locator("#flash-editor-stop")).to_be_hidden()
+        assert errors == []
+        page.screenshot(path=str(tmp_path / f"real-reset-{outcome}.png"))
+    finally:
+        status = page.request.get(f"{base}/api/run/flash/editor/execution").json()
+        if status["running"]:
+            page.request.post(f"{base}/api/run/flash/editor/execution/stop", data={"pid": status["pid"]})

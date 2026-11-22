@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>One saved keyframe must not freeze playback</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#111827;color:#eef3fb;font:18px/1.4 system-ui,sans-serif}main{width:940px;padding:28px}h1{font-size:29px;margin:0 0 8px}p{margin:0 0 16px;color:#c0cce0}.card{padding:16px;margin:14px 0;background:#1b2435;border:1px solid #465269;border-radius:10px}h2{font-size:22px;margin:0 0 12px}.row{display:flex;gap:20px;align-items:start}.crop{position:relative;overflow:hidden;flex-shrink:0}.crop img{position:absolute;max-width:none;width:1400px;height:816px}.keys{width:260px;height:214px}.keys img{left:-1144px;top:-307px}.after .keys{height:214px}.scene{width:390px;height:214px}.scene img{width:700px;height:408px;left:-140px;top:-110px}.note{font-size:17px;max-width:154px;color:#f6cc93}.after .note{color:#8de2bc}.bar{width:848px;height:44px;margin-top:12px}.bar img{left:-280px;top:-762px}.box{position:absolute;border:2px solid #ffbe73;border-radius:5px}.keys .box{left:120px;top:86px;width:125px;height:26px}.after .keys .box{top:70px;border-color:#7bd5af}.bar .box{left:692px;top:4px;width:155px;height:35px}.after .bar .box{border-color:#7bd5af}.foot{font-size:15px;margin:16px 0 0}
+</style>
+<main>
+<h1>A saved keyframe should not freeze playback</h1>
+<p>Actual editor captures using the same 10-frame synthetic test recording.<br>Both states contain one saved keyframe: frame 2.</p>
+<section class="card">
+<h2>1. Bug restored: Play repeats frame 2</h2>
+<div class="row"><div class="crop scene"><img src="01-before-playback.png"></div><div class="crop keys"><img src="01-before-playback.png"><div class="box"></div></div><p class="note">Playback wrapped three times. The only displayed frame was 2.</p></div>
+<div class="crop bar"><img src="01-before-playback.png"><div class="box"></div></div>
+</section>
+<section class="card after">
+<h2>2. Fixed: the whole recording remains playable</h2>
+<div class="row"><div class="crop scene"><img src="02-after-playback.png"></div><div class="crop keys"><img src="02-after-playback.png"><div class="box"></div></div><p class="note">Play advanced through at least four frames. Then the test sought to frame 8.</p></div>
+<div class="crop bar"><img src="02-after-playback.png"><div class="box"></div></div>
+</section>
+<p class="foot">Crops and boxes annotate real screenshots. This is a playback regression test, with no tracking result or physical robot. The fixed test also checks deletion from two keyframes down to one.</p>
+</main>

@@ -247,6 +247,7 @@ def test_playback_defaults_to_keyframe_span_without_cutting_recording(gui_page, 
     page.get_by_role("button", name="Demo editor", exact=True).click()
     page.locator("#flash-editor-demos button").first.click()
     page.wait_for_function("flashEditor.player?.state().lastPainted === 2")
+    expect(page.locator("#flash-editor-time")).to_contain_text("Frame 2 · 10 frames")
     expect(page.locator("#flash-editor-camera")).to_have_count(0)
     expect(page.locator("#flash-editor-resolution")).to_have_text("96 × 64")
     expect(page.locator("#flash-editor-resolution")).to_be_visible()
@@ -266,6 +267,7 @@ def test_playback_defaults_to_keyframe_span_without_cutting_recording(gui_page, 
     page.locator("#flash-editor-full-recording").check()
     page.locator("#flash-editor-position").fill("9")
     page.wait_for_function("flashEditor.player.state().lastPainted === 9")
+    expect(page.locator("#flash-editor-time")).to_contain_text("Frame 9 · 10 frames")
     page.locator("#flash-editor-full-recording").uncheck()
     page.wait_for_function("flashEditor.player.state().lastPainted === 7")
     # Object selection can still return to its earlier image outside the span.
@@ -274,6 +276,56 @@ def test_playback_defaults_to_keyframe_span_without_cutting_recording(gui_page, 
     expect(page.locator("#flash-editor-full-recording")).to_be_checked()
     assert episode.episode_rows(0)[1] == 10
     assert len(load_document(episode, 0)[0].keyframes) == 2
+
+
+@pytest.mark.parametrize("remove_key", [False, True], ids=["open-single-key", "delete-down-to-one"])
+def test_single_keyframe_does_not_freeze_playback(gui_page, episode, tmp_path, remove_key):
+    from playwright.sync_api import expect
+
+    document, _ = load_document(episode, 0)
+    document.keyframes = [DemoKeyframe(frame=i, reference="world") for i in ([2, 7] if remove_key else [2])]
+    save_document(episode, 0, document)
+    atomic_json(
+        flash_editor.EDITOR_DIR / "demos.json",
+        {
+            "recent": None,
+            "demos": [
+                {
+                    "id": "fixture",
+                    "root": str(episode.root),
+                    "episode": 0,
+                    "created_at": 1,
+                    "name": "One keyframe playback test",
+                }
+            ],
+        },
+    )
+    page = gui_page
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.get_by_role("button", name="FLASH", exact=True).click()
+    page.get_by_role("button", name="Demo editor", exact=True).click()
+    page.locator("#flash-editor-demos button").click()
+    page.wait_for_function("flashEditor.player?.state().lastPainted === 2")
+    if remove_key:
+        expect(page.locator("#flash-editor-full-recording")).not_to_be_checked()
+        page.get_by_role("button", name="Remove keyframe 7", exact=True).click()
+        page.get_by_role("button", name="Save changes", exact=True).click()
+        expect(page.locator("#flash-editor-save-state")).to_have_text("Saved")
+    expect(page.locator("#flash-editor-full-recording")).to_be_checked()
+    expect(page.locator("#flash-editor-full-recording")).to_be_disabled()
+    expect(page.locator("#flash-editor-position")).to_have_attribute("min", "0")
+    expect(page.locator("#flash-editor-position")).to_have_attribute("max", "9")
+    expect(page.locator("#flash-editor-stop")).to_be_hidden()
+    page.locator("#flash-editor-play").click()
+    page.wait_for_function("new Set(flashEditor.player.metrics.painted.map(p=>p.frame)).size >= 4")
+    page.locator("#flash-editor-play").click()
+    page.locator("#flash-editor-position").fill("8")
+    page.wait_for_function("flashEditor.player.state().lastPainted === 8")
+    expect(page.locator("#flash-editor-time")).to_contain_text("Frame 8 · 10 frames")
+    assert load_document(episode, 0)[0].keyframes == [DemoKeyframe(frame=2, reference="world")]
+    assert not errors
+    page.locator("#flash-editor-workspace").screenshot(path=str(tmp_path / "single-key-playback.png"))
 
 
 def test_saved_keyframe_references_follow_playback_not_new_key_choice(gui_page, episode):
@@ -387,6 +439,7 @@ def test_editor_ui_edits_real_episode(gui_page, episode):
     page.locator("#flash-editor-position").fill("5")
     page.wait_for_function("flashEditor.frame === 5")
     page.locator("#flash-editor-range-start").click()
+    expect(page.locator("#flash-editor-range-hint")).to_contain_text("Relative to cube")
     page.locator("#flash-editor-position").fill("4")
     page.wait_for_function("flashEditor.frame === 4")
     page.locator("#flash-editor-range-end").click()
@@ -405,10 +458,12 @@ def test_editor_ui_edits_real_episode(gui_page, episode):
     page.locator("#flash-editor-position").fill("3")
     page.wait_for_function("flashEditor.frame === 3")
     page.locator("#flash-editor-range-start").click()
+    expect(page.locator("#flash-editor-range-hint")).to_contain_text("Relative to World (robot base)")
     page.locator("#flash-editor-position").fill("6")
     page.wait_for_function("flashEditor.frame === 6")
     page.locator("#flash-editor-range-end").click()
-    expect(page.locator("#flash-editor-status")).to_contain_text("another reference")
+    expect(page.locator("#flash-editor-status")).to_contain_text("Frame 5 uses another reference: cube")
+    expect(page.locator("#flash-editor-status")).to_contain_text("This range uses World (robot base)")
     # The rejected edit changes nothing, so there is nothing new to save.
     expect(page.locator("#flash-editor-save")).to_be_disabled()
     expect(page.locator("#flash-editor-save-state")).to_have_text("Saved")
@@ -558,7 +613,7 @@ def test_record_stop_auto_opens_episode_in_editor(gui_page, tmp_path, monkeypatc
             pytest.fail(
                 f"No changing robot observations: {state}; {page.request.get(f'{base}/api/run/obs-stream/meta').json()}; {get_run_output_tail(20)}"
             )
-        page.locator("#flash-editor-stop").click()
+        page.get_by_role("button", name="Finish recording", exact=True).click()
         try:
             expect(page.locator("#flash-editor-edit-view")).to_be_visible(timeout=30_000)
         except AssertionError:
