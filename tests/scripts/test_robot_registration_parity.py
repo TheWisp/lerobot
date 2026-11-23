@@ -18,6 +18,9 @@ added to one script and forgotten in another fails here, with no test to update.
 from __future__ import annotations
 
 import ast
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -88,3 +91,30 @@ def test_virtual_robot_type_name_is_what_the_scripts_import():
     import lerobot.robots.virtual_bi_so107.config_virtual_bi_so107  # noqa: F401
 
     assert "virtual_bi_so107" in RobotConfig.get_known_choices()
+
+
+def test_measured_robot_record_config_parses_in_fresh_process():
+    """GUI imports must not register a robot on the recorder's behalf."""
+    source = Path(lerobot.__file__).parent.parent
+    code = """
+import draccus
+from lerobot.scripts.lerobot_record import RecordConfig
+config = draccus.parse(RecordConfig, args=[
+    '--robot.type=so107_follower_gravity', '--robot.port=/dev/test-follower',
+    '--robot.id=test-follower', '--robot.arm=left',
+    '--teleop.type=so107_leader', '--teleop.port=/dev/test-leader',
+    '--dataset.repo_id=test/demo', '--dataset.single_task=move object',
+    '--dataset.push_to_hub=false',
+])
+assert config.robot.type == 'so107_follower_gravity'
+assert config.robot.arm == 'left'
+assert config.teleop.type == 'so107_leader'
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "PYTHONPATH": str(source)},
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    assert result.returncode == 0, result.stderr

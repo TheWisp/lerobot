@@ -139,6 +139,9 @@ class DatasetInfo:
 
     # Optional metadata
     robot_type: str | None = None
+    # Measured robot/camera geometry, snapshotted by the recorder. No local paths.
+    robot_geometry: dict | None = None
+    robot_cartesian: dict | None = None
     splits: dict[str, str] = field(default_factory=dict)
     # OpenAI-style tool schemas declared by the dataset. ``None`` means the
     # dataset doesn't declare any — readers fall back to ``DEFAULT_TOOLS``.
@@ -173,6 +176,10 @@ class DatasetInfo:
                 ft["shape"] = list(ft["shape"])
         if d.get("tools") is None:
             d.pop("tools", None)
+        if d.get("robot_geometry") is None:
+            d.pop("robot_geometry", None)
+        if d.get("robot_cartesian") is None:
+            d.pop("robot_cartesian", None)
         return d
 
     @classmethod

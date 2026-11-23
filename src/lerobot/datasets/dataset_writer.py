@@ -232,7 +232,13 @@ class DatasetWriter:
         return ep_buffer
 
     def _get_image_file_path(self, episode_index: int, image_key: str, frame_index: int) -> Path:
-        path_template = DEFAULT_DEPTH_PATH if image_key in self._meta.depth_keys else DEFAULT_IMAGE_PATH
+        # Infrared stays grayscale through the existing TIFF statistics path.
+        # It remains a non-depth feature, normalized to [0, 1] like RGB.
+        feature = self._meta.features[image_key]
+        infrared = feature["dtype"] == "image" and (feature.get("info") or {}).get("modality") == "infrared"
+        path_template = (
+            DEFAULT_DEPTH_PATH if image_key in self._meta.depth_keys or infrared else DEFAULT_IMAGE_PATH
+        )
         fpath = path_template.format(
             image_key=image_key, episode_index=episode_index, frame_index=frame_index
         )

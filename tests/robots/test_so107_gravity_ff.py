@@ -164,6 +164,71 @@ def test_units_per_degree_follows_the_calibration_range():
     assert _follower(use_degrees=True).units_per_motor_degree("gripper") == 1.0
 
 
+@pytest.mark.parametrize("arm", ["left", "right"])
+def test_normalized_and_degree_actions_send_the_same_compensated_pose(arm):
+    degrees = _follower(arm=arm, use_degrees=True)
+    normalized = _follower(arm=arm, use_degrees=False)
+    for index, motor in enumerate(MOTOR_NAMES):
+        calibration = MotorCalibration(
+            id=index + 1, drive_mode=0, homing_offset=0, range_min=1000, range_max=2300 + 100 * index
+        )
+        degrees.calibration[motor] = normalized.calibration[motor] = calibration
+    action_deg = {f"{motor}.pos": value for motor, value in EASY_POSE.items()}
+    action_norm = {
+        f"{motor}.pos": value * normalized.units_per_motor_degree(motor)
+        for motor, value in EASY_POSE.items()
+        if motor != "gripper"
+    } | {"gripper.pos": EASY_POSE["gripper"]}
+    sent_deg = degrees.send_action(action_deg)
+    sent_norm = normalized.send_action(action_norm)
+    for motor in MOTOR_NAMES[:-1]:
+        assert sent_norm[f"{motor}.pos"] / normalized.units_per_motor_degree(motor) == pytest.approx(
+            sent_deg[f"{motor}.pos"], abs=1e-10
+        )
+    assert sent_norm["gripper.pos"] == sent_deg["gripper.pos"] == EASY_POSE["gripper"]
+    assert abs(sent_deg["shoulder_lift.pos"] - action_deg["shoulder_lift.pos"]) > 0.1
+
+
+@pytest.mark.parametrize("arm", ["left", "right"])
+def test_gravity_profile_keeps_measured_cartesian_model_and_recorded_replay(arm):
+    from lerobot.robots.cartesian_model import CartesianModel
+    from lerobot.robots.geometry import RobotGeometry
+
+    config = draccus.decode(
+        RobotConfig,
+        {
+            "type": "so107_follower_gravity",
+            "port": "/dev/null",
+            "id": "test_arm",
+            "arm": arm,
+        },
+    )
+    robot = _robot(SO107FollowerGravity, config)
+    robot.calibration["wrist_flex"] = MotorCalibration(
+        id=5, drive_mode=0, homing_offset=0, range_min=1000, range_max=2137
+    )
+    robot.geometry = RobotGeometry(
+        {
+            "robot_id": "test_arm",
+            "cameras": {"overhead": {"identity": {"type": "opencv"}, "T_base_cam": np.eye(4).tolist()}},
+            "tool_point": {"offset_m": [-0.0073, -0.0892, 0.0049]},
+            "joint_zero_deg": {"wrist_flex": 4.0},
+        },
+        robot_id="test_arm",
+    )
+    model = robot.cartesian_model()
+    replay = CartesianModel.from_description(model.description(), robot.geometry.to_dict())
+    state = {f"{motor}.pos": value for motor, value in EASY_POSE.items()}
+    target = model.forward(state)
+    half_span = (2137 - 1000) * 360 / 4095 / 2
+    assert model.lower_deg[4] == -half_span and model.upper_deg[4] == half_span
+    np.testing.assert_allclose(replay.forward(state), target, atol=1e-12)
+    solved = model.inverse(state, target)
+    assert set(solved) == {f"{motor}.pos" for motor in MOTOR_NAMES[:-1]}
+    np.testing.assert_allclose(model.forward(solved), target, atol=1e-5)
+    np.testing.assert_allclose(model.forward(state | {"gripper.pos": 0.0}), target, atol=1e-12)
+
+
 def test_it_writes_its_own_gains_and_shares_the_plain_followers_calibration():
     """The gains the feed-forward's alpha was measured at, written at connect; the motors' calibration is the arm's,
     so the plain follower's file is read, not a copy that could drift from it."""

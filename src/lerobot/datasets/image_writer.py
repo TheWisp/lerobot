@@ -61,7 +61,7 @@ def image_array_to_pil_image(image_array: np.ndarray, range_check: bool = True) 
 
     - ``(H, W)`` or ``(1, H, W)`` / ``(H, W, 1)``: single-channel grayscale.
       The native dtype is preserved using the matching PIL mode
-      (``I;16`` / ``F``). This is the path used for raw depth maps (no rescaling, clamping, or downcasting)
+      (``L`` / ``I;16`` / ``F``). Used for infrared and raw depth maps, without rescaling.
     - ``(3, H, W)`` / ``(H, W, 3)``: RGB. Channels-first inputs are transposed
       to channels-last. Float inputs in ``[0, 1]`` are scaled to ``uint8``
       (existing behaviour, gated by ``range_check``).
@@ -78,10 +78,10 @@ def image_array_to_pil_image(image_array: np.ndarray, range_check: bool = True) 
     image_array = squeeze_single_channel(image_array)
 
     if image_array.ndim == 2:
-        if image_array.dtype not in [np.uint16, np.float32]:
+        if image_array.dtype not in [np.uint8, np.uint16, np.float32]:
             raise ValueError(
                 f"Unsupported single-channel image dtype: {image_array.dtype}. "
-                f"Supported dtypes: {sorted(str(d) for d in [np.uint16, np.float32])}."
+                f"Supported dtypes: {sorted(str(d) for d in [np.uint8, np.uint16, np.float32])}."
             )
         return PIL.Image.fromarray(np.ascontiguousarray(image_array))
 

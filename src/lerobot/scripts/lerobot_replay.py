@@ -82,6 +82,7 @@ from lerobot.robots import (  # noqa: F401
     openarm_follower,
     reachy2,
     rebot_b601_follower,
+    so107_follower_gravity,
     so107_follower_predictive,
     so_follower,
     so_follower_predictive,

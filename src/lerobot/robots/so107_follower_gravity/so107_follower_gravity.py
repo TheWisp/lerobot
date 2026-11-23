@@ -65,6 +65,39 @@ class SO107FollowerGravity(SO107Follower):
                     self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
                     self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
 
+    def cartesian_model(self):
+        from lerobot.robots.cartesian_model import CartesianModel
+        from lerobot.robots.kinematics import SelectedJointKinematics
+        from lerobot.robots.so107_description.calibrated_kinematics import (
+            calibrated_motor_limits,
+            make_calibrated_so107_kinematics,
+        )
+        from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+        if self.geometry is None:
+            raise ValueError("Cartesian execution needs measured robot geometry")
+        names = MOTOR_NAMES[:-1]
+        limits = calibrated_motor_limits(self.calibration)
+        lower, upper = zip(*(limits[name] for name in names), strict=True)
+        return CartesianModel(
+            SelectedJointKinematics(
+                make_calibrated_so107_kinematics(
+                    self.geometry.to_dict(),
+                    arm=self.config.arm,
+                    joint_limits_deg=limits,
+                ),
+                MOTOR_NAMES,
+                names,
+                {"gripper": 0.0},
+            ),
+            tuple(f"{name}.pos" for name in names),
+            tuple(self.units_per_motor_degree(name) for name in names),
+            "gripper.pos",
+            tuple(lower),
+            tuple(upper),
+            model_id=f"so107:{self.config.arm}:measured-tool",
+        )
+
     def units_per_motor_degree(self, motor: str) -> float:
         """Action units per alignment degree: 1 for the gripper or degrees mode."""
         # The gripper always uses RANGE_0_100, and its alignment was measured
