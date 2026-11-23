@@ -1532,7 +1532,7 @@ def test_sam3_flush_releases_memory_when_every_object_is_lost():
     a._tracks = {"top": track}
     a._pv = lambda _: None
     a._apply_clicks = lambda *_: False
-    a._detect_many = lambda *_: {}
+    a._detect_many = lambda *_, **__: {}
     a._read_output = lambda *_: None
     calls = []
     a.trk = lambda **kwargs: calls.append(kwargs) or object()
