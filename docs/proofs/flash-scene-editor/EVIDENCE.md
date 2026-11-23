@@ -3,7 +3,7 @@
 Captured 2026-10-28 from insertion episode 0, prepared version
 `insertion-migrated-v10-preferred-hover`, in the Run → FLASH demo viewer.
 
-![Frame 180 with measured surfaces and key-frame editor](demo-ui-frame180.png)
+![Frame 180 with measured surfaces and key-frame editor](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-scene-editor/demo-ui-frame180.png)
 
 The editor shows one selected key frame beside playback. Yellow timeline markers
 select key frames, arrows move between them, and clicking a measured object opens
@@ -24,7 +24,7 @@ interval.
 
 ## Turn editor check, 2026-10-28
 
-![Simplified turn editor on insertion demo frame 343](turn-rule-preview.png)
+![Simplified turn editor on insertion demo frame 343](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-scene-editor/turn-rule-preview.png)
 
 In the insertion demo, key frame 6 can now be given a turn around the ring's
 saved center with one button. The angle range is under **Refine turn**. Object

@@ -7,7 +7,7 @@ but lets the carried landmarks drift. Starting again at frame 280 does not
 remove the drift. No live tracker, dataset pose, GUI setting or robot control
 was changed by this experiment.
 
-[Full 713-frame video, 1x](full_demo_comparison.mp4). All three panels use the
+[Full 713-frame video, 1x](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-mask-depth-tracker/full_demo_comparison.mp4). All three panels use the
 same camera frame. Top: preserve the original surface, with depth cleanup.
 Middle: replace the map with each accepted observation. Bottom: depth cleanup
 and a **new** initialization at frame 280; its landmarks are not carried through

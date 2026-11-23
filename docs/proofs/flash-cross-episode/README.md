@@ -44,8 +44,8 @@ establish that premise.
 
 The [benchmark](../../../benchmarks/flash_cross_episode_trackeverything.py)
 reproduces the bridge and writes tracks, overlays and per-frame metrics. The
-[CSV](startup-bridges.csv) contains the startup values, and
-[this grid](bridge-evidence.jpg) shows the source, six starts and two carried
+[CSV](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/startup-bridges.csv) contains the startup values, and
+[this grid](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/bridge-evidence.jpg) shows the source, six starts and two carried
 views. Red is the recorded live dowel mask; green points pass the mask and
 depth check. Cyan points miss the mask; magenta points lie within the mask but
 miss the depth check.

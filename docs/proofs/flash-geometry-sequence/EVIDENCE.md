@@ -23,7 +23,7 @@ trial's observed initial motor state using calibrated forward kinematics.
 The dowel remains on the tray between demo frames 100 and 179, so this
 reference-to-approach transfer does not skip a demonstrated object motion.
 The [reproducible audit](../../../benchmarks/flash_cross_run_goal_choice.py) and
-[candidate-by-candidate data](min-motion-audit.json) retain the measurements.
+[candidate-by-candidate data](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/min-motion-audit.json) retain the measurements.
 
 | Trial start | Best surface fit: coverage, position move, turn | Shortest position move: coverage, move, turn |
 | ----------- | ----------------------------------------------- | -------------------------------------------- |
@@ -58,7 +58,7 @@ In particular, 69.1% green support for the shortest-position candidate does
 **not** imply 30.9% conflicting geometry. Whether it is acceptable requires a
 visibility-aware check, not just this plotted fraction.
 
-![Three alignments of measured demo surface points projected into one live frame. Green points agree with live depth, red are nearer, gray are behind it, orange are outside the logged outline, and purple have no live depth. White marks the current gripper; yellow marks the candidate approach goal and tool axis.](goal-choice-203310.jpg)
+![Three alignments of measured demo surface points projected into one live frame. Green points agree with live depth, red are nearer, gray are behind it, orange are outside the logged outline, and purple have no live depth. White marks the current gripper; yellow marks the candidate approach goal and tool axis.](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/goal-choice-203310.jpg)
 
 The demo gripper covers end A of the dowel at frame 204, leaving end B exposed.
 The candidate registrations below map A to **opposite** ends of the live dowel.
@@ -69,7 +69,7 @@ are candidate cross-run correspondences, not verified identities of material
 points. If either physical end can be used, the later insertion motion must
 remain consistent with whichever correspondence is chosen.
 
-![Demo before and during grasp, followed by two candidate mappings of its grasped and free dowel ends into the same live image. The shortest-position candidate swaps the ends relative to the best-cloud-overlap candidate.](demo-grasp-end-comparison.jpg)
+![Demo before and during grasp, followed by two candidate mappings of its grasped and free dowel ends into the same live image. The shortest-position candidate swaps the ends relative to the best-cloud-overlap candidate.](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/demo-grasp-end-comparison.jpg)
 
 I then tested the transformed gripper path for the 20:33 trial from the
 recorded **left-arm joint state**. This check interpolated 16 gripper poses for
@@ -78,7 +78,7 @@ grasp samples, seeding each IK solve from the preceding joint solution. It used
 the trial's 3 mm and 3° goal tolerances and 10 IK refinements. The 57 poses
 were geometric checks only; they were not executed on the robot.
 The [gripper-path audit](../../../benchmarks/flash_cross_run_gripper_path.py)
-and its [results for all 28 saved matches](gripper-path-all-203310.json)
+and its [results for all 28 saved matches](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/gripper-path-all-203310.json)
 preserve the inputs, settings and per-candidate failures. Fifteen matches
 solved all 57 sampled goals; that says nothing yet about collision safety or
 whether each underlying surface fit is valid.
@@ -135,9 +135,9 @@ surface points per side, and at most two path-feedback passes. These are
 reconstructed from its saved telemetry polygon. The test assumes the dowel has
 not moved appreciably between the clear demo surface at frame 100 and first
 grasp contact at frame 204; a runtime system must estimate the surface and
-gripper relation at the same stage. [Results at 17:57](embodiment-corrected-175733.json),
-[18:04](embodiment-corrected-180412.json), [19:11](embodiment-corrected-191155.json),
-and [20:33](embodiment-corrected-203310.json) retain all transforms and costs.
+gripper relation at the same stage. [Results at 17:57](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/embodiment-corrected-175733.json),
+[18:04](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/embodiment-corrected-180412.json), [19:11](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/embodiment-corrected-191155.json),
+and [20:33](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/embodiment-corrected-203310.json) retain all transforms and costs.
 
 | Trial start | Final two-way surface coverage | Final mask + depth support | First grasp branch difference | 57 sampled goals | Largest joint's cumulative travel |
 | ----------- | -----------------------------: | -------------------------: | ----------------------------: | ---------------: | --------------------------------: |
@@ -161,21 +161,21 @@ mask-and-depth support rising from 84.1% to 93.3%. This is why single-goal IK
 feasibility or cloud overlap alone is not enough evidence for the actual
 gripper path.
 
-![Two saved start frames with the arm-conditioned fitted demo surface projected over the live dowel. Green points pass the 6 mm mask-and-depth check. Orange points do not; this includes occlusion, missing depth, and boundary disagreement, so orange alone does not prove a conflict.](embodiment-registration-preview.jpg)
+![Two saved start frames with the arm-conditioned fitted demo surface projected over the live dowel. Green points pass the 6 mm mask-and-depth check. Orange points do not; this includes occlusion, missing depth, and boundary disagreement, so orange alone does not prove a conflict.](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/embodiment-registration-preview.jpg)
 
-The [wrong-object control](embodiment-wrong-object-203310.json) fitted
+The [wrong-object control](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/embodiment-wrong-object-203310.json) fitted
 the same demo dowel to the live ring. Its best two-way coverage was 49.2%,
 although the arm could still solve all 57 transformed goals. Thus arm
 feasibility cannot substitute for an independent visual acceptance check.
 At 19:11, using only 100 optimization points per side instead of 400 or 800
-left a [longer 150° joint path](embodiment-density-191155-100.json)
+left a [longer 150° joint path](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/embodiment-density-191155-100.json)
 after two feedback passes despite high surface coverage; the
-[800-point result](embodiment-density-191155-800.json) was 110°.
+[800-point result](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/embodiment-density-191155-800.json) was 110°.
 Point density affects which local fit the optimizer reaches.
 
 I also tested adding a direct projected-mask/front-of-depth penalty to the
 optimization. At a moderate weight, the 19:11 fit fell to 75.8% coverage and
-failed grasp sample 11. The [control data](embodiment-observation-191155.json)
+failed grasp sample 11. The [control data](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/embodiment-observation-191155.json)
 show this **naive penalty is unsuitable**; it does not show that depth or
 segmentation are unhelpful. A production observation cost needs an explicit
 visibility/noise model. The current experiment checks full recorded mask and
@@ -204,7 +204,7 @@ no guarantee of crossing between them. None of this requires a dowel-specific
 axis rule, but the visual and contact constraints must be independently
 validated before commanding the robot.
 
-![Ordered demo keyframes. Orange marks the saved dowel mask and cyan marks the ring mask.](keyframes.jpg)
+![Ordered demo keyframes. Orange marks the saved dowel mask and cyan marks the ring mask.](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/keyframes.jpg)
 
 At the first approach frame the dowel mask is absent under the gripper; that
 does not make the dowel disappear from the task state.
@@ -254,7 +254,7 @@ carry keyframe 342**, however, had only 87 interior depth points. Directly
 fitting the more visible live dowel to those points gave 36.8% coverage and a
 183 mm, 178° displacement. This is not a plausible motion command.
 
-![The live held-object outline is magenta, transferred demo goal points are orange, and the proposed direct fit is green.](carry_keyframe_mismatch.png)
+![The live held-object outline is magenta, transferred demo goal points are orange, and the proposed direct fit is green.](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/carry_keyframe_mismatch.png)
 
 The saved live masks here were reconstructed from recorded polygon boundaries,
 and the rollout's time within an interval need not match the demonstration's

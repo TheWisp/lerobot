@@ -7,7 +7,7 @@ experiment combines the six candidates' nearest-neighbour queries into two
 larger CPU calls, then computes every candidate's mask, depth and projected
 outline residual exactly as before. It leaves the optimizer and branch choice
 unchanged. The candidate is in [`benchmark.py`](benchmark.py), **not in the live
-tracker**; raw runs are in [`results.json`](results.json).
+tracker**; raw runs are in [`results.json`](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cpu-scaling/results.json).
 
 On 2026-10-25, the benchmark ran on a Ryzen 9 9950X (16 cores, 32 threads),
 SciPy 1.18.1, with OpenBLAS and OpenMP limited to one thread. It used three
@@ -48,7 +48,7 @@ fits already occupy CPU threads. Disabling the existing parallel tree queries
 slows the mixed workload substantially.
 
 This does not make the current three-object _vision pipeline_ 10 FPS. In the
-[stationary live-debug timing](../flash-rgbd-registration/multi_object_optimized_timing.json),
+[stationary live-debug timing](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/multi_object_optimized_timing.json),
 SAM masks took about 34 ms and the three serialized UFM matches took about
 36–38 ms each after subtracting lock wait. That is roughly 146 ms of serial
 mask/match work per processed frame before any fit, so even a free fitter would

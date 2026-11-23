@@ -62,7 +62,7 @@ floating-point bilateral filter uses the global depth range, and the earlier
 surface experiments consume the full depth-reliability image. No density,
 rejection threshold, correspondence model or fitting setting changed.
 
-[Recorded measurements](surface_roi_benchmark.json) compare against commit
+[Recorded measurements](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/surface_roi_benchmark.json) compare against commit
 `846ed5b9a` on the same 16 insertion frames. All returned arrays and counts were
 **exactly identical**. Median observation time fell from 36.7 to 3.7 ms on those
 848×480 frames. Each frame used 12 alternating before/after measurements after
@@ -131,7 +131,7 @@ uv run --no-sync python docs/proofs/flash-rgbd-registration/audit_held_vision.py
 ```
 
 **Pickup/release audit, 2026-10-24:** release no longer drops the estimate,
-but the held pose is still inaccurate. [Full-scene replay, all 713 frames](full_scene_release_handoff.mp4)
+but the held pose is still inaccurate. [Full-scene replay, all 713 frames](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/full_scene_release_handoff.mp4)
 shows both. This is an offline experiment, not a live-backend change.
 
 - **Pickup, 7.5–8.5 s:** no visual correction or reseeding changes the accepted
@@ -169,7 +169,7 @@ release is numerically unchanged. Post-release first-to-last motion is 3.0 mm
 and 1.25°, which is a motion measurement, **not an accuracy bound**. In frame
 540 the estimated axis is still 19.6° from the visible depth axis: the handoff
 preserves the inherited held-pose error. Do not use this result as a claim that
-the tracking is solved. [Continuity audit](results/bridges/release_handoff_audit.json).
+the tracking is solved. [Continuity audit](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/results/bridges/release_handoff_audit.json).
 The initial handoff without point refresh is also retained: it lost tracking
 after 38 post-release frames, rather than improving the absolute pose.
 
@@ -190,7 +190,7 @@ uv run --no-sync python docs/proofs/flash-rgbd-registration/audit_gripper_image_
   --output /tmp/flash-gripper-image-audit
 ```
 
-**Full-scene view:** [watch all 713 frames from pickup through retreat](full_scene_bridges.mp4),
+**Full-scene view:** [watch all 713 frames from pickup through retreat](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/full_scene_bridges.mp4),
 with the gripper, ring, current dowel landmarks and separate motion predictions
 visible together. This reruns the current 5 mm filtered-state experiment from
 frame zero, preserving its frame-zero reference throughout. It is a different
@@ -199,7 +199,7 @@ overlays are explicitly labelled **previous tracking**; the new method has only
 been evaluated on the dowel. No missing estimates or transition frames are cut.
 The renderer follows the earlier `full_demo_fusion_evidence.mp4` scene/evidence
 layout. [Full-run evidence](results/bridges/bridge-filtered-full/) and
-[video provenance](full_scene_bridges.json) retain that distinction.
+[video provenance](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/full_scene_bridges.json) retain that distinction.
 
 **Latest bridge experiment: steadier held motion, still not stable full-pose
 tracking.** The same visible interval now uses recorded gripper motion and the
@@ -207,18 +207,18 @@ production environment-group service. Predicting the last corrected pose with
 the gripper, then fitting current mask/depth with an explicit motion constraint,
 reduces the largest held-phase twist step from 17.8° to 5.0°. Clear-view shaft
 agreement stays at about 2.4°. Slow twist drift and a post-release fallback jump
-remain. [Watch the uninterrupted comparison candidate](shape_motion.mp4);
+remain. [Watch the uninterrupted comparison candidate](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/shape_motion.mp4);
 see [bridge ablations](#bridge-ablations). This is offline research, not a change
 to the live estimator or proof of accurate hidden landmarks.
 
 **Visible-phase result: the shaft is better aligned, but estimated twist around
-it still jumps.** [Watch the fresh start at frame 280](visible_phase_shape.mp4),
+it still jumps.** [Watch the fresh start at frame 280](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/visible_phase_shape.mp4),
 continued through insertion and release with no further restarts. The long axis
 agrees with clear measured depth to about 2–3°, but some estimated twist changes
 are 15–18° in a frame while the gripper barely rotates. See
 [visible-phase stability](#visible-phase-stability).
 
-[The full 713-frame recording at 1×](full_demo_shape.mp4) also includes the pickup
+[The full 713-frame recording at 1×](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/full_demo_shape.mp4) also includes the pickup
 observation gap. That uninterrupted run keeps the first-frame reference and
 landmarks throughout; it does not restart at the clear held-object view. The
 user's present criterion is stability while mostly visible; discontinuities
@@ -230,7 +230,7 @@ reference axis agrees with the measured visible surface direction to 2.3°
 median over frames 360–399, versus 15.5° for UFM transporting the same initialized
 reference without correction. This is same-sensor geometric consistency, not
 independent pose ground truth or verified hidden-point accuracy.
-[Watch the full 120-frame before/after](shape_correction.mp4); see the
+[Watch the full 120-frame before/after](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/shape_correction.mp4); see the
 [whole-shape experiment](#whole-shape-correction) for its limits.
 
 **Earlier result: none of the tested pairwise methods kept a sufficiently stable object
@@ -242,7 +242,7 @@ median over frames 281–399. The latter is visible in the camera image. A
 anchor stopped matching. This is evidence for maintaining several object views,
 not a validated live tracker or a robot test.
 
-[Watch the synchronized 1× video](registration_comparison.mp4). It shows all
+[Watch the synchronized 1× video](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/registration_comparison.mp4). It shows all
 120 frames, including the missed color-ICP matches. Cyan is the _same_ SAM3
 mask on every panel. Yellow A/B/C are three fixed 3D points transported from
 frame 280; their connecting lines show direction. White hollow circles are
@@ -393,7 +393,7 @@ does not make an absolute object anchor. A proper multi-view map or windowed
 pose graph would need persistent object coordinates and direct consistency
 checks against the current mask and depth; this experiment does not rule out
 that design. See `multi_history_ablation.py` and
-[`results/keyframe/multi_history_20.json`](results/keyframe/multi_history_20.json)
+[`results/keyframe/multi_history_20.json`](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/results/keyframe/multi_history_20.json)
 for the exact study settings and per-frame traces.
 
 ## Whole-shape correction
@@ -712,7 +712,7 @@ Add `--motion-tolerance-m .005` for the fixed constraint, and
 `--propagate-filtered-held` for the sequential variant. Compare the saved traces
 using `analyze_bridges.py`; `--motion-reference` takes the initialization-only
 result containing the fixed gripper/group predictions. The saved comparison is
-[bridge_comparison.json](results/bridges/bridge_comparison.json), with every
+[bridge_comparison.json](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/results/bridges/bridge_comparison.json), with every
 variant's poses, per-frame decisions, settings and timing under
 [results/bridges](results/bridges/).
 
@@ -818,8 +818,8 @@ Reproduce the final path with the earlier `bridge_shape.py` command, using
 --results <old-result> <new-result> --output <json>` to check the recorded consumer
 and compare like intervals. The complete inputs/outputs are under
 [results/bridges/bridge-guarded-final](results/bridges/bridge-guarded-final), with
-[the comparison](results/bridges/fusion_audit.json) and
-[the full-scene video](full_scene_guarded.mp4).
+[the comparison](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/results/bridges/fusion_audit.json) and
+[the full-scene video](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/full_scene_guarded.mp4).
 
 Verification includes synthetic correction/rejection pairs, missing motor
 samples, release, group re-anchoring, recorded partial-view admission fixtures,
@@ -846,7 +846,7 @@ The shared acceptance policy rejected four continued fits in the 270 segment;
 they remain visible as candidates, not accepted robot evidence. The initial
 reference is a coordinate choice, not independent evidence of pose accuracy.
 
-[Per-frame timings and decisions](shared_pipeline_parity.json) record the check.
+[Per-frame timings and decisions](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/shared_pipeline_parity.json) record the check.
 Median fitting time over the continued frames was 87.0 ms for the raw session
 and 88.2 ms through the shared pipeline. SAM is excluded because both sides used
 recorded masks; the first neural call includes warm-up, so these are diagnostic
@@ -890,7 +890,7 @@ updates/s). Capture stayed about 30 fps. Median depth-gap p90 was 3.27 mm before
 and 4.21 mm after. These are separate live samples with different segmentation
 and depth noise, not an identical-input accuracy comparison. Processing time
 excludes JSON publication; model warm-up and camera startup are excluded.
-[Measurements and configuration-sensitive recorded comparisons](surface_sampling_scaling.json)
+[Measurements and configuration-sensitive recorded comparisons](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/surface_sampling_scaling.json)
 preserve the individual diagnostics.
 
 Also compared the actual UFM on insertion frames 234–238, 270–274 and 435–439,

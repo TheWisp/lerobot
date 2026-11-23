@@ -108,7 +108,7 @@ necessary. The new check's entire measured cost is only about 1% of processing
 time in this replay, so small batching or exact-data reuse is proportionate;
 a larger cache or cross-layer coupling is not justified by this measurement.
 
-[Captured counts and timings](depth-query-results.json) ·
+[Captured counts and timings](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/depth-query-results.json) ·
 [Full interleaved processing comparison](group-depth-interleaved.json).
 
 ```sh
@@ -132,7 +132,7 @@ work. Each captured state was cloned outside the timer and evaluated 51 times
 with alternating order after warmup. Thus about **0.08 ms** is saved in this
 operation; this is not a measurement of total frame throughput. Every frame's
 rejected IDs, remaining groups and cleanup records match the previous implementation.
-[Measurements and implementation hash](depth-batching-results.json).
+[Measurements and implementation hash](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/depth-batching-results.json).
 
 The recorded equivalence tests cover mixed rejection, unknown depth, group
 retirement and retained offscreen members. The recorded frame-owner regression

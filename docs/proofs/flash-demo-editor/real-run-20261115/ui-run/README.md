@@ -1,6 +1,6 @@
 # UI robot run, 2026-11-15
 
-The saved “Gamepad onto green ring” demo was started from FLASH → Demo editor → Live, after moving `white_left` to its recorded rest position in the Robot tab. The UI reached 343/343 keyframes and 423 motor commands. [The final camera frame](final.jpg) shows the gamepad beside the ring, so this was not a successful placement. The final gripper command was 95.0°, with readback 94.9°.
+The saved “Gamepad onto green ring” demo was started from FLASH → Demo editor → Live, after moving `white_left` to its recorded rest position in the Robot tab. The UI reached 343/343 keyframes and 423 motor commands. [The final camera frame](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/real-run-20261115/ui-run/final.jpg) shows the gamepad beside the ring, so this was not a successful placement. The final gripper command was 95.0°, with readback 94.9°.
 
 The command stream used the intended 30 Hz cadence: retained commanded ticks had a 33.34 ms median separation. The pickup's 131 keyframes took 4.333 s between first and last command, matching 130/30 s. The placement's 211 keyframes took 6.977 s, matching 210/30 s. The largest dispatch gap anywhere in the run was 2.667 s, so the whole run was not uninterrupted playback. The motor trace retains only its last 3,600 of 3,803 ticks; the dropped beginning prevents a complete physical-speed calculation for pickup.
 

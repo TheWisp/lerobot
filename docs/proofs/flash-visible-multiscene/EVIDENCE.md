@@ -2,7 +2,7 @@
 
 [Watch the phone-friendly pose check](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_visible_pose_tracking_examples.mp4) · 15.3 s, 1080 × 1440, H.264, 4.4 MB.
 
-![Held dowel: rigid estimate versus the same three raw point IDs](cover.jpg)
+![Held dowel: rigid estimate versus the same three raw point IDs](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-visible-multiscene/cover.jpg)
 
 The video starts with the **held dowel in the insertion demo**, then shows a
 moving-tray rollout, a separate pick-and-place rollout, and another demo view.

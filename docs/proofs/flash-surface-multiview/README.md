@@ -48,11 +48,11 @@ depth point to match the first-view surface. It kept the terms for visible
 reference points and their mask boundary. Each case scores six frames at
 five-frame intervals, with the same surface-point error against annotation:
 
-| Labeled object turn                              | Current first-view fit, median / last | Partial first-view fit, median / last | All earlier views, median / last |
-| ------------------------------------------------ | ------------------------------------: | ------------------------------------: | -------------------------------: |
-| [Cracker box](partial_reference_oracle.json)     |                        11.6 / 23.4 mm |                        18.0 / 24.7 mm |                    9.8 / 17.9 mm |
-| [Sugar box](partial_reference_sugar_box.json)    |                        12.3 / 13.6 mm |                        22.8 / 25.7 mm |                     5.6 / 5.1 mm |
-| [Mustard bottle](partial_reference_mustard.json) |                          9.5 / 7.8 mm |                         9.5 / 10.1 mm |                    7.0 / 12.0 mm |
+| Labeled object turn                                                                                                                                                   | Current first-view fit, median / last | Partial first-view fit, median / last | All earlier views, median / last |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------: | ------------------------------------: | -------------------------------: |
+| [Cracker box](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-surface-multiview/partial_reference_oracle.json)     |                        11.6 / 23.4 mm |                        18.0 / 24.7 mm |                    9.8 / 17.9 mm |
+| [Sugar box](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-surface-multiview/partial_reference_sugar_box.json)    |                        12.3 / 13.6 mm |                        22.8 / 25.7 mm |                     5.6 / 5.1 mm |
+| [Mustard bottle](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-surface-multiview/partial_reference_mustard.json) |                          9.5 / 7.8 mm |                         9.5 / 10.1 mm |                    7.0 / 12.0 mm |
 
 On the cracker box at frame 25 the partial fit grew from the current fit's
 14.6 mm error to 36.0 mm. The one-way fit avoids forcing an unseen backside
@@ -180,7 +180,7 @@ pose. Neither the model nor the live control rule has been changed by this
 audit. It motivates an interval-level attachment check and an admission test
 for new views before either is used for control.
 
-The [per-frame fit report](held_dowel_fit_holdout.json) records the same 44
+The [per-frame fit report](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-surface-multiview/held_dowel_fit_holdout.json) records the same 44
 held-out frames fitted from the **fixed frame-475
 gripper prediction** using the first view alone and both views. The table
 reports how far the fitter moved away from that independent motion prior;
@@ -200,7 +200,7 @@ not treat a lower fit cost as a measured six-axis pose. Reproduce this check
 with `benchmarks/flash_held_surface_holdout.py` and `--fit` over frames
 300–429 in steps of three; the report records the surface and solver settings.
 
-The [gamepad control](held_gamepad_fit_holdout.json) repeats the same procedure
+The [gamepad control](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-surface-multiview/held_gamepad_fit_holdout.json) repeats the same procedure
 on a separate prepared demo. Its candidate held view at frame 300 has 415
 clean depth points, scored on 21 later frames (350–450, every fifth frame).
 Adding it left the median measured-to-reference gap at 3.36 mm and increased

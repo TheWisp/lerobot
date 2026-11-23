@@ -10,10 +10,10 @@ python -m lerobot.policies.flash.sealed_demo_evidence DATASET_ROOT BUNDLE_JSON
 
 Both versions now have all 713 camera frames rebuilt into local `scene-evidence` sidecars, without modifying either prepared skill. For the causal version, the first 591 frames covered by the original pose cache reproduced its evidence labels, estimator labels, and available pose matrices **exactly** for both objects. At frame 228 the rebuilt verified support groups contained 157 dowel-context points and 294 ring-context points. The dowel group is withdrawn during the attached phase, as the causal pipeline requires.
 
-- [Frame 100: current observed surfaces](observed-frame-100.png), colored by the recorded camera instead of a single reference patch.
-- [Frame 228: observed surfaces and actual group support points](group-frame-228.png).
-- [Frame 500: carried object](held-frame-500.png), with the gripper-backed pose available separately.
-- [Frame 540: after release](release-frame-540.png). The dowel's SAM mask and measured visible surface remain available even though the saved pose extractor reports **lost**. This exposes a pose-estimation failure, not loss of every object pixel.
-- [Frame 540: 3D close-up](release-focus-frame-540.png). The flat RGB backdrop is hidden when the camera orbits, avoiding false duplicate geometry.
+- [Frame 100: current observed surfaces](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-scene/observed-frame-100.png), colored by the recorded camera instead of a single reference patch.
+- [Frame 228: observed surfaces and actual group support points](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-scene/group-frame-228.png).
+- [Frame 500: carried object](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-scene/held-frame-500.png), with the gripper-backed pose available separately.
+- [Frame 540: after release](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-scene/release-frame-540.png). The dowel's SAM mask and measured visible surface remain available even though the saved pose extractor reports **lost**. This exposes a pose-estimation failure, not loss of every object pixel.
+- [Frame 540: 3D close-up](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-scene/release-focus-frame-540.png). The flat RGB backdrop is hidden when the camera orbits, avoiding false duplicate geometry.
 
 The rebuilt masks and groups are an inspection sidecar. They do not revise the stored policy pose or make an unmeasured back surface into geometry. Browser inspection of camera, focus, and group toggles produced no page errors.

@@ -62,10 +62,10 @@ measured local default, not a universal optimum for every CPU.
 
 Raw measurements:
 
-- [`red_hand.json`](red_hand.json)
-- [`three_objects.json`](three_objects.json)
-- [`original_vs_pipeline.json`](original_vs_pipeline.json)
-- [`object_workers.json`](object_workers.json)
+- [`red_hand.json`](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cpu-pipeline/red_hand.json)
+- [`three_objects.json`](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cpu-pipeline/three_objects.json)
+- [`original_vs_pipeline.json`](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cpu-pipeline/original_vs_pipeline.json)
+- [`object_workers.json`](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cpu-pipeline/object_workers.json)
 
 The recordings remain local under
 `~/.cache/huggingface/lerobot/flash_debug_traces/`; each JSON names its trace and
@@ -125,7 +125,7 @@ decisions remained accepted, but the largest fitted-pose difference was 2.05 mm
 and 0.265°. A separate static live scene improved from 196 to 182 ms median
 processing time (4.92 to 5.29 reported updates/s), with all three objects
 accepted. Those sessions seeded their references afresh and are not a paired
-pose-accuracy test. The [measurements](ufm_batch_trial.json) retain both
+pose-accuracy test. The [measurements](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cpu-pipeline/ufm_batch_trial.json) retain both
 comparisons and the sampled source ages.
 
 The prototype was **reverted**: the paired throughput gain was too small to

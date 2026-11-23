@@ -195,7 +195,7 @@ three, 100–172, 217–259 and 267–712. Frames 173–216 have no supported
 dowel pose, and 260–266 cannot be connected to the next segment by an
 adjacent fit. Reseeding an A/B/C display frame after either gap does not
 establish how that frame relates to the prior one. The
-[per-segment evidence](../../../../docs/proofs/flash-cross-episode/te-demo-map/full-demo-adjacent-frames.json)
+[per-segment evidence](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/te-demo-map/full-demo-adjacent-frames.json)
 records anchor IDs, fit support and raw-track disagreements.
 
 This clarifies the earlier visually stable dense point overlay. On the same

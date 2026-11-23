@@ -109,7 +109,7 @@ track and remains distinct from this recorded panel.
 
 ![One cube point is matched onto a finger in the next processed image](01-lk-wrong-match.png)
 
-The [endpoint replay](lk-failure-detail.json) records what the matcher actually
+The [endpoint replay](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/lk-failure-detail.json) records what the matcher actually
 returns. At frame 5372 → 5381 (301 ms), point ID 1905 starts inside the cube mask
 at pixel (292.63, 252.28), but LK puts it on a finger at (350.24, 259.21).
 Only 35% of its finest-scale 21×21 matching window lies inside the source SAM mask.
@@ -138,7 +138,7 @@ consistency check or claiming a higher frame rate is the required fix.
 
 ## Why the pairs are rejected and sparse
 
-The [endpoint audit](pair-filter-audit.json) evaluates the saved SAM masks and model depth for
+The [endpoint audit](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/pair-filter-audit.json) evaluates the saved SAM masks and model depth for
 frames 5372 and 5381. Of 17 object queries, 12 survive LK and target-mask membership; 3 become
 [usable 3D pairs](../../../src/lerobot/policies/flash/docs/glossary.md#usable-and-validated-3d-pairs).
 All 12 have finite positive depth in both 3×3 neighborhoods. **All nine excluded pairs fail the
@@ -191,14 +191,14 @@ PYTHONPATH=src:. python -m benchmarks.flash_recovery_pair_audit /path/to/saved-r
 
 This section describes the original failure. The [depth rejection result](#depth-rejection-of-carried-group-points) below tests its correction.
 
-[Group-state replay](group-membership-audit.json) separates missing measurements from rejected
+[Group-state replay](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/group-membership-audit.json) separates missing measurements from rejected
 measurements at frame 5381. Group 0 has 425 accepted environment measurements. Of the 15 retained
 object members, 12 have no current scene measurement; IDs 6, 591 and 592 do have current 3D
 measurements, but all three disagree with the group's fitted motion. Consequently none of the
 15 has `GroupView.measured=True`. This flag means an accepted group inlier, not merely that a
 measurement exists. The earlier statement that all 15 lacked measurements was wrong.
 
-The [LK loss audit](old-point-loss-audit.json) traces these exact 15 IDs through the
+The [LK loss audit](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/old-point-loss-audit.json) traces these exact 15 IDs through the
 shared image tracker. All originated inside the cube mask. Twelve tracks failed LK's
 forward/backward consistency check: one at frame 5235, seven at 5345, one at 5352,
 two at 5359, and one at 5365. Their absence is not a depth-support failure.
@@ -401,8 +401,8 @@ CUDA is synchronized before and after the shared update. GPU transfers and
 CPU output conversion are included. Other processes were not stopped, so these
 are local measurements rather than an isolated hardware benchmark.
 
-[Timing summary and per-pair results](image-matching-latency.json) ·
-[Individual timing samples](image-matching-latency.samples.jsonl).
+[Timing summary and per-pair results](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/image-matching-latency.json) ·
+[Individual timing samples](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/image-matching-latency.samples.jsonl).
 
 Reproduce with an environment containing the cached UFM dependencies:
 
@@ -503,7 +503,7 @@ and model inference are excluded. The first frame is excluded from timing summar
 closer comparison below.** It must not be attributed to the depth check. The
 original complete-run comparison did not control timing variation sufficiently
 to establish that saving. These figures exclude camera/model throughput.
-[Original timing summaries](group-depth-results.json) · [Original per-frame measurements](group-depth-results.frames.jsonl).
+[Original timing summaries](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/group-depth-results.json) · [Original per-frame measurements](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/group-depth-results.frames.jsonl).
 
 ### Follow-up timing comparison
 
@@ -533,7 +533,7 @@ work changes with the group state, but these measurements support a small added
 processing cost for this correctness fix, not a demonstrated speedup. All six
 pairs still remove all 15 stale memberships only with the check enabled; both
 versions accept all 37 post-initialization observations.
-[Follow-up timing summaries](group-depth-interleaved.json) · [Follow-up per-frame measurements](group-depth-interleaved.frames.jsonl).
+[Follow-up timing summaries](group-depth-interleaved.json) · [Follow-up per-frame measurements](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-recovery-20261119/group-depth-interleaved.frames.jsonl).
 
 The [813 KiB fixture](../../../tests/policies/flash/fixtures/group_depth_20261119/README.md)
 reconstructs stale group membership from 38 measured point snapshots and stores

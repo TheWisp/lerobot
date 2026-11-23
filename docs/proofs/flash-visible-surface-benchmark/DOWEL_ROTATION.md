@@ -6,7 +6,7 @@ held dowel moves from horizontal to upright. It is the interval needed to
 answer whether a tracker retains the dowel's **pose**, not merely points on a
 mostly stable visible surface.
 
-[Watch the four-way pose video](dowel_rotation_pose_comparison.mp4). It plays
+[Watch the four-way pose video](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-visible-surface-benchmark/dowel_rotation_pose_comparison.mp4). It plays
 the four-second source interval at one-third speed. White is the current SAM3
 outline; yellow is its _measured 2D long direction_; cyan is each method's
 projected shaft. The yellow line has no end identity or 3D depth. The cyan
@@ -14,9 +14,9 @@ arrow is drawn from a consistent source-object axis and retains its proposed
 center and end direction. `NO POSE` means the method did not have enough
 accepted rigid correspondence to provide a pose.
 
-![Pose comparison during the turn at frame 340](dowel_rotation_frame340.jpg)
+![Pose comparison during the turn at frame 340](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-visible-surface-benchmark/dowel_rotation_frame340.jpg)
 
-![Pose quality over all rotation frames](dowel_rotation_quality.png)
+![Pose quality over all rotation frames](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-visible-surface-benchmark/dowel_rotation_quality.png)
 
 The chart shows the **unoriented projected shaft-angle difference** to the
 SAM3 mask's 2D long direction. Grey means no pose or a mask whose long axis is
@@ -72,6 +72,6 @@ attachment and hidden tip; this result does not erase those limits.
 The [audit script](../../../benchmarks/flash_dowel_rotation_audit.py) uses the
 saved complete-pose traces and the common point-fit result from
 `/home/feit/.cache/flash-visible-dowel-rotation-280-400/`. The frozen seed
-hash, settings and key-frame values are in the [small JSON summary](dowel_rotation_summary.json);
+hash, settings and key-frame values are in the [small JSON summary](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-visible-surface-benchmark/dowel_rotation_summary.json);
 full per-frame rows stay beside the local recording. No independent 6D
 object-pose labels were available for this demo.

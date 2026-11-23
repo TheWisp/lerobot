@@ -50,7 +50,7 @@ selection (version 5 to 6), so the before/after does not isolate the image
 scoring change alone. It cannot establish that all held poses are correct.
 
 A controlled [version comparison](compare_versions.py), saved in
-[version_comparison.json](version_comparison.json), separates those two changes.
+[version_comparison.json](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-held-visual-support/version_comparison.json), separates those two changes.
 It checks that annotation, keypoints, and reference points are byte-identical;
 every pose and mask jointly observed in the old and new extraction is identical.
 It then runs the **current** held decision rule on each version's saved input:
@@ -93,7 +93,7 @@ gripper projection dominates on both mask coverage and depth residual, when
 that dominance also passes the configured depth tolerance, or whenever the
 visual residual exceeds that tolerance. A fifth variant replaces the full
 object mask with its reliable-depth interior for the decision. The harness saves the
-[summary](ablation_results.json) and [per-frame decisions](ablation_results_frames.csv).
+[summary](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-held-visual-support/ablation_results.json) and [per-frame decisions](ablation_results_frames.csv).
 
 | Demo           | Rule                                           | Conflicted camera frames during annotated hold | Accepted direct corrections | Median visible-surface depth p90 |
 | -------------- | ---------------------------------------------- | ---------------------------------------------: | --------------------------: | -------------------------------: |
@@ -127,7 +127,7 @@ The original comparison sampled raw depth wherever a projected reference point
 landed inside the object mask. A mask can include pixels at a depth jump. Those
 pixels can report the background behind the object and make a plausible pose
 appear tens of millimetres in front of the measured surface. The
-[frame-303 image](gamepad-frame303-depth-edge.png) marks this on the held
+[frame-303 image](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-held-visual-support/gamepad-frame303-depth-edge.png) marks this on the held
 gamepad's right edge. Using the pipeline's existing mask-interior and local
 depth-continuity settings, **only for the depth residual**, gives:
 
@@ -171,7 +171,7 @@ show that either corrected pose is accurate, or that the rule works on an
 unseen object or camera view. In particular, the current dowel correction at frame
 291 is not strongly supported by reliable interior depth.
 
-The [clean-depth counterfactual](clean_depth_ablation.json) keeps the full mask
+The [clean-depth counterfactual](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-held-visual-support/clean_depth_ablation.json) keeps the full mask
 for silhouette coverage and changes only the depth part of the pose verdict to
 the reliable interior. Its [per-frame evidence](clean_depth_ablation_frames.csv)
 shows the following. These are software replays of two already recorded demos;

@@ -4,7 +4,7 @@ This interval starts at frame 400, **after the dowel's difficult rotation**.
 The [rotation-pose audit](DOWEL_ROTATION.md) covers frames 280–400 and shows
 substantial differences that this later visible-surface comparison cannot reveal.
 
-The [nine-second side-by-side video](dowel_trackers_side_by_side.mp4) plays
+The [nine-second side-by-side video](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-visible-surface-benchmark/dowel_trackers_side_by_side.mp4) plays
 the three-second source interval at one-third speed. The white line is the
 current SAM3 mask. Cyan is the projected convex footprint of the depth surface
 observed in frame 400 under each fitted pose; it can bridge the part later
@@ -14,7 +14,7 @@ three arrows show the fitted frame orientation; their starting directions come
 from the first visible cloud, not a labelled insertion axis. A red point can be genuinely
 occluded rather than a false track, so it is not by itself an error label.
 
-![Six trackers on the held dowel at frame 489](dowel_trackers_last_frame.jpg)
+![Six trackers on the held dowel at frame 489](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-visible-surface-benchmark/dowel_trackers_last_frame.jpg)
 
 At the end, LiteTracker, CoTracker3, optical flow and BootsTAPIR keep the cyan
 footprint close to the white visible outline. Optical flow, CoTracker3 and
@@ -90,4 +90,4 @@ Input manifest and complete row-level result are kept locally under
 frame and seed hashes. No human point labels or independent object-pose ground
 truth are available for this interval, so the table ranks **visible-surface and
 gripper-motion consistency**, not exact contact-tip accuracy.
-The [small result summary](dowel_grounded_summary.json) is kept in git.
+The [small result summary](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-visible-surface-benchmark/dowel_grounded_summary.json) is kept in git.

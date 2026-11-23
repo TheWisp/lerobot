@@ -8,7 +8,7 @@ The shared demo/run/debug backend now enables `compiled_surface_fit` and `reuse_
 
 The backend owns one bounded search pool, shared by its object sessions and closed after pending fitting workers finish. The compiler warms the float32/float64 kernels before processing frames and caches generated machine code. Numba is optional: without it, a logged fallback retains the original NumPy calculation. This rig's existing worker environment has Numba 0.68.0 installed with its existing NumPy 2.2.6; other environments can install those versions to reproduce this configuration. Per-frame diagnostics report whether compiled fitting is active and the reused worker count.
 
-Deployment verification passed 68 tests, including the real production fitter, shared pipeline, configuration round-trip, missing-compiler fallback and search-pool teardown. Reversing the production depth visibility direction makes the recorded-fit equivalence test fail. A fresh paired 30-frame/three-object run through the production backend reproduced every pose and decision exactly and measured 5.17 → 7.10 updates/s with saved masks; see [deployment measurements](deployed_pipeline.json). These are not SAM-inclusive live FPS.
+Deployment verification passed 68 tests, including the real production fitter, shared pipeline, configuration round-trip, missing-compiler fallback and search-pool teardown. Reversing the production depth visibility direction makes the recorded-fit equivalence test fail. A fresh paired 30-frame/three-object run through the production backend reproduced every pose and decision exactly and measured 5.17 → 7.10 updates/s with saved masks; see [deployment measurements](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-native-acceleration/deployed_pipeline.json). These are not SAM-inclusive live FPS.
 
 The compiled CPU calculations are the strongest result: they reduced fitting time on all four recorded fit cases and reproduced the baseline poses and acceptance decisions across three sequential recordings. Reusing search threads improved total throughput in those recordings, but slowed the isolated moving-ring fit. UFM batching reduced neural inference time, but changed some poses; it is not an exact replacement.
 
@@ -41,7 +41,7 @@ The insertion sequence has 686 available pose matrices and 27 frames without a p
 
 These are **equivalence results**, not ground-truth accuracy measurements. Preserving an accepted pose does not establish that it is physically correct. The recordings cover different motions and rejection/recovery, but cannot prove equivalence for all future scenes or library versions. Cold Numba compilation and thread startup are not included in steady throughput; integration would need explicit warmup. The hand measurement has one pass per mode and the other recordings two, so small timing differences should not be overinterpreted.
 
-Raw results: [three objects](pipeline_three.json), [moving hand](pipeline_hand.json), [full demo](pipeline_demo.json).
+Raw results: [three objects](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-native-acceleration/pipeline_three.json), [moving hand](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-native-acceleration/pipeline_hand.json), [full demo](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-native-acceleration/pipeline_demo.json).
 
 ## Isolated fitting
 
@@ -54,7 +54,7 @@ Median wall time in milliseconds, three repeats after warmup. Each case also com
 | Stationary dowel, frame 0  |     62.1 |   64.5 |     46.6 |              43.6 |                               43.6 |
 | Stationary dowel, frame 13 |     40.9 |   40.3 |     31.3 |              29.4 |                               30.0 |
 
-More threads are not uniformly better: query size, outline complexity, work imbalance and scheduling overhead matter. Compiling the numerical loops consistently helped these cases; parallelizing whole candidates did not. [Raw fit measurements](fits.json) also include pools of two and four threads and process CPU time.
+More threads are not uniformly better: query size, outline complexity, work imbalance and scheduling overhead matter. Compiling the numerical loops consistently helped these cases; parallelizing whole candidates did not. [Raw fit measurements](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-native-acceleration/fits.json) also include pools of two and four threads and process CPU time.
 
 ## UFM batching correctness
 
@@ -82,7 +82,7 @@ The transform's translation column differed by 4.04 mm, but that is displacement
 
 The batched network therefore remains experimental. A committed small fixture pins the real depth-sampling difference through `measured_pairs`, `robust_fit` and `WholeSurfaceFit`, without requiring network access or a checkpoint in pytest. The benchmark's independent scalar path was also checked against the actual production `ufm_pairs` consumer, with exact metric point pairs.
 
-Raw results: [27 pairs](ufm_batches.json), [consumer cross-check](ufm_consumer_check.json), [causal sequence](ufm_trajectory.json).
+Raw results: [27 pairs](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-native-acceleration/ufm_batches.json), [consumer cross-check](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-native-acceleration/ufm_consumer_check.json), [causal sequence](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-native-acceleration/ufm_trajectory.json).
 
 ## Correctness checks
 

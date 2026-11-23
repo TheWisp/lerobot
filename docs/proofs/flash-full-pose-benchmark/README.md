@@ -10,13 +10,13 @@ and 31 aligned RGB-D frames; frame 0 initializes every method, so 30 frames
 per clip are scored. The source videos, measured depth, masks, first-frame
 query points and fit traces remain in the local benchmark cache.
 
-![Annotated-pose comparison across nine clips](pose_error_heatmap.png)
+![Annotated-pose comparison across nine clips](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-full-pose-benchmark/pose_error_heatmap.png)
 
 Each cell shows the median **3D displacement of identical first-frame measured
 surface points** when carried by the estimated versus annotated _relative_
 transform, plus the number of frames with a pose. Grey is no pose. The score
 uses 64 source points and does not need a CAD model. Rotation errors, per-frame
-values and motion size are in [the saved results](labelled_scores.json).
+values and motion size are in [the saved results](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-full-pose-benchmark/labelled_scores.json).
 
 The two Point2Pose conditions use the same pinned fork, bridge, configuration,
 RGB-D and initial annotation. **P2P + SAM2** lets Point2Pose produce its own
@@ -36,7 +36,7 @@ This uses the [rig configuration](p2p_rig_config_used.yaml) unchanged on the
 external 640×480 clips, with pinned Point2Pose checkout
 `95bd7a8808fc1aaf015d510dffcccaa3c6971a9c`. It evaluates our current
 configuration, not an author-tuned YCBInEOAT submission. The
-[run provenance](run_provenance.json) records the config, bridge, input hashes,
+[run provenance](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-full-pose-benchmark/run_provenance.json) records the config, bridge, input hashes,
 exit status and wall time for every labelled and local run.
 
 | Clip                        |           P2P + SAM2 |                P2P + GT masks |         Lite + fit |      TAPNext + fit |
@@ -71,7 +71,7 @@ Some dots legitimately fall off the current visible mask as their source
 surface rotates away, so their exact overlap is a diagnostic, not a material
 point label.
 
-![Bleach frame 30: annotated motion, Point2Pose, and LiteTracker](bleach_frame30.jpg)
+![Bleach frame 30: annotated motion, Point2Pose, and LiteTracker](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-full-pose-benchmark/bleach_frame30.jpg)
 
 Point2Pose's median reported step time across these clips was about **35 ms**
 with its own SAM2 and **12 ms** with masks supplied. The latter excludes the

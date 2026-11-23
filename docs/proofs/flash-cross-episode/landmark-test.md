@@ -17,7 +17,7 @@ camera-frame ID. These are **recorded** trials, with no robot act in this test.
 
 For each replay start, I sent the demo and live RGB-D frames to the installed
 TrackEverything checkpoint, querying that exact demo pixel. Green circles in
-[the image](landmark-transfer.jpg) are the two approximate endpoint locations
+[the image](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/landmark-transfer.jpg) are the two approximate endpoint locations
 derived from the live SAM mask. Red is the **direct** landmark prediction. Blue
 is a separate rigid-transform prediction fitted from other surface queries;
 the last fifth of the demo dowel, including the marked end, was held out of
@@ -43,7 +43,7 @@ frames, starting with its predicted live pixel. This is the sensible two-stage
 use: cross-episode match once, then temporal tracking within the rollout.
 Across 82 frames with an exactly aligned recorded dowel mask, the predicted
 point is inside the mask in 59 and has mask plus depth agreement within the
-diagnostic 10 mm tolerance in 50. The [six-frame view](landmark-two-stage-rollout.jpg)
+diagnostic 10 mm tolerance in 50. The [six-frame view](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/landmark-two-stage-rollout.jpg)
 shows the red prediction and green mask boundary. Before grasp, 12 of 13
 masked frames have surface agreement. During frames 60–299 the prediction
 often has no surface support, mainly while the object is gripped and
@@ -52,7 +52,7 @@ Reappearance on the surface does **not** certify that it returned to the same
 material point on a featureless cylinder.
 
 I also tried treating the demo frame and all 500 live frames as one hard-cut
-video with a single source query. [That comparison](landmark-through-rollout.jpg)
+video with a single source query. [That comparison](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/landmark-through-rollout.jpg)
 shows the point staying near the old tray location instead of transferring at
 the cut. It had no mask-plus-depth-supported frame among the same 82 masked
 frames. Inference over two frames and over the full clip gives different

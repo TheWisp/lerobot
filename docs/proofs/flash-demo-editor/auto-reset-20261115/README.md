@@ -4,13 +4,13 @@ The hosted GUI at `http://127.0.0.1:9102/#/flash/editor` was restarted from
 `research/flash-tracker-restart` with the automatic-reset change. From its Demo
 editor, **Apply → Run robot** started the only saved demo, **Gamepad onto green
 ring**, using `white_left`. The source revision and file hashes are in
-[source.json](source.json); [source.patch.gz](source.patch.gz) captures the running
+[source.json](source.json); [source.patch.gz](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/auto-reset-20261115/source.patch.gz) captures the running
 working changes, including the pre-existing planner edit.
 
 The real run published **resetting to rest position** with **zero demo commands**
 for approximately 3.57 seconds, then began planning and dispatch. The first motor
 tick after the reset was within **0.422° of every saved rest joint value**, including
-the gripper. [summary.json](summary.json) contains all per-joint errors and the
+the gripper. [summary.json](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/auto-reset-20261115/summary.json) contains all per-joint errors and the
 observed state transitions. The reset uses the existing nominal three-second
 rest-position ramp; the observed phase includes reads, motor I/O and status timing.
 
@@ -22,19 +22,19 @@ the hosted GUI. The process exited with code 0 after **193 demo/approach command
 The gamepad was picked up, but placement did not complete. The arm was not reset
 again on Stop.
 
-![The gamepad held after pickup, with the green ring still below it](stalled.jpg)
+![The gamepad held after pickup, with the green ring still below it](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/auto-reset-20261115/stalled.jpg)
 
 Evidence:
 
-- [Execution history](execution-history.jsonl.gz): timestamped GET responses,
+- [Execution history](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/auto-reset-20261115/execution-history.jsonl.gz): timestamped GET responses,
   including reset before the first demo command and the clean stop.
-- [Motor trace](motor_trace.json.gz): all 1,887 ticks retained, including tick 0
+- [Motor trace](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/auto-reset-20261115/motor_trace.json.gz): all 1,887 ticks retained, including tick 0
   immediately after reset. Reset waypoints themselves use the shared rest helper
   and are outside this demo MotorLoop trace.
-- [Plan](plan.json.gz), [configuration](config.json),
-  [waiting state](execution.json), [terminal state](final-execution.json), and
+- [Plan](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/auto-reset-20261115/plan.json.gz), [configuration](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/auto-reset-20261115/config.json),
+  [waiting state](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/auto-reset-20261115/execution.json), [terminal state](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/auto-reset-20261115/final-execution.json), and
   [tracker status](state.json).
-- [Preflight](preflight.json) is the later pickup preflight, not the reset readback;
+- [Preflight](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-editor/auto-reset-20261115/preflight.json) is the later pickup preflight, not the reset readback;
   the worker overwrites it at each range.
 
 Verification before the physical trial: 56 focused tests passed. The updated

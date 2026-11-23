@@ -15,7 +15,7 @@ frames**. Filled anchors agree with their raw track at that frame; hollow
 anchors are inferred. The video displays adjacent fit support and explicitly
 removes a frame when its supported-motion graph breaks. A newly visible dowel
 segment is labeled as a **new, unlinked frame**, not silently aligned to the
-previous one. The [summary](full-demo-adjacent-frames.json) and
+previous one. The [summary](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/te-demo-map/full-demo-adjacent-frames.json) and
 [renderer](../../../../benchmarks/flash_te_full_demo_frames.py) reproduce it.
 The mask/depth check uses the existing 10 mm agreement band and the rigid fit
 uses a 5 mm inlier band. Both are offline diagnostics, not controller limits.
@@ -29,7 +29,7 @@ frame seeds its local coordinates. This uses future frames. The fits use the
 selected IDs too, so filled markers are **not independent accuracy checks**;
 the dedicated three-point clip below holds its anchors out of the fit.
 
-The [start-of-segment diagnostic](anchor-start-diagnostic.png) exposes a
+The [start-of-segment diagnostic](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/te-demo-map/anchor-start-diagnostic.png) exposes a
 limitation of this visualization. Segment 3 starts at frame 267, but its
 A/B/C frame is seeded at frame 489 and propagated **222 frames backward**.
 At frame 267 only four dowel tracks pass the mask/depth check, and none of the
@@ -127,7 +127,7 @@ with its selected rigid fit within the 5 mm _visualization_ band; adjacent
 estimates can change by more than 10 mm. These jumps do not measure
 TrackEverything's adjacent-frame coherence or physical insertion accuracy. The
 marked surface proxy is not the exact physical tip, and the hole plane is an
-approximation. The [per-frame values and evidence counts](insertion-relative-motion.json)
+approximation. The [per-frame values and evidence counts](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/te-demo-map/insertion-relative-motion.json)
 and [rendering code](../../../../benchmarks/flash_te_insertion_relation_video.py)
 make the illustration reproducible. It does not establish a demo-to-live
 landmark transfer.
@@ -136,7 +136,7 @@ This is an offline test of carrying point identity through the demo instead of
 independently registering distant demo frames. It uses the saved
 `trackeverything-growth-ui-20261021-a` run of the 613-frame insertion demo and
 the recorded 20:33 live trial. The [benchmark](../../../../benchmarks/flash_te_demo_map_consistency.py)
-and [measurements](results.json) reproduce the ten selected live frames and
+and [measurements](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/te-demo-map/results.json) reproduce the ten selected live frames and
 seven candidate demo views. This does not change the FLASH controller.
 
 The saved TrackEverything run adds point cohorts when new dowel surface becomes

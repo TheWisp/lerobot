@@ -2,7 +2,7 @@
 
 [Watch the phone-friendly gizmo video](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_moving_objects_pose_gizmo.mp4) · 27 s, 1080 × 1440, H.264. The [earlier triangle view](https://github.com/TheWisp/lerobot/releases/download/flash-visible-tracking-20261023/FLASH_moving_objects_pose_check.mp4) remains available.
 
-![Dowel rotation after the final local reseed](cover.jpg)
+![Dowel rotation after the final local reseed](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-moving-pose/cover.jpg)
 
 This follow-up deliberately shows objects that move: the dowel during a continuous
 gripper-rotation sequence in the insertion demo, the yellow block pushed on the
@@ -160,7 +160,7 @@ conflict improves from 6.28% to 5.67%, though its worst frame worsens from
 **not independently measured pose errors**.
 Large jumps remain; this is not a solved rigid-tracking system.
 
-The [rejected stricter surface experiment](yellow-strict-consensus-experiment.json)
+The [rejected stricter surface experiment](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-moving-pose/yellow-strict-consensus-experiment.json)
 reduced median orientation step further, to 1.79°, but reduced median
 mask/depth agreement to 75.67% and raised median foreground conflict to 11.06%.
 Smoother output alone was insufficient evidence to keep it. Surface refinement
@@ -190,7 +190,7 @@ that the remaining input tracks fail rigidity before that processing.
 
 Reproduce the saved-input audit using
 [`flash_visible_drift_audit.py`](../../../benchmarks/flash_visible_drift_audit.py).
-The [dowel report](dowel-drift-audit.json) and [yellow report](yellow-drift-audit.json)
+The [dowel report](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-moving-pose/dowel-drift-audit.json) and [yellow report](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-moving-pose/yellow-drift-audit.json)
 record the source paths, frame spans and existing tolerances. For either report,
 pass its `scene`, `recording`, `mask_dir`, `role`, and frame limits as CLI
 arguments, plus `--min-inliers 12 --trials 120 --output /tmp/audit.json`.

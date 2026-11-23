@@ -173,8 +173,8 @@ camera, so rotation about the object moves the arbitrary origin. Geometry
 alone has not yet established the stable point identity needed to add that
 later view. These images show the measured mask boundary in cyan and the
 saved frame-100 surface projected in red under the two placements:
-[frame 150](../docs/proofs/flash-reference-view-registration/dowel-frame-150.jpg),
-[frame 500](../docs/proofs/flash-reference-view-registration/dowel-frame-500.jpg).
+[frame 150](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-reference-view-registration/dowel-frame-150.jpg),
+[frame 500](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-reference-view-registration/dowel-frame-500.jpg).
 The generic `reference_view_registration` candidate generator now makes the
 four geometry fits available beside the existing trace-based check in the demo
 editor. It also ran on the gamepad view at frame 136; its lowest-cost proposal

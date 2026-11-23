@@ -31,7 +31,7 @@ measurement includes a warm GPU, five repeated fits, the one-time per-frame
 GPU upload and incremental peak VRAM. The saved run had the live three-object
 camera-debug worker active on the same GPU. The full output, including pose
 matrices and raw times, is in
-[`comparison_live_gpu.json`](comparison_live_gpu.json).
+[`comparison_live_gpu.json`](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-gpu-surface-fit/comparison_live_gpu.json).
 
 | Recorded case              | Shared preparation | CPU fit median | GPU fit median | GPU upload | Extra peak VRAM | GPU pose vs CPU |
 | -------------------------- | -----------------: | -------------: | -------------: | ---------: | --------------: | --------------: |
@@ -67,7 +67,7 @@ poses per case, the residual arrays agree within `3e-8`:
 These are sequential, synchronous evaluations of the same candidate poses;
 GPU batching could change throughput for a solver that can issue candidates
 together. The raw three-repeat data is in
-[`same_pose_residuals.json`](same_pose_residuals.json). The different search
+[`same_pose_residuals.json`](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-gpu-surface-fit/same_pose_residuals.json). The different search
 algorithms are mathematically equivalent here; the **different optimizer is a
 comparability flaw** in the earlier full-fit benchmark.
 
@@ -75,7 +75,7 @@ The same-pose test was repeated with the CUDA tree traversal. All 80 residual
 arrays per case still agree with the CPU within `3e-8`. Median CPU/GPU times
 were **105/176 ms** for the ring, **40/118 ms** for the held dowel,
 **45/95 ms** for stationary frame 0 and **42/84 ms** for frame 13. The
-[raw tree comparison](same_pose_tree_residuals.json) measures this specific
+[raw tree comparison](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-gpu-surface-fit/same_pose_tree_residuals.json) measures this specific
 kernel, not a theoretical GPU limit. It avoids exhaustive pairs but still
 traverses divergent branches and transfers each result back to the CPU solver.
 
@@ -91,7 +91,7 @@ under the active camera worker were:
 | Stationary dowel 0  |                    100 ms |                     300 ms |         16.0 mm, 2.4° |
 | Stationary dowel 13 |                     67 ms |                     344 ms |          5.4 mm, 0.6° |
 
-The [raw same-solver result](same_solver_comparison.json) still has different
+The [raw same-solver result](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-gpu-surface-fit/same_solver_comparison.json) still has different
 final poses. The production solver estimates derivatives by perturbing its six
 pose variables at very small steps. At a `1e-8` metre translation step, the
 CPU and CUDA residual difference is amplified into a roughly 5% difference in
@@ -100,7 +100,7 @@ one derivative on the two stationary frames; at `1e-5` metre it is below
 sensitive to tiny residual changes. The controlled same-pose residual test
 above remains the clean speed comparison for the objective alone. Changing
 the production derivative rule requires its own accuracy and regression study.
-The [same-solver tree comparison](same_solver_tree_comparison.json) is also
+The [same-solver tree comparison](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-gpu-surface-fit/same_solver_tree_comparison.json) is also
 slower and still produces numerically divergent final poses; exact nearest
 distances alone do not repair derivative sensitivity.
 
@@ -109,7 +109,7 @@ distances alone do not repair derivative sensitivity.
 The earlier conclusion that "the GPU is slower" needs the workload attached.
 [`profile_residual_path.py`](profile_residual_path.py) times 80 _identical CPU
 solver candidate poses_ with the same exact `cKDTree` traversal on CPU and
-CUDA. The [saved profile](residual_path_profile.json) was taken on an RTX 5090
+CUDA. The [saved profile](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-gpu-surface-fit/residual_path_profile.json) was taken on an RTX 5090
 with PyTorch 2.11, after warmup, without the live camera worker. The
 "resident" column has pre-uploaded poses and precomputed hulls; it therefore
 isolates residual execution from those per-pose CPU costs.

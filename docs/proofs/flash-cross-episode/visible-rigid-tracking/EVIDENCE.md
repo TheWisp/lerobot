@@ -28,7 +28,7 @@ dowel frames versus 460 for the old fit. It gained 100 frames and rejected 69
 old-fit frames, mostly around the visibly poor/occluded transition. More pose
 availability alone does not certify accuracy.
 
-![Frame-489 projection comparison](frame489-pose-projection.png)
+![Frame-489 projection comparison](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/visible-rigid-tracking/frame489-pose-projection.png)
 
 White is the target SAM3 outline. Green projected source points agree with its
 measured depth to 10 mm; red points lie more than 10 mm in front of observed
@@ -84,7 +84,7 @@ The projected source surface's median image position differed from the SAM3
 mask centroid by 2.6 pixels median and 4.5 pixels at worst across the 75
 frames. This is an image-space alignment check, not independent pose truth.
 
-![Visible ring motion at four frames](moving-ring-visible-check.png)
+![Visible ring motion at four frames](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/visible-rigid-tracking/moving-ring-visible-check.png)
 
 The white outline is the current SAM3 ring mask; cyan is the initial RGB-D
 surface projected through the fitted rigid motion. The image is cropped around

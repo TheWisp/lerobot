@@ -244,9 +244,9 @@ matched depth points, so this measurement alone cannot resolve that conflict.
 Representative camera frames with projected saved held surface (orange) and
 independent extraction where available (cyan):
 
-![Dowel demo held-pose audit](../../../../../docs/proofs/flash-demo-v6-audit/insertion.jpg)
+![Dowel demo held-pose audit](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-v6-audit/insertion.jpg)
 
-![Gamepad demo held-pose audit](../../../../../docs/proofs/flash-demo-v6-audit/pick_place.jpg)
+![Gamepad demo held-pose audit](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-demo-v6-audit/pick_place.jpg)
 
 ## Physical rollouts
 

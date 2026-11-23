@@ -34,7 +34,7 @@ PYTHONPATH=src /tmp/flash-native-benchmark-venv/bin/python docs/proofs/flash-hel
 
 For the second attempt, substitute its trial path above and use `docs/proofs/flash-held-trial-holdout/second-trial` for the replay output directory and axis-audit paths.
 
-The [future-axis check](audit_future_axis.py) compares each proposal's direction in the measured gripper frame at one camera time with the visible direction in a later camera frame. It is a check of a rigid-carry prediction, not an in-sample fit. The configured horizons below are evaluation probes, not runtime thresholds; the script accepts any positive horizon. At each probe it selects the first camera frame at or after the requested delay. The full per-frame results are saved for [20:33:10](future_axis_comparison.json.gz) and [20:18:38](second-trial/future_axis_comparison.json.gz).
+The [future-axis check](audit_future_axis.py) compares each proposal's direction in the measured gripper frame at one camera time with the visible direction in a later camera frame. It is a check of a rigid-carry prediction, not an in-sample fit. The configured horizons below are evaluation probes, not runtime thresholds; the script accepts any positive horizon. At each probe it selects the first camera frame at or after the requested delay. The full per-frame results are saved for [20:33:10](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-held-trial-holdout/future_axis_comparison.json.gz) and [20:18:38](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-held-trial-holdout/second-trial/future_axis_comparison.json.gz).
 
 | Attempt  | Future delay | Compared frames | Vision predicts later direction better | Median vision gap | Median gripper gap |
 | -------- | -----------: | --------------: | -------------------------------------: | ----------------: | -----------------: |
@@ -198,7 +198,7 @@ expresses the raw visual candidate's pose change in the six measured surface
 directions. It weights each direction by the recorded point-to-plane sensitivity,
 an assumed 10 mm whole-object prior uncertainty, and a 5 mm depth error. The
 gripper pose comes from measured joints interpolated to the same camera time;
-the recorded [axis audits](axis_audit_all_held.json.gz) now include that pose.
+the recorded [axis audits](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-held-trial-holdout/axis_audit_all_held.json.gz) now include that pose.
 All earlier axis-audit fields are unchanged. This is a one-frame shadow
 calculation, not an accepted observation or a control change.
 
@@ -207,8 +207,8 @@ calculation, not an accepted observation or a control change.
 | 20:33:10 |                 99 frames |                18.2° |                  18.6° |              11.2° |                              21/99 |
 | 20:18:38 |                145 frames |                13.7° |                  13.8° |              14.1° |                             47/145 |
 
-These numbers are in [the first result](partial_pose_projection.json) and
-[the second result](second-trial/partial_pose_projection.json). A sweep of
+These numbers are in [the first result](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-held-trial-holdout/partial_pose_projection.json) and
+[the second result](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-held-trial-holdout/second-trial/partial_pose_projection.json). A sweep of
 prior-to-depth uncertainty ratios from 0.2 to 100 did not find a setting that
 improved both attempts' median future-direction agreement. At the extremes,
 the projection reproduced the gripper-only and raw-vision directions as

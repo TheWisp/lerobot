@@ -436,7 +436,7 @@ objects; it is not proportional to the object's mask area. A measured steady
 state does not establish a worst-case peak or prove that arbitrary selections
 cannot exhaust memory.
 
-[A camera-only sample with at least 380 processed frames](../../../../../docs/proofs/flash-rgbd-registration/surface_memory_soak.json)
+[A camera-only sample with at least 380 processed frames](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/surface_memory_soak.json)
 spanned more than two configured SAM3 history intervals on the selected green ring. After
 model loading, the worker used about 5.1 GiB resident RAM and 6.0 GiB reported
 GPU memory. GPU memory was 6194 MiB throughout the second 190-frame window;
@@ -445,7 +445,7 @@ peaks could have been missed, and this scene does not prove an arbitrary-length
 or arbitrary-mask memory bound. The pose candidates in this memory test were
 not necessarily accepted for action.
 
-[The original multi-object timing check](../../../../../docs/proofs/flash-rgbd-registration/multi_object_debug_timing.json)
+[The original multi-object timing check](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/multi_object_debug_timing.json)
 added a green ring, mini gamepad and yellow block in sequence. The median
 compute time rose from 231 ms with one object to 407 ms with two and 557 ms
 with three, or about 4.3, 2.5 and 1.8 processed updates/s. SAM mask time grew
@@ -476,7 +476,7 @@ peak; the new worker's peak memory was not measured.
 
 [The measurement archive](../../../../../docs/proofs/flash-rgbd-registration/README.md)
 preserves earlier alternatives and the dated experiments. The
-[scale comparison](../../../../../docs/proofs/flash-rgbd-registration/surface_sampling_scaling.json)
+[scale comparison](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/surface_sampling_scaling.json)
 records the tray change from roughly 1.7 s to 0.32 s per processed update, with
 about 30 fps capture. Those are stationary camera-only measurements, not a
 universal rate or proof of successful manipulation. A later tray candidate

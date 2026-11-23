@@ -11,7 +11,7 @@ crop is centered and scaled on its mask, with everything outside the mask
 replaced by uniform gray. Neither the tray, robot, nor camera-frame location
 is an input to the similarity score.
 
-![Object-only demo-to-replay matching and a rejected case](object-view-retrieval.jpg)
+![Object-only demo-to-replay matching and a rejected case](https://raw.githubusercontent.com/TheWisp/lerobot/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/object-view-retrieval.jpg)
 
 Green is the recorded object-mask boundary; red is the annotated or predicted
 point. The two live panels at frame 496 test the same demo point independently:
@@ -28,7 +28,7 @@ not independently established.
    sequence, 598 frames have a recorded dowel mask; the tracked point has
    mask and measured-depth agreement within the diagnostic 10 mm tolerance
    in 512. It loses this evidence during part of grasp (roughly frames
-   180–260) and is observed again later. [Per-frame evidence](demo-tip-evidence.csv)
+   180–260) and is observed again later. [Per-frame evidence](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-cross-episode/demo-tip-evidence.csv)
    keeps the location, visibility, mask, and depth check.
 2. Among the 512 supported demo frames, rank object-only RGB crops with the
    cached DINOv2-base embedding. I also ranked centered binary silhouettes
