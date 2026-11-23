@@ -25,6 +25,7 @@ from threading import Event, Thread
 import numpy as np
 import zstandard as zstd
 
+from .dataset_export import repack_episode_data
 from .live_surface_io import write_snapshot
 
 
@@ -447,6 +448,7 @@ def export_episode(directory):
                             os.link(source, processed_root / f"{i:06d}.{suffix}")
             dataset.save_episode()
             dataset.finalize()
+            repack_episode_data(temporary)
             shutil.copy2(directory / "config.json", temporary / "flash" / "v1" / "config.json")
             if (directory / "camera_streams.json").is_file():
                 shutil.copy2(

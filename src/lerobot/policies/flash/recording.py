@@ -16,6 +16,7 @@ from typing import Any, Protocol
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.feature_utils import build_dataset_frame
 
+from .dataset_export import repack_episode_data
 from .execution import ActionReceipt, MotorTick
 from .perception import LatestPoseStore, LatestRGBDFrameStore
 from .pose_disagreement import PoseComparison, PoseComparisonVerdict, SurfaceSupport
@@ -218,6 +219,7 @@ class FlashEpisodeWriter:
             raise ValueError("outcome must be explicit")
         self.dataset.save_episode()
         self.dataset.finalize()
+        repack_episode_data(self.dataset.root)
         self._trace.close()
         os.replace(self.partial_path, self.path)
         manifest_path = self.extension_dir / "manifest.json"
