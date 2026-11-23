@@ -55,7 +55,8 @@ class GpuWholeSurfaceFit:
         self.envelope = tensor(cpu.envelope)
         self.outline = tensor(cpu.mask_outline)
         self.k = tensor(cpu.k)
-        self.depth = tensor(cpu.observation["depth"])
+        # Match the CPU objective's prepared, reliability-filtered depth rays.
+        self.depth = tensor(cpu.depth)
         self.mask = tensor(cpu.observation["mask"])
         self.outside_mask = tensor(cpu.outside_mask)
         self.height, self.width = cpu.observation["depth"].shape
