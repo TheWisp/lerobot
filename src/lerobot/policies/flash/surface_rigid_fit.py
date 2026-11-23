@@ -96,6 +96,10 @@ def solve(problem, initial, max_iterations):
             "evaluations": len(poses) - 1,
             "library": "visible_icp",
             "converged": converged,
+            # Scoring sample counts use the same diagnostic contract as the
+            # library-backed solver, including coarse-to-fine experiments.
+            "fit_reference_points": len(problem.reference_queries),
+            "fit_target_points": len(problem.target_queries),
         },
         [(problem.score(pose), pose) for pose in poses],
     )
