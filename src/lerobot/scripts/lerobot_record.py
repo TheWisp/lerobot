@@ -98,6 +98,7 @@ import json
 import logging
 import subprocess
 import time
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pprint import pformat
@@ -160,6 +161,7 @@ from lerobot.robots import (  # noqa: F401
     openarm_follower,
     reachy2,
     rebot_b601_follower,
+    so107_follower_gravity,
     so107_follower_predictive,
     so_follower,
     so_follower_predictive,
@@ -935,7 +937,11 @@ def record_loop(
 
 
 @parser.wrap()
-def record(cfg: RecordConfig) -> LeRobotDataset:
+def record(
+    cfg: RecordConfig,
+    *,
+    prepare_recording: Callable[[Robot, dict], tuple[Robot, Any, Callable]] | None = None,
+) -> LeRobotDataset:
     # Fail here rather than ~90 lines into dataset creation. `cfg.dataset` is
     # annotated as the fork's DatasetRecordConfig, but the annotation is not
     # enforced: constructing RecordConfig with upstream's base class from
@@ -999,6 +1005,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         ),
     )
 
+    # Extensions may adapt the robot and dataset factory while reusing this
+    # lifecycle and the ordinary recording loop. The standard path is unchanged.
+    dataset_factory = LeRobotDataset
+    run_loop = record_loop
+    if prepare_recording is not None:
+        robot, dataset_factory, run_loop = prepare_recording(robot, dataset_features)
     dataset = None
     intervention_dataset = None
     listener = None
@@ -1010,7 +1022,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     try:
         if cfg.resume:
             num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
-            dataset = LeRobotDataset.resume(
+            dataset = dataset_factory.resume(
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
                 batch_encoding_size=cfg.dataset.video_encoding_batch_size,
@@ -1037,7 +1049,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             # FileExistsError and the operator has to rename by hand. Only on
             # the create path — a resumed dataset keeps the name it already has.
             cfg.dataset.stamp_repo_id()
-            dataset = LeRobotDataset.create(
+            dataset = dataset_factory.create(
                 cfg.dataset.repo_id,
                 cfg.dataset.fps,
                 root=cfg.dataset.root,
@@ -1063,7 +1075,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         if cfg.intervention_repo_id is not None:
             if cfg.resume:
                 num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
-                intervention_dataset = LeRobotDataset.resume(
+                intervention_dataset = dataset_factory.resume(
                     cfg.intervention_repo_id,
                     root=cfg.dataset.root,
                     batch_encoding_size=cfg.dataset.video_encoding_batch_size,
@@ -1078,7 +1090,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     f"Resumed intervention dataset: {cfg.intervention_repo_id} ({intervention_dataset.num_episodes} episodes)"
                 )
             else:
-                intervention_dataset = LeRobotDataset.create(
+                intervention_dataset = dataset_factory.create(
                     cfg.intervention_repo_id,
                     cfg.dataset.fps,
                     root=cfg.dataset.root,
@@ -1194,7 +1206,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             if robot.name == "unitree_g1":
                 robot.reset()
 
-            record_loop(
+            run_loop(
                 robot=robot,
                 events=events,
                 fps=cfg.dataset.fps,
@@ -1229,7 +1241,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
                     current_episode_index = dataset.num_episodes
                     log_say(f"Recording episode {current_episode_index}", cfg.play_sounds)
-                    pending_intervention_episodes = record_loop(
+                    pending_intervention_episodes = run_loop(
                         robot=robot,
                         events=events,
                         fps=cfg.dataset.fps,

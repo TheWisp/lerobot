@@ -71,6 +71,8 @@ class RealSenseCameraConfig(CameraConfig):
     enable_spatial: bool = True  # Smooth depth based on neighboring pixels
     enable_temporal: bool = True  # Smooth depth across frames
     enable_hole_filling: bool = True  # Fill in missing depth values
+    # Opt-in synchronized rectified monochrome pair for stereo depth models.
+    enable_infrared: bool = False
 
     def __post_init__(self) -> None:
         self.color_mode = ColorMode(self.color_mode)

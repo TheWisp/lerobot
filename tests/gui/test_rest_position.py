@@ -1,5 +1,6 @@
 """Tests for the rest position recording and playback module."""
 
+from threading import Event
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -123,6 +124,36 @@ class TestRecordRestPosition:
 
 class TestMoveToRestPosition:
     """Tests for smooth interpolation to rest position."""
+
+    @pytest.mark.parametrize("stop_after", [0, 3])
+    def test_stop_prevents_remaining_rest_commands(self, stop_after):
+        robot = _make_mock_robot({"a.pos": 0.0})
+        stop = Event()
+        if stop_after == 0:
+            stop.set()
+
+        def send(action):
+            robot.sent_actions.append(dict(action))
+            if len(robot.sent_actions) == stop_after:
+                stop.set()
+
+        robot.send_action.side_effect = send
+        with patch.object(stop, "wait", side_effect=lambda _: stop.is_set()):
+            move_to_rest_position(robot, {"a.pos": 10.0}, 1.0, 10, stop_event=stop)
+        assert len(robot.sent_actions) == stop_after
+        assert all(action["a.pos"] < 10.0 for action in robot.sent_actions)
+
+    def test_stop_during_wait_prevents_next_waypoint(self):
+        robot = _make_mock_robot({"a.pos": 0.0})
+        stop = Event()
+
+        def stop_in_wait(_):
+            stop.set()
+            return True
+
+        with patch.object(stop, "wait", side_effect=stop_in_wait):
+            move_to_rest_position(robot, {"a.pos": 10.0}, 1.0, 10, stop_event=stop)
+        assert robot.sent_actions == [{"a.pos": 1.0}]
 
     def test_basic_interpolation(self):
         robot = _make_mock_robot({"a.pos": 0.0, "b.pos": 100.0})

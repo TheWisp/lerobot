@@ -6,6 +6,7 @@ responsible for persisting / loading the rest-position dict.
 
 import logging
 import time
+from threading import Event
 
 from lerobot.robots.robot import Robot
 from lerobot.utils.robot_utils import precise_sleep
@@ -45,11 +46,13 @@ def move_to_rest_position(
     rest_position: dict[str, float],
     duration_s: float = 3.0,
     steps_per_second: int = 50,
+    *,
+    stop_event: Event | None = None,
 ) -> None:
     """Smoothly interpolate the robot from its current position to *rest_position*.
 
     Sends intermediate waypoints via ``robot.send_action()`` at the
-    requested rate.  All existing safety limits (``max_relative_target``,
+    requested rate. All existing safety limits (``max_relative_target``,
     joint limits) inside ``send_action()`` are honoured.
 
     The robot **must** be connected.
@@ -59,9 +62,13 @@ def move_to_rest_position(
         rest_position: Target ``{motor.pos: float}`` dict.
         duration_s: Total movement time in seconds (default 3).
         steps_per_second: Interpolation frequency (default 50 Hz).
+        stop_event: Optional cancellation signal. Stops issuing waypoints and
+            interrupts the wait between them; does not command the final pose.
     """
     if not rest_position:
         raise ValueError("rest_position is empty")
+    if stop_event is not None and stop_event.is_set():
+        return
 
     # Read current positions
     obs = robot.get_observation()
@@ -70,7 +77,6 @@ def move_to_rest_position(
         if key in obs:
             current_pos[key] = float(obs[key])
         else:
-            # Can't read this key — assume already at target (safe no-op for that joint)
             logger.warning("Cannot read current position for %r, assuming at rest", key)
             current_pos[key] = rest_position[key]
 
@@ -82,18 +88,20 @@ def move_to_rest_position(
     )
 
     for step in range(1, num_steps + 1):
+        if stop_event is not None and stop_event.is_set():
+            return
         start_t = time.perf_counter()
         alpha = step / num_steps  # ramps 1/N … 1.0
 
-        action = {
-            key: current_pos[key] * (1.0 - alpha) + rest_position[key] * alpha
-            for key in rest_position
-            if key in current_pos
-        }
+        action = {key: current_pos[key] * (1.0 - alpha) + rest_position[key] * alpha for key in rest_position}
 
         robot.send_action(action)
 
         elapsed = time.perf_counter() - start_t
-        precise_sleep(max(dt - elapsed, 0.0))
+        delay = max(dt - elapsed, 0.0)
+        if stop_event is None:
+            precise_sleep(delay)
+        elif stop_event.wait(delay):
+            return
 
-    logger.info("Reached rest position")
+    logger.info("Rest-position command sequence complete")

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import abc
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import draccus
@@ -25,6 +25,12 @@ class RobotConfig(draccus.ChoiceRegistry, abc.ABC):
     id: str | None = None
     # Directory to store calibration file
     calibration_dir: Path | None = None
+    geometry_path: Path | None = field(
+        default=None,
+        metadata={
+            "description": "Measured camera-to-base geometry for this robot. Required for FLASH demos; separate from motor calibration."
+        },
+    )
 
     def __post_init__(self):
         if hasattr(self, "cameras") and self.cameras:
