@@ -165,10 +165,6 @@ class RealSenseCamera(Camera):
         # Required protocol: ``processor.process_frame_with_depth(color, depth)``
         # returning the processed color frame.
         self.post_grab_processor = None
-        # Optional non-blocking observer of each owned, aligned RGB-D grab.
-        # Installed by FLASH's rolling recorder before connect(); independent
-        # of consumers that poll the latest-frame slot.
-        self.aligned_frame_listener = None
         # Optional FLASH observer receives the aligned depth before and after
         # software filters for the exact same camera frame.
         self.aligned_frame_with_raw_listener = None
@@ -949,17 +945,6 @@ class RealSenseCamera(Camera):
                         )
                     except Exception as exc:
                         logger.warning("%s: stereo frame listener failed: %s", self, exc)
-
-                listener = getattr(self, "aligned_frame_listener", None)
-                if (
-                    listener is not None
-                    and processed_color_frame is not None
-                    and processed_depth_frame is not None
-                ):
-                    try:
-                        listener(processed_color_frame, processed_depth_frame, capture_time, frame_sequence)
-                    except Exception as exc:
-                        logger.warning("%s: aligned frame listener failed: %s", self, exc)
 
                 publish_s = time.perf_counter()
                 with self.frame_lock:

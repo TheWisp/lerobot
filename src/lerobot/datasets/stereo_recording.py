@@ -2,9 +2,9 @@
 
 The robot owns its cameras. Recording peeks one complete cached frameset and
 uses that RGB/depth pair too, rather than attaching newer IR to older RGB.
-IR and sensor depth are lossless PNG image channels; RGB keeps the configured
-video encoder. Frame sequence and actual capture time expose skipped/repeated
-camera frames independently of the dataset's nominal control-loop timestamp.
+IR and sensor depth are lossless TIFF image channels; RGB keeps the configured
+video encoder. Frame sequence and host frameset-arrival time expose skipped or
+repeated camera frames independently of the dataset's nominal control-loop timestamp.
 """
 
 import numpy as np

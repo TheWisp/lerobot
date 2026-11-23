@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from ..config import RobotConfig
 from ..so_follower.config_so_follower import SOFollowerConfig
@@ -25,13 +25,11 @@ ROBOT_TYPE = "so107_follower_gravity"
 @RobotConfig.register_subclass(ROBOT_TYPE)
 @dataclass
 class SO107FollowerGravityRobotConfig(RobotConfig, SOFollowerConfig):
-    """The SO-107 follower held on its commanded pose against gravity, for control that commands joints from the
-    calibrated kinematics without watching the fingertip.
+    """SO-107 position servo with explicit gains and gravity feed-forward.
 
-    Its own robot type preserves the actuator behavior in recordings and replay: the plain ``so107_follower``
-    writes LeRobot's P 16 with no feed-forward, and the two settle differently under load. Holding a 60 mm circle at
-    constant height, P 16 fell 33 mm on average and stalled its lift; P 32 with this feed-forward held -0.1 mm mean,
-    3.9 mm max (``so107_description/docs/gravity_sag.md``).
+    This is a separate robot type because its commands settle differently from
+    ``so107_follower``. The gain was fitted on one left-arm rig; see
+    ``so107_description/docs/gravity_sag.md`` before using another arm.
     """
 
     required_extras = (*SOFollowerConfig.required_extras, "pink-dep")
@@ -45,9 +43,6 @@ class SO107FollowerGravityRobotConfig(RobotConfig, SOFollowerConfig):
     # Every goal moves by alpha * tau_g(goal): the servos' compliance in degrees per N*m, measured at P 32 (3.1-3.4
     # across the loaded joints, gravity_sag.md). It scales with 1/P.
     gravity_ff_alpha: float = 3.2
-    # Working bounds measured on this assembly, motor degrees: joint -> {"min": ..., "max": ...}, either side
-    # optional. They only narrow the calibrated range (a cable that stops a joint early); the jog holds goals in them.
-    joint_limits_deg: dict[str, dict[str, float]] = field(default_factory=dict)
 
     def __post_init__(self):
         super().__post_init__()

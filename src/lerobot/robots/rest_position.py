@@ -53,9 +53,7 @@ def move_to_rest_position(
 
     Sends intermediate waypoints via ``robot.send_action()`` at the
     requested rate. All existing safety limits (``max_relative_target``,
-    joint limits) inside ``send_action()`` are honoured. Rest keys must
-    match this robot's action and observation keys; a stale profile is an
-    error rather than a successful no-op.
+    joint limits) inside ``send_action()`` are honoured.
 
     The robot **must** be connected.
 
@@ -74,14 +72,13 @@ def move_to_rest_position(
 
     # Read current positions
     obs = robot.get_observation()
-    action_keys = set(robot.action_features)
-    unknown = set(rest_position) - action_keys
-    if unknown:
-        raise ValueError(f"Rest position keys are not robot action keys: {sorted(unknown)}")
-    missing = set(rest_position) - set(obs)
-    if missing:
-        raise RuntimeError(f"Cannot read current position for rest joints: {sorted(missing)}")
-    current_pos = {key: float(obs[key]) for key in rest_position}
+    current_pos: dict[str, float] = {}
+    for key in rest_position:
+        if key in obs:
+            current_pos[key] = float(obs[key])
+        else:
+            logger.warning("Cannot read current position for %r, assuming at rest", key)
+            current_pos[key] = rest_position[key]
 
     num_steps = max(1, int(duration_s * steps_per_second))
     dt = duration_s / num_steps

@@ -36,7 +36,10 @@ from lerobot.policies.flash.runtime import AttachmentRuntimeLimits, FlashRuntime
 from lerobot.policies.flash.so107_planner_factory import SO107PlannerFactory
 from lerobot.policies.flash.vision_pipeline import VisionBackendFactory, VisionPipelineConfig
 from lerobot.robots.obs_stream import publish_external_observation
-from lerobot.robots.so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
+from lerobot.robots.so107_description.calibrated_kinematics import (
+    calibrated_motor_limits,
+    make_calibrated_so107_kinematics,
+)
 from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 from lerobot.robots.so107_follower_gravity import SO107FollowerGravity, SO107FollowerGravityRobotConfig
 
@@ -190,7 +193,8 @@ def trial(
         }
         if preflight:
             return report
-        full = make_calibrated_so107_kinematics(calibration, arm=arm)
+        joint_limits = calibrated_motor_limits(robot.calibration)
+        full = make_calibrated_so107_kinematics(calibration, arm=arm, joint_limits_deg=joint_limits)
         arm_names = tuple(name for name in MOTOR_NAMES if name != "gripper")
         kin = SelectedJointKinematics(full, tuple(MOTOR_NAMES), arm_names, {"gripper": state["gripper.pos"]})
         source = LeRobotRGBDSource(
@@ -294,7 +298,7 @@ def trial(
             # Pinocchio FK mutates its Data workspace. The telemetry writer
             # therefore has its own model instead of racing the planner.
             kinematics=SelectedJointKinematics(
-                make_calibrated_so107_kinematics(calibration, arm=arm),
+                make_calibrated_so107_kinematics(calibration, arm=arm, joint_limits_deg=joint_limits),
                 tuple(MOTOR_NAMES),
                 arm_names,
                 {"gripper": state["gripper.pos"]},
@@ -327,7 +331,7 @@ def trial(
             gripper_joint_name="gripper",
             planner_limits=planner_limits,
             planner_process_factory=SO107PlannerFactory(
-                calibration, arm, arm_names, state["gripper.pos"], planner_limits
+                calibration, arm, arm_names, state["gripper.pos"], planner_limits, joint_limits
             ),
             buffer_config=PlanBufferConfig(
                 settings["lead_ticks"],

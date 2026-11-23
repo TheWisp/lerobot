@@ -26,7 +26,7 @@ from .config_so107_follower_gravity import ROBOT_TYPE, SO107FollowerGravityRobot
 
 
 class SO107FollowerGravity(SO107Follower):
-    """The SO-107 follower with its own servo gains, and every goal moved by the droop gravity will put on it.
+    """The SO-107 follower with its own servo gains and gravity goal offsets.
 
     A loaded joint of a position servo settles short of its goal by its compliance times the gravity torque; the
     goal sent is ``q + alpha * tau_g(q)`` for the pose ``q`` wanted (the "virtual displacement" gravity schemes on
@@ -68,25 +68,23 @@ class SO107FollowerGravity(SO107Follower):
     def cartesian_model(self):
         from lerobot.robots.cartesian_model import CartesianModel
         from lerobot.robots.kinematics import SelectedJointKinematics
-        from lerobot.robots.so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
+        from lerobot.robots.so107_description.calibrated_kinematics import (
+            calibrated_motor_limits,
+            make_calibrated_so107_kinematics,
+        )
         from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
         if self.geometry is None:
             raise ValueError("Cartesian execution needs measured robot geometry")
         names = MOTOR_NAMES[:-1]
-        lower, upper = [], []
-        for name in names:
-            cal = self.calibration[name]
-            half_span = (cal.range_max - cal.range_min) * 360 / 4095 / 2
-            limits = self.config.joint_limits_deg.get(name, {})
-            lower.append(max(-half_span, limits.get("min", -half_span)))
-            upper.append(min(half_span, limits.get("max", half_span)))
+        limits = calibrated_motor_limits(self.calibration)
+        lower, upper = zip(*(limits[name] for name in names), strict=True)
         return CartesianModel(
             SelectedJointKinematics(
                 make_calibrated_so107_kinematics(
                     self.geometry.to_dict(),
                     arm=self.config.arm,
-                    joint_limits_deg=dict(zip(names, zip(lower, upper, strict=True), strict=True)),
+                    joint_limits_deg=limits,
                 ),
                 MOTOR_NAMES,
                 names,

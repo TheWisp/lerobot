@@ -137,3 +137,122 @@ def test_calibration_preserves_sdk_transform_direction_and_units():
     assert result["baseline_m"] == 0.05
     assert result["depth_m_per_unit"] == 0.001
     assert result["left_intrinsics"]["fx"] == 450
+
+
+def test_stereo_dataset_roundtrip_preserves_pixels_channels_stats_and_timing(tmp_path):
+    from PIL import Image
+
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.utils.feature_utils import build_dataset_frame
+
+    cam = camera()
+    robot = SimpleNamespace(cameras={"scene": cam})
+    features = {
+        "observation.images.scene": {
+            "dtype": "image",
+            "shape": (480, 848, 3),
+            "names": ["height", "width", "channels"],
+        }
+    }
+    add_stereo_features(features, robot)
+    images, timing = capture_stereo(robot)
+    dataset = LeRobotDataset.create(
+        repo_id="test/stereo", root=tmp_path / "episode", fps=30, features=features, use_videos=False
+    )
+    dataset.add_frame(build_dataset_frame(features, images, "observation") | timing | {"task": "stereo"})
+    for suffix, mode, format_name in (
+        ("", "RGB", "PNG"),
+        ("_depth", "I;16", "TIFF"),
+        ("_infrared_left", "L", "TIFF"),
+        ("_infrared_right", "L", "TIFF"),
+    ):
+        key = f"observation.images.scene{suffix}"
+        path = dataset.writer._get_image_file_path(0, key, 0)
+        with Image.open(path) as saved:
+            assert saved.mode == mode
+            assert saved.format == format_name
+            np.testing.assert_array_equal(np.asarray(saved), images[f"scene{suffix}"].squeeze())
+    dataset.save_episode()
+    dataset.finalize()
+    reopened = LeRobotDataset("test/stereo", root=dataset.root)
+    row = reopened[0]
+    for suffix in ("", "_depth", "_infrared_left", "_infrared_right"):
+        key = f"observation.images.scene{suffix}"
+        expected = images[f"scene{suffix}"].transpose(2, 0, 1).astype(np.float32)
+        if suffix != "_depth":
+            expected /= 255
+        np.testing.assert_array_equal(row[key].numpy(), expected)
+        for stat in ("min", "max", "mean", "std"):
+            assert reopened.meta.stats[key][stat].shape == (expected.shape[0], 1, 1)
+        np.testing.assert_allclose(reopened.meta.stats[key]["mean"], expected[:, :1, :1])
+    for key, value in timing.items():
+        np.testing.assert_array_equal(row[key].numpy(), value)
+
+
+@pytest.mark.parametrize("stereo", [False, True])
+def test_record_loop_keeps_processed_rgb_with_optional_stereo(tmp_path, stereo):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.scripts.lerobot_record import record_loop
+    from tests.mocks.mock_teleop import MockTeleop, MockTeleopConfig
+
+    cam = camera()
+    cam.config.enable_infrared = stereo
+    features = {
+        "observation.images.scene": {
+            "dtype": "image",
+            "shape": (480, 848, 3),
+            "names": ["height", "width", "channels"],
+        },
+        "action": {"dtype": "float32", "shape": (1,), "names": ["motor_1.pos"]},
+    }
+    robot = SimpleNamespace(
+        name="probe",
+        cameras={"scene": cam},
+        action_features={"motor_1.pos": float},
+        get_observation=lambda: {"scene": cam.latest_color_frame, "motor_1.pos": 0.0},
+        send_action=lambda action: action,
+    )
+    add_stereo_features(features, robot)
+    dataset = LeRobotDataset.create(
+        repo_id="test/processed", root=tmp_path / "episode", fps=30, features=features, use_videos=False
+    )
+    teleop = MockTeleop(
+        MockTeleopConfig(
+            n_motors=1, random_values=False, static_values=[0.0], calibration_dir=tmp_path / "teleop"
+        )
+    )
+    events = {"exit_early": False}
+    processed = []
+
+    def process(observation):
+        processed.append(observation["scene"].copy())
+        return observation | {"scene": np.full_like(observation["scene"], 42)}
+
+    def action_processor(values):
+        events["exit_early"] = True  # Finish this frame, then exit the real record loop.
+        return values[0]
+
+    teleop.connect()
+    try:
+        cam.latest_timestamp = time.perf_counter()
+        record_loop(
+            robot,
+            events,
+            30,
+            action_processor,
+            lambda values: values[0],
+            process,
+            dataset=dataset,
+            teleop=teleop,
+            control_time_s=1,
+            single_task="processed",
+        )
+    finally:
+        teleop.disconnect()
+    dataset.save_episode()
+    dataset.finalize()
+    reopened = LeRobotDataset("test/processed", root=dataset.root)
+    assert len(processed) == 1 and np.all(processed[0] == 7)
+    np.testing.assert_allclose(reopened[0]["observation.images.scene"], 42 / 255)
+    if stereo:
+        np.testing.assert_allclose(reopened[0]["observation.images.scene_infrared_left"], 7 / 255)

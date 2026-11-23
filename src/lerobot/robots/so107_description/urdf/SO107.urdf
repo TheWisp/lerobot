@@ -1,12 +1,5 @@
 <?xml version="1.0" ?>
 <robot name="SO107_urdf">
-<!--
-  Research kinematics retain the calibrated white_left / white_right physical joint ranges
-  (union through joint_alignment, +5 deg margin). The folded rest pose sits past -180 deg
-  on S2; the CAD export's +-pi limits would clamp it and change FK.
-  Masses and inertias are the original CAD placeholders. GravityFeedForward alone uses
-  SO107_gravity.urdf, with estimated link-role masses and the same geometry and joint limits.
--->
 
 <material name="silver">
   <color rgba="0.700 0.700 0.700 1.000"/>
@@ -185,7 +178,7 @@
   <parent link="BASE_1"/>
   <child link="L1_1"/>
   <axis xyz="0.0 0.0 1.0"/>
-  <limit upper="1.71042" lower="-1.71042" effort="100" velocity="100"/>
+  <limit upper="3.14159" lower="-3.14159" effort="100" velocity="100"/>
 </joint>
 
 <joint name="S2" type="revolute">
@@ -193,7 +186,7 @@
   <parent link="L1_1"/>
   <child link="L2_1"/>
   <axis xyz="1.0 3.899658373995775e-15 9.973680369662098e-15"/>
-  <limit upper="0.34907" lower="-3.49066" effort="100" velocity="100"/>
+  <limit upper="3.14159" lower="-3.14159" effort="100" velocity="100"/>
 </joint>
 
 <joint name="S3" type="revolute">
@@ -201,7 +194,7 @@
   <parent link="L2_1"/>
   <child link="L3_1"/>
   <axis xyz="1.0 4.315992008230064e-15 1.3031262354691917e-14"/>
-  <limit upper="3.17650" lower="-0.41888" effort="100" velocity="100"/>
+  <limit upper="3.14159" lower="-3.14159" effort="100" velocity="100"/>
 </joint>
 
 <joint name="S4" type="revolute">
@@ -209,7 +202,7 @@
   <parent link="L3_1"/>
   <child link="L4_1"/>
   <axis xyz="6.661013685071851e-10 -1.0 -8.495972595381182e-16"/>
-  <limit upper="1.74533" lower="-1.83260" effort="100" velocity="100"/>
+  <limit upper="3.14159" lower="-3.14159" effort="100" velocity="100"/>
 </joint>
 
 <joint name="S5" type="revolute">
@@ -217,7 +210,7 @@
   <parent link="L4_1"/>
   <child link="L5_1"/>
   <axis xyz="-1.0 -1.333394269997649e-09 -6.661193142758406e-10"/>
-  <limit upper="1.81514" lower="-1.81514" effort="100" velocity="100"/>
+  <limit upper="3.14159" lower="-3.14159" effort="100" velocity="100"/>
 </joint>
 
 <joint name="S6" type="revolute">
@@ -225,7 +218,7 @@
   <parent link="L5_1"/>
   <child link="L6_1"/>
   <axis xyz="6.666111507521254e-10 -0.9999999906839232 0.0001364996476153662"/>
-  <limit upper="4.79966" lower="-1.65806" effort="100" velocity="100"/>
+  <limit upper="3.14159" lower="-3.14159" effort="100" velocity="100"/>
 </joint>
 
 <joint name="S7" type="revolute">
@@ -233,7 +226,7 @@
   <parent link="L6_1"/>
   <child link="L7_1"/>
   <axis xyz="1.6654672358491272e-09 -0.00013649965749629398 -0.9999999906839215"/>
-  <limit upper="1.16937" lower="-2.79253" effort="100" velocity="100"/>
+  <limit upper="3.14159" lower="-3.14159" effort="100" velocity="100"/>
 </joint>
 
 </robot>

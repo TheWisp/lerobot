@@ -13,11 +13,11 @@ from threading import Event, Lock, Thread
 import numpy as np
 
 from lerobot.gui.flash_live_scene import object_evidence
-from lerobot.robots.rest_position import move_to_rest_position
 
 from .appearance import Sam3MaskSource
 from .demo_document import atomic_json
 from .demo_execution import POSE_AVAILABLE, DemoRunTracker, load_reference, plan_demo_range
+from .demo_rest import move_to_rest_position
 from .execution import ActionQueue, MotorLoop, TimedAction
 from .geometry import transform
 from .live_surface_session import LIVE_METHOD

@@ -1,6 +1,7 @@
 """The RGB-D observation and its host-clock time must be one atomic snapshot."""
 
 from threading import Event, Lock, Thread
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -16,6 +17,8 @@ class RunningThread:
 
 def test_aligned_rgbd_returns_capture_timestamp_without_changing_old_api():
     camera = object.__new__(RealSenseCamera)
+    camera.config = SimpleNamespace(enable_infrared=False)
+    camera.latest_infrared_pair = None
     camera.rs_pipeline = object()
     camera.rs_profile = object()
     camera.serial_number = "test-camera"
@@ -77,12 +80,15 @@ def test_reader_cannot_consume_one_cached_frameset_twice_during_publication():
             return self.frame
 
     camera = object.__new__(RealSenseCamera)
+    camera.config = SimpleNamespace(enable_infrared=False)
+    camera.latest_infrared_pair = None
     camera.rs_pipeline = object()
     camera.rs_profile = object()
     camera.serial_number = "test-camera"
     camera.use_rgb = True
     camera.use_depth = True
-    camera.align_to_color = None
+    camera.align_to_color = SimpleNamespace(process=lambda frame: frame)
+    camera._apply_depth_filters = lambda frame: frame
     camera.post_grab_processor = None
     camera.frame_lock = Lock()
     camera.new_frame_event = PausingEvent()
@@ -91,7 +97,9 @@ def test_reader_cannot_consume_one_cached_frameset_twice_during_publication():
     camera.latest_depth_frame = None
     camera.latest_timestamp = None
     captured = []
-    camera.aligned_frame_listener = lambda rgb, depth, stamp, seq: captured.append((seq, int(rgb[0, 0])))
+    camera.aligned_frame_with_raw_listener = lambda rgb, depth, before, stamp, seq: captured.append(
+        (seq, int(rgb[0, 0]))
+    )
     camera._postprocess_image = lambda frame, depth_frame=False: frame
     frames = iter((Frameset(1), Frameset(2)))
 
@@ -150,6 +158,8 @@ def test_cached_rgbd_frames_do_not_hold_realsense_buffers():
             return Frame(depth)
 
     camera = object.__new__(RealSenseCamera)
+    camera.config = SimpleNamespace(enable_infrared=False)
+    camera.latest_infrared_pair = None
     camera.rs_pipeline = object()
     camera.rs_profile = object()
     camera.serial_number = "test-camera"
@@ -166,7 +176,7 @@ def test_cached_rgbd_frames_do_not_hold_realsense_buffers():
     camera.latest_depth_frame = None
     camera.latest_timestamp = None
     seen = []
-    camera.aligned_frame_listener = lambda rgb, depth, stamp, seq: seen.append(
+    camera.aligned_frame_with_raw_listener = lambda rgb, depth, before, stamp, seq: seen.append(
         (rgb.copy(), depth.copy(), seq)
     )
     calls = 0

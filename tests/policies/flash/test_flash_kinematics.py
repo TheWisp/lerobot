@@ -20,6 +20,25 @@ class FakeKinematics:
         return np.array([target[0, 3], 7.0, 2.0])
 
 
+def test_hardware_planner_factory_requires_and_applies_measured_joint_bounds():
+    from lerobot.policies.flash.so107_planner_factory import SO107PlannerFactory
+    from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
+
+    calibration = {"tool_point": {"offset_m": [0.02, -0.025, -0.017]}}
+    names = MOTOR_NAMES[:-1]
+    limits = PlannerLimits((30,) * len(names), 0.003, np.deg2rad(3), 0.5)
+    bounds = dict.fromkeys(names, (-100, 100)) | {"wrist_flex": (-35, -25)}
+    with pytest.raises(ValueError, match="every controlled joint"):
+        SO107PlannerFactory(calibration, "left", names, 0.0, limits, {})
+    planner = SO107PlannerFactory(calibration, "left", names, 0.0, limits, bounds)()
+    seed = np.array([0, -30, 45, 0, -30, 0], dtype=float)
+    outside = seed.copy()
+    outside[4] = -45
+    target = planner.kinematics.forward_kinematics(outside)
+    solved = planner.kinematics.inverse_kinematics(seed, target)
+    assert -35 <= solved[4] <= -25
+
+
 def test_selected_joints_keep_full_model_order_and_fixed_values():
     adapter = SelectedJointKinematics(
         FakeKinematics(),

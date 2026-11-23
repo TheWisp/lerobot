@@ -34,7 +34,8 @@ def test_measured_tool_and_joint_zeros_recover_recorded_demo_fk():
 
 
 @pytest.mark.parametrize("arm", ["left", "right"])
-def test_folded_pose_matches_unclamped_dynamics_frame_and_remains_solvable(arm):
+@pytest.mark.parametrize("limits", [None, {"shoulder_lift": (-110, 110)}])
+def test_folded_pose_matches_unclamped_dynamics_frame_and_remains_solvable(arm, limits):
     """The insertion recording starts with S2 below the CAD export's -pi limit.
 
     Compare the public calibrated FK/IK to raw Pinocchio frame placement so
@@ -65,7 +66,7 @@ def test_folded_pose_matches_unclamped_dynamics_frame_and_remains_solvable(arm):
     tool = np.eye(4)
     tool[:3, 3] = calibration["tool_point"]["offset_m"]
     expected = data.oMf[dynamics.getFrameId("L6_1")].homogeneous @ tool
-    kin = make_calibrated_so107_kinematics(calibration, arm=arm)
+    kin = make_calibrated_so107_kinematics(calibration, arm=arm, joint_limits_deg=limits)
     np.testing.assert_allclose(kin.forward_kinematics(joints), expected, atol=1e-12)
     solved = kin.inverse_kinematics(joints, expected)
     np.testing.assert_allclose(solved[:6], joints[:6], atol=1e-5)
@@ -128,3 +129,27 @@ def test_invalid_motor_planning_limits_fail_at_construction(bounds):
         make_calibrated_so107_kinematics(
             {"tool_point": {"offset_m": [0, 0, 0]}}, arm="left", joint_limits_deg={"wrist_flex": bounds}
         )
+
+
+def test_calibrated_model_does_not_change_nominal_fk_or_planning_bounds():
+    import pinocchio as pin
+
+    from lerobot.model.pink_kinematics import PinkKinematics
+    from lerobot.robots.so107_description import get_urdf_path
+
+    nominal = PinkKinematics(str(get_urdf_path()), "L6_1")
+    original_lower, original_upper = nominal.q_lo.copy(), nominal.q_hi.copy()
+    q = np.array([120, -90, 60, 0, -40, 0, 0], dtype=float)
+    raw_model = pin.buildModelFromUrdf(str(get_urdf_path()))
+    data = raw_model.createData()
+    pin.framesForwardKinematics(raw_model, data, np.deg2rad(q))
+    expected = data.oMf[raw_model.getFrameId("L6_1")].homogeneous.copy()
+    np.testing.assert_allclose(nominal.forward_kinematics(q), expected, atol=1e-12)
+    make_calibrated_so107_kinematics(
+        {"tool_point": {"offset_m": [0, 0, 0]}},
+        arm="left",
+        joint_limits_deg={"shoulder_lift": (-110, 110)},
+    )
+    np.testing.assert_array_equal(nominal.q_lo, original_lower)
+    np.testing.assert_array_equal(nominal.q_hi, original_upper)
+    np.testing.assert_allclose(nominal.forward_kinematics(q), expected, atol=1e-12)

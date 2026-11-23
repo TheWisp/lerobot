@@ -6,9 +6,8 @@ import sys
 from pathlib import Path
 from threading import Event
 
-from lerobot.robots.rest_position import move_to_rest_position
-
 from .demo_document import atomic_json
+from .demo_rest import move_to_rest_position
 from .rollout_recording import RecordedRobot, RunJournal
 
 

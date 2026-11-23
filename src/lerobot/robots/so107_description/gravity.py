@@ -24,9 +24,8 @@ arms: shift the goal by the droop the load will cause, so the joint settles on
 the desired angle instead of below it.
 
 ``tau_g`` comes from pinocchio's generalized-gravity term on the dedicated
-``SO107_gravity.urdf`` (masses set by link role). The shared ``SO107.urdf``
-retains CAD dynamics for visualization and kinematics; both models use the
-research branch's physical joint ranges. ``alpha``
+``SO107_gravity.urdf`` (masses set by link role). The shared CAD-export URDF
+remains unchanged for visualization and kinematics. ``alpha``
 is measured, not modelled — one number for all joints, since every joint is
 the same servo at the same gain. It scales with 1/P.
 """

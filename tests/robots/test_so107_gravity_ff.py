@@ -201,10 +201,12 @@ def test_gravity_profile_keeps_measured_cartesian_model_and_recorded_replay(arm)
             "port": "/dev/null",
             "id": "test_arm",
             "arm": arm,
-            "joint_limits_deg": {"wrist_flex": {"min": -50.0, "max": -20.0}},
         },
     )
     robot = _robot(SO107FollowerGravity, config)
+    robot.calibration["wrist_flex"] = MotorCalibration(
+        id=5, drive_mode=0, homing_offset=0, range_min=1000, range_max=2137
+    )
     robot.geometry = RobotGeometry(
         {
             "robot_id": "test_arm",
@@ -218,7 +220,8 @@ def test_gravity_profile_keeps_measured_cartesian_model_and_recorded_replay(arm)
     replay = CartesianModel.from_description(model.description(), robot.geometry.to_dict())
     state = {f"{motor}.pos": value for motor, value in EASY_POSE.items()}
     target = model.forward(state)
-    assert model.lower_deg[4] == -50.0 and model.upper_deg[4] == -20.0
+    half_span = (2137 - 1000) * 360 / 4095 / 2
+    assert model.lower_deg[4] == -half_span and model.upper_deg[4] == half_span
     np.testing.assert_allclose(replay.forward(state), target, atol=1e-12)
     solved = model.inverse(state, target)
     assert set(solved) == {f"{motor}.pos" for motor in MOTOR_NAMES[:-1]}

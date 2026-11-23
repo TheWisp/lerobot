@@ -570,7 +570,9 @@ def record_loop(
             # Use main dataset features (intervention_dataset has the same features)
             features = dataset.features if dataset is not None else intervention_dataset.features
             observation_frame = build_dataset_frame(
-                features, {**obs_processed, **stereo_images}, prefix=OBS_STR
+                features,
+                {**obs_processed, **{key: value for key, value in stereo_images.items() if key not in obs}},
+                prefix=OBS_STR,
             )
             observation_frame.update(stereo_timing)
 

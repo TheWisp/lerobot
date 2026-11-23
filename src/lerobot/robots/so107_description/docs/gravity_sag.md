@@ -1,134 +1,30 @@
-# Gravity sag on the SO-107, and what removes it
+# SO-107 gravity compensation
 
-The arm settles below where it is told to be, more the further it reaches. First seen in
-May 2026 on the Cartesian teleop bench (a horizontal circle drooped 17 mm on average); it
-is why FK-based control on this arm never landed where the model said.
+The SO-107's STS3215 servos accept position goals. Under a steady gravity load, the joint settles short of its goal. The gravity robot sends `goal = desired + alpha × gravity_torque(desired)` so the resulting position is closer to the desired joint angle. It uses P=32, I=0, D=32 and a measured default `alpha=3.2°/(N·m)`; the plain `so107_follower` still uses P=16 with no gravity offset.
 
-Everything below is measured with the encoders only: FK of the present joints against FK of
-the commanded joints, on the left arm of the white pair, 2026-09-19/20. No camera, so link
-flexure or slack between the encoder and the fingertip is not in these numbers.
+This is a separate single-arm robot type, `so107_follower_gravity`; the bimanual SO-107 profiles do not use it. The servo zero/range calibration file is shared with `so107_follower`; the motor-to-URDF alignment is selected by `arm="left"` or `arm="right"`. The gravity model needs the optional `pin` dependency (available through the `kinematics` extra). Its dedicated `SO107_gravity.urdf` retains SO-107's CAD centres of mass but uses masses scaled by link role from the SO-101 model, because the CAD export had uniform-density placeholders totaling 6.16 kg. The masses have not been weighed link by link. The shared `SO107.urdf` remains unchanged and is still used by visualization and Cartesian IK.
 
-## Model and coordinate conventions
+## Evidence and limits
 
-`GravityFeedForward` uses `SO107_gravity.urdf`, with estimated masses totaling 0.688 kg.
-`SO107.urdf` keeps the original CAD mass/inertia placeholders (6.158351 kg) and serves
-Cartesian IK and visualization. Both descriptions retain this research branch's physical
-joint limits, including S2 below −180° for the recorded folded rest pose. Their joint names
-S1–S7, order, origins, axes, centres of mass, mesh geometry and limits are identical; only
-mass and inertia differ. Restoring the CAD ±π limits would clip folded observations in FK.
+On the left white-pair arm, 30 encoder-only static stations fitted compliance at P=32 of approximately 3.1, 3.2 and 3.4°/(N·m) for shoulder lift, elbow and wrist flex. The single 3.2 default covers those joints. A 60 mm horizontal circle at constant commanded height gave these encoder/FK results on 2026-09-19/20:
 
-Motor alignment remains `urdf_deg = sign * motor_deg + offset_deg`, selected separately
-for the left and right arms. FLASH's Cartesian model additionally applies the measured
-joint-zero correction and tool translation on L6_1; opening S7 does not move this tool
-frame. Camera optical coordinates still reach the same robot base through `T_base_cam`.
-The gravity calculation retains the nominal alignment used for the measured compliance;
-it does not apply the camera/tool calibration. Body actions convert through their calibrated
-degree scale, while the gripper keeps its 0–100 alignment units in either body unit mode.
-Compensation is applied once by the follower, followed by its relative-goal clamp.
+| Configuration                | In-plane RMS / max | Height mean / max             |
+| ---------------------------- | ------------------ | ----------------------------- |
+| P=16, I=0, no compensation   | 12.0 / 19.4 mm     | −33.1 / 93.4 mm; lift stalled |
+| P=32, I=0, gravity alpha=3.2 | 4.7 / 5.8 mm       | −0.1 / 3.9 mm                 |
 
-The existing `joint_limits_deg` profile setting and recorded Cartesian model descriptions
-remain supported. The gravity type declares `pink-dep` for dependency checks. This merge
-does not introduce a new hardware measurement or refit the archived compliance.
+The measurements compare FK of encoder positions with FK of commanded positions. They cannot measure link flexure or fingertip error. The default gain was fitted on one left arm, and P=32 has not been retested under leader teleop. Test and refit for another assembly or gain setting. The shape and static-station measurements were performed in the sealed Show-and-Servo history; this PR does not claim a new hardware run.
 
-## Where it comes from
+## Measure and fit on an arm
 
-The STS3215's onboard loop is position-only: goal in, torque proportional to error out
-(the follower halves Feetech's factory P to 16 for leader teleop, and leaves I at 0). A
-steady gravity load therefore leaves a steady error, `droop = -alpha * tau_g`, with
-`alpha` the servo's compliance at the gains in use. At the follower's defaults:
-
-| reach from base                                 | 165 mm  | 195   | 225   | 255   |
-| ----------------------------------------------- | ------- | ----- | ----- | ----- |
-| tip drop, gripper down (`so107_gravity_sag.py`) | −1.5 mm | −12.4 | −14.5 | −16.9 |
-
-Raised posture, 226→286 mm reach: −8 → −23 mm, and the elbow stopped 13.6° short of a
-commanded start pose — the "never gets there" regime is P-limited, not torque-limited (at
-P=32 the same move lands within 0.7°). In joint space the whole effect is 1–4° on the
-shoulder-lift and elbow.
-
-Fitting the measured droop at 30 static stations against pinocchio's gravity term on the
-estimated-mass model gives **one compliance for every loaded joint at P=32: ≈3.2° per N·m** (lift 3.1,
-elbow 3.2, wrist 3.4), roughly double at P=16. That is the feed-forward gain. The model
-explains the mean droop; the remaining ±1° station-to-station scatter is stiction
-hysteresis (the same pose reads +0.2° arriving one way and +3.9° the other), which no
-function of pose can cancel.
-
-## What removes it
-
-`goal = q_desired + alpha * tau_g(q_desired)` — the position-mode "virtual displacement"
-every gravity scheme on these servos uses (phospho ships it to float a leader arm; here it
-is applied to the _desired_ pose to hold a trajectory). It is computed by `GravityFeedForward`
-from the dedicated gravity URDF and lives in its own robot type, `so107_follower_gravity`
-(`lerobot.robots.so107_follower_gravity`), with the gains it was measured at: P 32, I 0,
-D 32, alpha 3.2. The plain `so107_follower` stays LeRobot's (P 16, no feed-forward), so a
-robot profile says which controller an arm runs, and nothing recorded or trained on one is
-mistaken for the other. The Show-and-Servo act engine accepts only the gravity type.
-
-60 mm horizontal circle at constant commanded height, May protocol
-(`so107_cartesian_shapes.py`, 256 waypoints at 30 Hz):
-
-| configuration                        | in-plane rms / max | height mean / max                                       |
-| ------------------------------------ | ------------------ | ------------------------------------------------------- |
-| May 2026, P=16, predictive follower  | 6.5 / 9.3 mm       | −16.9 / 30.6 mm                                         |
-| P=16 I=0 (follower defaults)         | 12.0 / 19.4        | −33.1 / 93.4, lift stalled at waypoint 207              |
-| P=16 + feed-forward (α=6)            | 10.0 / 15.2        | −18.7 / 82.2, stalled at 211                            |
-| P=32 I=8                             | 4.0 / 5.8          | +0.6 / 7.4 (integrator windup drift on the return half) |
-| **P=32 + feed-forward (α=3.2), I=0** | **4.7 / 5.8**      | **−0.1 / 3.9**                                          |
-
-![circle comparison](gravity_circle_comparison.png)
-
-![P=32 + feed-forward, all three shapes](gravity_p32_ff_traces.png)
-
-Two facts the table encodes:
-
-- Feed-forward at P=16 does not work: the joint is too soft to track the circle's upward
-  lift swing (stalls 35° behind) and, run four times slower, creeps into stiction instead
-  (−23 mm). A few degrees of goal lead cannot substitute for stiffness. It does hold the
-  gentler heart (max 9 mm vs 37).
-- At P=32 the feed-forward alone gives the flat result without the integrator's ripple and
-  windup: the residual is a ±2–3 mm band that flips sign with the direction of travel — the
-  stiction hysteresis — plus ~1 mm of stream ripple, nothing accumulating.
-
-## Seeing it: the jog panel
-
-Servo tab → _Jog_: connect one arm (server-owned, bus only), drag the gizmo on the gripper
-tip in the URDF tile (T translate, R rotate). The yellow robot is the encoders; the cyan
-ghost is the commanded pose and fades in with the gap (invisible under 2 mm, solid at
-20 mm); the red arrow is the gap at true length. With P=32 and α=3.2 the ghost stays
-invisible through lifts, reaches and ±30° pitches (gap 0.8–3.8 mm on the 2026-09-20 API
-run); with the defaults it appears as soon as the arm leaves its fold.
-
-![jog tile](jog_tile.png)
-
-## Not in this change
-
-- Untested under leader teleop: P=32 was halved to 16 for a reason ("shakiness"); whether
-  the feed-forward makes P=32 acceptable there is a rig test to run.
-- Encoder-side only; a camera check of the fingertip is the remaining independent proof.
-- The URDF masses are set by link role from the SO-101 description (the export carried
-  uniform-density placeholders); `alpha` absorbs the overall scale, but per-link ratios are
-  borrowed, not measured.
-- Compliance / hand-guiding needs the torque-level version (PWM mode); this is position
-  accuracy only.
-
-## Reproduce
+The benchmark connects directly to the serial bus. Disconnect the arm from the GUI before running it. It logs tick-level commanded, present and sent joints, plus dwell stations and servo effort when available. It stops on excessive joint divergence, prolonged lag or a `STOP` file in the run directory. The start pose must be inside the IK workspace and away from the folded URDF seam.
 
 ```bash
-# stations along a radial line + circle, encoders vs command (start pose must be forward of the fold)
-PYTHONPATH=src python benchmarks/so107_gravity_sag.py --p 32 --ff-alpha 0 --start-joints -45 74 -41
-PYTHONPATH=src python benchmarks/so107_gravity_sag.py --p 32 --ff-alpha 3.2
-
-# fit saved uncompensated dwell stations without connecting a robot
-PYTHONPATH=src python benchmarks/so107_gravity_sag.py --fit-stations outputs/gravity_sag/<run>
-
+uv run --extra kinematics python benchmarks/so107_gravity_sag.py --p 32 --ff-alpha 0 --start-joints -45 74 -41
+uv run --extra kinematics python benchmarks/so107_gravity_sag.py --fit-stations outputs/gravity_sag/<run>
+uv run --extra kinematics python benchmarks/so107_gravity_sag.py --p 32 --ff-alpha 3.2 --start-joints -45 74 -41
 ```
 
-The shape plots above were produced by `so107_cartesian_shapes.py` in the sealed
-Show-and-Servo history; that script is not part of this checkout.
+The fit command reads the first run's `stations.json` and `meta.json` offline. It rejects runs with feed-forward or integral action (onboard or outer) because their command/present residual no longer measures the uncompensated compliance. Its output reports a joint-wise and combined slope. For the confirmation run, compare the saved residuals before adopting a new default. The benchmark is fixed to the left-arm alignment; the `arm` config supports right-arm control, but the benchmark does not calibrate the right arm yet.
 
-The station fit requires a run with `--ff-alpha 0 --ki 0 --i 0`: feed-forward or
-integral action would change the residual being fitted. The benchmark retains a
-conservative start check inside ±165° in URDF space even though the research model permits
-the folded range. Its `send_*` trace is the actual post-compensation, post-clamp bus goal.
-The benchmark uses the left alignment; the robot config also supports the right arm,
-but the archived default compliance was measured only on the left.
+Servo position calibration and touch-based fingertip/camera calibration are separate from this gravity compliance fit. The latter tooling is in the `proto/show-and-servo` history and is not required to use this robot type.

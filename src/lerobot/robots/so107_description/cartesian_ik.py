@@ -408,8 +408,6 @@ def make_so107_arm_kinematics(
     *,
     posture_cost: float = 0.05,
     max_iters: int = 50,
-    tip_offset: np.ndarray | None = None,
-    joint_limits_deg: dict[str, tuple[float, float]] | None = None,
 ) -> JointMappedKinematics:
     """Build the motor-space kinematics for one SO-107 arm.
 
@@ -436,8 +434,6 @@ def make_so107_arm_kinematics(
             lag (cm- to mm-scale at typical teleop speeds). Negligible CPU
             impact at 30 Hz. Lower to 10–20 for more "stick to seed" feel
             at the cost of moving-target tracking accuracy.
-        joint_limits_deg: Optional narrower limits in motor degrees. Convert
-            signs and calibrated zero offsets before constraining the IK solver.
 
     Requires the optional ``pin-pink`` dependency (raises ``ImportError``
     otherwise).
@@ -446,33 +442,17 @@ def make_so107_arm_kinematics(
 
     from . import get_urdf_path
 
-    if set(joint_limits_deg or {}) - set(MOTOR_NAMES):
-        raise ValueError("Unknown motor in joint limits")
-    for motor, bounds in (joint_limits_deg or {}).items():
-        if np.shape(bounds) != (2,) or not np.isfinite(bounds).all() or bounds[0] >= bounds[1]:
-            raise ValueError(f"Invalid motor joint limits: {motor}")
-    solver_limits = {
-        urdf: tuple(
-            sorted(
-                alignment[motor].sign * value + alignment[motor].offset_deg
-                for value in joint_limits_deg[motor]
-            )
-        )
-        for motor, urdf in zip(MOTOR_NAMES, URDF_JOINT_NAMES, strict=True)
-        if joint_limits_deg and motor in joint_limits_deg
-    }
     inner = PinkKinematics(
         urdf_path=str(get_urdf_path()),
         target_frame_name=URDF_ANCHOR_FRAME,
         joint_names=list(URDF_JOINT_NAMES),
         posture_cost=posture_cost,
         max_iters=max_iters,
-        joint_limits_deg=solver_limits,
     )
     # IK against the L6_1 anchor + a fixed offset to the virtual closed-
     # gripper tip — the IK is then S7-independent and the controller's
     # post-IK S7 overwrite no longer drives orientation drift.
-    with_tip = TipOffsetKinematics(inner, TIP_OFFSET if tip_offset is None else tip_offset)
+    with_tip = TipOffsetKinematics(inner, TIP_OFFSET)
     return JointMappedKinematics(with_tip, list(MOTOR_NAMES), alignment)
 
 
