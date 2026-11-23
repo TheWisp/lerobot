@@ -148,9 +148,9 @@ def _rgbd_sequence(case: dict, index: int | None = None):
 def _local_dataset(root: Path, repo_id: str, modified_ns: int):
     # Never fetch a missing recording while browsing. Two datasets bound the
     # decoded-reader state; the ordinary dataset reader still owns decoding.
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.policies.flash.local_dataset import LocalDataset
 
-    return LeRobotDataset(repo_id, root=root, local_files_only=True)
+    return LocalDataset(repo_id, root=root)
 
 
 def _lerobot(case: dict, index: int | None = None):

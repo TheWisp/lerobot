@@ -165,10 +165,10 @@ def test_pre_filter_depth_survives_recent_history_and_episode(tmp_path):
     restored, _, _, _ = decode_record(read_packet(history.directory, 8))
     np.testing.assert_array_equal(restored.depth_before_filters, before)
 
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.policies.flash.local_dataset import LocalDataset
 
     root = export_episode(history.directory)
-    dataset = LeRobotDataset(f"local/flash-{history.directory.name}", root=root, local_files_only=True)
+    dataset = LocalDataset(f"local/flash-{history.directory.name}", root=root)
     np.testing.assert_array_equal(
         np.asarray(dataset[0]["observation.images.camera_depth_before_filters"])[0], before
     )
@@ -230,10 +230,10 @@ def test_model_depth_and_stereo_pair_stay_separate_from_raw_camera_record(tmp_pa
     replay_frame, _, _ = recorded_tracker_input(saved, read_index(saved)["frames"][0])
     np.testing.assert_allclose(replay_frame.metric_depth(), model_frame.metric_depth())
     assert replay_frame.source_time_s == raw.source_time_s
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.policies.flash.local_dataset import LocalDataset
 
     root = export_episode(saved)
-    dataset = LeRobotDataset(f"local/flash-{saved.name}", root=root, local_files_only=True)
+    dataset = LocalDataset(f"local/flash-{saved.name}", root=root)
     np.testing.assert_array_equal(
         np.asarray(dataset[0]["observation.images.camera_depth_model"])[0], model_depth
     )
@@ -242,7 +242,7 @@ def test_model_depth_and_stereo_pair_stay_separate_from_raw_camera_record(tmp_pa
 
 
 def test_variable_rate_processed_frames_keep_source_ids_depth_and_sam_together(tmp_path, monkeypatch):
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.policies.flash.local_dataset import LocalDataset
 
     clock = iter([10.07, 10.26, 10.31])
     history = new_history(tmp_path / "recent")
@@ -318,7 +318,7 @@ def test_variable_rate_processed_frames_keep_source_ids_depth_and_sam_together(t
     assert processed[1]["sam_ready_time_s"] == 10.31
     assert (episode / "flash" / "v1" / processed[1]["depth_file"]).is_file()
     assert (episode / "flash" / "v1" / processed[1]["mask_file"]).is_file()
-    dataset = LeRobotDataset(f"local/flash-{saved.name}", root=episode, local_files_only=True)
+    dataset = LocalDataset(f"local/flash-{saved.name}", root=episode)
     assert float(dataset[2]["timestamp"]) == pytest.approx(2 / dataset.fps)
     assert np.asarray(dataset[1]["observation.images.camera_depth_model"]).max() == 0
     np.testing.assert_array_equal(
@@ -327,10 +327,10 @@ def test_variable_rate_processed_frames_keep_source_ids_depth_and_sam_together(t
 
 
 def test_saved_window_exports_a_lerobot_episode_with_depth_and_tracking(tmp_path, monkeypatch):
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.gui.api import datasets as datasets_api, flash_tracking
     from lerobot.gui.frame_cache import FrameCache
     from lerobot.gui.state import AppState
+    from lerobot.policies.flash.local_dataset import LocalDataset
 
     recent = tmp_path / "recent"
     history = new_history(recent)
@@ -350,7 +350,7 @@ def test_saved_window_exports_a_lerobot_episode_with_depth_and_tracking(tmp_path
 
     root = export_episode(saved)
     assert export_episode(saved) == root
-    dataset = LeRobotDataset(f"local/flash-{saved.name}", root=root, local_files_only=True)
+    dataset = LocalDataset(f"local/flash-{saved.name}", root=root)
     assert dataset.meta.total_episodes == 1
     assert dataset.episode_rows(0) == (0, 3)
     assert dataset.meta.video_keys == ["observation.images.camera"]
