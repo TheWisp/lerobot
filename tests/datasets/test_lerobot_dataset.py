@@ -104,6 +104,36 @@ def _write_dataset_tree(
 # ── Read-only mode (via __init__) ────────────────────────────────────
 
 
+@pytest.mark.parametrize("missing", [None, "meta/info.json", "data"])
+def test_local_files_only_never_repairs_from_hub(tmp_path, lerobot_dataset_factory, monkeypatch, missing):
+    import shutil
+
+    dataset = lerobot_dataset_factory(
+        root=tmp_path / "ds", total_episodes=1, total_frames=3, use_videos=False, camera_features={}
+    )
+
+    def network_forbidden(*args, **kwargs):
+        raise AssertionError("Local inspection must not contact the Hub")
+
+    monkeypatch.setattr(dataset_metadata_module, "get_safe_version", network_forbidden)
+    monkeypatch.setattr(lerobot_dataset_module, "get_safe_version", network_forbidden)
+    monkeypatch.setattr(LeRobotDatasetMetadata, "_pull_from_repo", network_forbidden)
+    monkeypatch.setattr(LeRobotDataset, "_download", network_forbidden)
+    if missing:
+        target = dataset.root / missing
+        shutil.rmtree(target) if target.is_dir() else target.unlink()
+        with pytest.raises(FileNotFoundError):
+            LeRobotDataset(dataset.repo_id, root=dataset.root, local_files_only=True)
+    else:
+        local = LeRobotDataset(dataset.repo_id, root=dataset.root, local_files_only=True)
+        assert len(local) == len(dataset)
+        for key, value in dataset[1].items():
+            if isinstance(value, torch.Tensor):
+                torch.testing.assert_close(local[1][key], value)
+            else:
+                assert local[1][key] == value
+
+
 def test_init_creates_reader_no_writer(tmp_path, lerobot_dataset_factory):
     """__init__() sets reader to a DatasetReader and writer to None."""
     dataset = lerobot_dataset_factory(

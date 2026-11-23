@@ -79,6 +79,7 @@ class LeRobotDatasetMetadata:
         revision: str | None = None,
         force_cache_sync: bool = False,
         metadata_buffer_size: int = 10,
+        local_files_only: bool = False,
     ):
         """Load or download metadata for an existing LeRobot dataset.
 
@@ -100,6 +101,7 @@ class LeRobotDatasetMetadata:
                 even when local files exist.
             metadata_buffer_size: Number of episode metadata records to buffer
                 in memory before flushing to parquet.
+            local_files_only: Raise on missing local metadata instead of contacting the Hub.
         """
         self.repo_id = repo_id
         self.revision = revision if revision else CODEBASE_VERSION
@@ -118,6 +120,8 @@ class LeRobotDatasetMetadata:
                 raise FileNotFoundError
             self._load_metadata()
         except (FileNotFoundError, NotADirectoryError):
+            if local_files_only:
+                raise
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
 
