@@ -59,6 +59,28 @@ whole instruction. Do not infer a convention from surrounding code instead: a
 PR body written without `pull-request` reliably has to be rewritten, which is
 the cost this section exists to avoid.
 
+## User agreement required for rule and test changes
+
+**Do not commit any rule or test change without the user's explicit agreement
+to that change.** This applies to additions, edits, deletions and reverts,
+including changes introduced through an amend, cherry-pick or merge.
+
+- Rules include `AGENTS.md`, other agent instructions, repository skills,
+  development policies and configuration that changes required checks.
+- Tests include test code, fixtures, snapshots, expected values, tolerances,
+  mocks, skips, expected failures and test selection or execution configuration.
+- Before seeking agreement, show the concrete proposed changes and explain
+  which rule or tested behavior they add or alter. General permission to fix a
+  bug, implement a feature or land code is not agreement to change rules or tests.
+- A specific user instruction to make and land a particular rule or test change
+  authorizes that scope; do not request the same agreement again. Additional
+  changes require their own agreement.
+- Keep unapproved rule and test changes uncommitted and out of otherwise approved
+  commits. Never rewrite expectations merely to make a changed implementation
+  pass; changing the intended behavior requires explicit user agreement.
+
+This requirement also applies to changing or removing this rule itself.
+
 ## Commit Messages
 
 Commit messages are durable review and handoff documentation, not just labels for
