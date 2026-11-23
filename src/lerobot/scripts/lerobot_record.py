@@ -98,6 +98,7 @@ import json
 import logging
 import subprocess
 import time
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pprint import pformat
@@ -127,8 +128,7 @@ from lerobot.datasets import (
     create_initial_features,
     safe_stop_image_writer,
 )
-from lerobot.datasets.camera_calibration import attach_camera_intrinsics, attach_robot_geometry
-from lerobot.datasets.stereo_recording import add_stereo_features, attach_stereo_calibration, capture_stereo
+from lerobot.datasets.camera_calibration import attach_camera_intrinsics
 from lerobot.policies import (
     ActionInterpolator,
     PreTrainedPolicy,
@@ -551,12 +551,6 @@ def record_loop(
         # motor sync_read).
         with latency_session.span("get_observation"):
             obs = robot.get_observation()
-            stereo_images, stereo_timing = (
-                capture_stereo(robot) if dataset is not None or intervention_dataset is not None else ({}, {})
-            )
-            # Refresh existing RGB-D observations, without publishing the two
-            # recording-only IR channels through policy/UI observation processors.
-            obs.update({key: value for key, value in stereo_images.items() if key in obs})
 
         # Per-camera staleness/period — read latest_timestamp from each
         # camera right after get_observation. No-op when session is disabled.
@@ -569,12 +563,7 @@ def record_loop(
         if policy is not None or dataset is not None or intervention_dataset is not None:
             # Use main dataset features (intervention_dataset has the same features)
             features = dataset.features if dataset is not None else intervention_dataset.features
-            observation_frame = build_dataset_frame(
-                features,
-                {**obs_processed, **{key: value for key, value in stereo_images.items() if key not in obs}},
-                prefix=OBS_STR,
-            )
-            observation_frame.update(stereo_timing)
+            observation_frame = build_dataset_frame(features, obs_processed, prefix=OBS_STR)
 
         # The action-selection block below has many branches (policy with /
         # without interpolation, intervention, teleop-only, dual teleop, no-op).
@@ -948,7 +937,11 @@ def record_loop(
 
 
 @parser.wrap()
-def record(cfg: RecordConfig) -> LeRobotDataset:
+def record(
+    cfg: RecordConfig,
+    *,
+    prepare_recording: Callable[[Robot, dict], tuple[Robot, Any, Callable]] | None = None,
+) -> LeRobotDataset:
     # Fail here rather than ~90 lines into dataset creation. `cfg.dataset` is
     # annotated as the fork's DatasetRecordConfig, but the annotation is not
     # enforced: constructing RecordConfig with upstream's base class from
@@ -1012,7 +1005,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         ),
     )
 
-    add_stereo_features(dataset_features, robot)
+    # Extensions may adapt the robot and dataset factory while reusing this
+    # lifecycle and the ordinary recording loop. The standard path is unchanged.
+    dataset_factory = LeRobotDataset
+    run_loop = record_loop
+    if prepare_recording is not None:
+        robot, dataset_factory, run_loop = prepare_recording(robot, dataset_features)
     dataset = None
     intervention_dataset = None
     listener = None
@@ -1024,7 +1022,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     try:
         if cfg.resume:
             num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
-            dataset = LeRobotDataset.resume(
+            dataset = dataset_factory.resume(
                 cfg.dataset.repo_id,
                 root=cfg.dataset.root,
                 batch_encoding_size=cfg.dataset.video_encoding_batch_size,
@@ -1051,7 +1049,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             # FileExistsError and the operator has to rename by hand. Only on
             # the create path — a resumed dataset keeps the name it already has.
             cfg.dataset.stamp_repo_id()
-            dataset = LeRobotDataset.create(
+            dataset = dataset_factory.create(
                 cfg.dataset.repo_id,
                 cfg.dataset.fps,
                 root=cfg.dataset.root,
@@ -1077,7 +1075,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         if cfg.intervention_repo_id is not None:
             if cfg.resume:
                 num_cameras = len(robot.cameras) if hasattr(robot, "cameras") else 0
-                intervention_dataset = LeRobotDataset.resume(
+                intervention_dataset = dataset_factory.resume(
                     cfg.intervention_repo_id,
                     root=cfg.dataset.root,
                     batch_encoding_size=cfg.dataset.video_encoding_batch_size,
@@ -1092,7 +1090,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     f"Resumed intervention dataset: {cfg.intervention_repo_id} ({intervention_dataset.num_episodes} episodes)"
                 )
             else:
-                intervention_dataset = LeRobotDataset.create(
+                intervention_dataset = dataset_factory.create(
                     cfg.intervention_repo_id,
                     cfg.dataset.fps,
                     root=cfg.dataset.root,
@@ -1135,16 +1133,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 interpolator = ActionInterpolator(multiplier=cfg.interpolation_multiplier)
                 logging.info(f"Action interpolation enabled: {cfg.interpolation_multiplier}x control rate")
 
-        for ds in (dataset, intervention_dataset):
-            if ds is not None:
-                attach_robot_geometry(ds.meta, robot)
         robot.connect()
         # A camera knows its calibration only once connected, and the dataset
         # already exists by now, so the intrinsics are merged into its
         # metadata here rather than into the initial features.
         for ds in (dataset, intervention_dataset):
             if ds is not None:
-                attach_stereo_calibration(ds.meta, robot)
                 attach_camera_intrinsics(
                     ds.meta,
                     getattr(robot, "cameras", {}),
@@ -1212,7 +1206,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             if robot.name == "unitree_g1":
                 robot.reset()
 
-            record_loop(
+            run_loop(
                 robot=robot,
                 events=events,
                 fps=cfg.dataset.fps,
@@ -1247,7 +1241,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 while recorded_episodes < cfg.dataset.num_episodes and not events["stop_recording"]:
                     current_episode_index = dataset.num_episodes
                     log_say(f"Recording episode {current_episode_index}", cfg.play_sounds)
-                    pending_intervention_episodes = record_loop(
+                    pending_intervention_episodes = run_loop(
                         robot=robot,
                         events=events,
                         fps=cfg.dataset.fps,

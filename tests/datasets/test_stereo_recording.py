@@ -192,7 +192,7 @@ def test_stereo_dataset_roundtrip_preserves_pixels_channels_stats_and_timing(tmp
 @pytest.mark.parametrize("stereo", [False, True])
 def test_record_loop_keeps_processed_rgb_with_optional_stereo(tmp_path, stereo):
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    from lerobot.scripts.lerobot_record import record_loop
+    from lerobot.policies.flash.record import prepare_recording
     from tests.mocks.mock_teleop import MockTeleop, MockTeleopConfig
 
     cam = camera()
@@ -207,14 +207,21 @@ def test_record_loop_keeps_processed_rgb_with_optional_stereo(tmp_path, stereo):
     }
     robot = SimpleNamespace(
         name="probe",
+        robot_type="probe",
+        geometry=None,
         cameras={"scene": cam},
         action_features={"motor_1.pos": float},
         get_observation=lambda: {"scene": cam.latest_color_frame, "motor_1.pos": 0.0},
         send_action=lambda action: action,
     )
-    add_stereo_features(features, robot)
-    dataset = LeRobotDataset.create(
-        repo_id="test/processed", root=tmp_path / "episode", fps=30, features=features, use_videos=False
+    robot, factory, record_loop = prepare_recording(robot, features)
+    dataset = factory.create(
+        repo_id="test/processed",
+        root=tmp_path / "episode",
+        fps=30,
+        features=features,
+        robot_type="probe",
+        use_videos=False,
     )
     teleop = MockTeleop(
         MockTeleopConfig(

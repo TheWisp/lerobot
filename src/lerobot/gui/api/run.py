@@ -1010,7 +1010,13 @@ async def start_record(req: RecordRequest) -> dict:
         if req.teleop is None and req.policy_path is None:
             raise HTTPException(400, "Either teleop or policy_path must be provided")
 
-        args = [sys.executable, "-m", "lerobot.scripts.lerobot_record"]
+        measured_recording = req.robot.get("fields", {}).get("geometry_path") or any(
+            camera.get("enable_infrared", False) for camera in req.robot.get("cameras", {}).values()
+        )
+        record_module = (
+            "lerobot.policies.flash.record" if measured_recording else "lerobot.scripts.lerobot_record"
+        )
+        args = [sys.executable, "-m", record_module]
         args.extend(_profile_to_cli_args(req.robot, "robot"))
         if req.teleop is not None:
             args.extend(_profile_to_cli_args(req.teleop, "teleop"))
