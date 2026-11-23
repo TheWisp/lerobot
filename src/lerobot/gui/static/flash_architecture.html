@@ -1,0 +1,1687 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>FLASH perception architecture</title>
+    <style>
+      :root {
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        color: #183047;
+        background: #f3f6fa;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      main {
+        max-width: 1480px;
+        margin: auto;
+        padding: clamp(20px, 4vw, 52px);
+      }
+      .eyebrow {
+        color: #416b98;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      h1 {
+        max-width: 800px;
+        margin: 12px 0 16px;
+        font-size: clamp(36px, 4.5vw, 58px);
+        line-height: 1.06;
+        letter-spacing: -0.045em;
+      }
+      h2 {
+        margin: 0 0 8px;
+        font-size: clamp(25px, 2.6vw, 32px);
+        letter-spacing: -0.025em;
+      }
+      .lead {
+        max-width: 860px;
+        margin: 0;
+        color: #465f75;
+        font-size: clamp(17px, 1.7vw, 21px);
+        line-height: 1.5;
+      }
+      .context,
+      .buttons {
+        display: flex;
+        gap: 9px;
+        flex-wrap: wrap;
+      }
+      .context {
+        margin: 25px 0 42px;
+      }
+      .time-key {
+        margin: -18px 0 36px;
+        padding: 14px 18px;
+        border-left: 4px solid #8aa9c3;
+        border-radius: 0 12px 12px 0;
+        background: #e8eff6;
+        color: #405a72;
+        line-height: 1.5;
+      }
+      code {
+        padding: 2px 5px;
+        border-radius: 5px;
+        background: #e7edf3;
+        color: #254a6b;
+        font-size: 0.9em;
+      }
+      .pill {
+        border: 1px solid #c7d6e4;
+        border-radius: 100px;
+        background: white;
+        padding: 8px 14px;
+        font-size: 14px;
+        font-weight: 650;
+      }
+      .pill strong {
+        color: #1d5e98;
+      }
+      section {
+        margin-bottom: 42px;
+      }
+      .intro {
+        max-width: 820px;
+        margin: 0 0 20px;
+        color: #526a7f;
+        line-height: 1.5;
+      }
+      #group-update {
+        scroll-margin-top: 20px;
+      }
+      .group-diagram {
+        width: 100%;
+        height: auto;
+        background: white;
+        border: 1px solid #c7d6e4;
+        border-radius: 16px;
+      }
+      .group-diagram text {
+        font-family: inherit;
+        fill: #183047;
+      }
+      .group-diagram .group-caption {
+        font-size: 15px;
+        fill: #526a7f;
+      }
+      .group-diagram .group-title {
+        font-size: 20px;
+        font-weight: 750;
+      }
+      .group-diagram .group-step {
+        font-size: 17px;
+        font-weight: 650;
+      }
+      .group-diagram .group-arrow {
+        fill: none;
+        stroke: #587894;
+        stroke-width: 2;
+        marker-end: url(#group-arrowhead);
+      }
+      @media (max-width: 760px) {
+        .group-scroll { display: none; }
+      }
+      .sources {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .source,
+      .after article {
+        padding: 23px;
+        border: 1px solid #d8e3ec;
+        border-radius: 18px;
+        background: white;
+        box-shadow: 0 8px 28px #243f5b0a;
+      }
+      .source {
+        min-height: 190px;
+      }
+      .source h3 {
+        margin: 13px 0 8px;
+        font-size: 22px;
+      }
+      .source p,
+      .after p {
+        margin: 0;
+        color: #526a7f;
+        line-height: 1.48;
+      }
+      .source small {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .depth-diagram {
+        margin: 0 0 20px;
+        padding: 20px;
+        border: 1px solid #c7d6e4;
+        border-radius: 18px;
+        background: white;
+      }
+      .depth-capture,
+      .depth-join {
+        padding: 13px 18px;
+        border-radius: 12px;
+        background: #e8eff6;
+        text-align: center;
+      }
+      .depth-capture strong,
+      .depth-join strong {
+        display: block;
+        margin-top: 3px;
+      }
+      .depth-parallel {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 2.4fr);
+        gap: 14px;
+        margin: 24px 0;
+      }
+      .depth-lane {
+        position: relative;
+        padding: 15px;
+        border: 1px solid #b7cfdf;
+        border-radius: 13px;
+        background: #f5f9fd;
+      }
+      .depth-lane::before {
+        content: "↓";
+        position: absolute;
+        top: -25px;
+        left: 50%;
+        color: #67849d;
+        font-size: 20px;
+      }
+      .depth-lane::after {
+        content: "↓";
+        position: absolute;
+        bottom: -27px;
+        left: 50%;
+        color: #67849d;
+        font-size: 20px;
+      }
+      .depth-lane small {
+        display: block;
+        margin-bottom: 9px;
+        color: #416b98;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .depth-lane p,
+      .depth-option span {
+        color: #526a7f;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .depth-lane p {
+        margin: 8px 0 0;
+      }
+      .depth-options {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .depth-option {
+        padding: 12px;
+        border: 1px solid #c7d6e4;
+        border-radius: 10px;
+        background: white;
+      }
+      .depth-option strong,
+      .depth-option span {
+        display: block;
+      }
+      .depth-option strong {
+        margin-bottom: 6px;
+        font-size: 14px;
+      }
+      .depth-select {
+        margin-top: 10px;
+        color: #315f87;
+        font-size: 14px;
+        font-weight: 750;
+        text-align: center;
+      }
+      .depth-join {
+        background: #eaf3fc;
+      }
+      .depth-join .metric-link {
+        display: inline-block;
+        margin-top: 9px;
+      }
+      .measure {
+        border-top: 5px solid #3c78b6;
+      }
+      .measure small {
+        color: #2f6ca8;
+      }
+      .motion {
+        border-top: 5px solid #b98225;
+      }
+      .motion small {
+        color: #986718;
+      }
+      .memory {
+        border-top: 5px solid #806cb4;
+      }
+      .memory small {
+        color: #69559d;
+      }
+      .converge {
+        text-align: center;
+        color: #67849d;
+        font-size: 27px;
+        line-height: 43px;
+      }
+      .fit {
+        padding: 20px 24px;
+        border: 2px solid #86acd0;
+        border-radius: 18px;
+        background: #eaf3fc;
+        text-align: center;
+      }
+      .fit strong {
+        display: block;
+        font-size: 22px;
+      }
+      .fit span {
+        display: block;
+        margin-top: 5px;
+        color: #405f7b;
+      }
+      .lifecycle {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .lifecycle article {
+        position: relative;
+        padding: 18px;
+        border: 1px solid #d8e3ec;
+        border-top: 5px solid #806cb4;
+        border-radius: 15px;
+        background: white;
+        box-shadow: 0 8px 28px #243f5b0a;
+      }
+      .lifecycle article:nth-child(2) {
+        border-top-color: #3c78b6;
+      }
+      .lifecycle article:nth-child(3) {
+        border-top-color: #b98225;
+      }
+      .lifecycle article:not(:last-child)::after {
+        content: "→";
+        position: absolute;
+        right: -17px;
+        top: 46%;
+        z-index: 1;
+        color: #647f98;
+        font-size: 24px;
+        font-weight: 800;
+      }
+      .lifecycle small {
+        color: #5e7690;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .lifecycle strong {
+        display: block;
+        margin: 9px 0;
+        font-size: 20px;
+      }
+      .lifecycle p,
+      .caveat {
+        margin: 0;
+        color: #526a7f;
+        line-height: 1.48;
+      }
+      .loop {
+        padding: 12px 0 8px;
+        color: #69559d;
+        font-weight: 750;
+        text-align: right;
+      }
+      .caveat {
+        padding: 14px 18px;
+        border: 1px solid #ddc98f;
+        border-radius: 12px;
+        background: #fff9e9;
+      }
+      .metric-link {
+        display: block;
+        position: relative;
+        margin-top: 16px;
+        padding-left: 22px;
+        color: #3d6484;
+        font-size: 13px;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .metric-link::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: -8px;
+        width: 14px;
+        height: 18px;
+        border-left: 1px solid #8ca4b7;
+        border-bottom: 1px solid #8ca4b7;
+      }
+      .metric-link:hover,
+      .metric-link:focus-visible {
+        text-decoration: underline;
+      }
+      .metric-callout path {
+        stroke: #879eaf;
+        stroke-width: 1;
+        fill: none;
+      }
+      .metric-callout text {
+        fill: #46637c;
+        font-size: 13px;
+      }
+      .metric-callout:hover text,
+      .metric-callout:focus-visible text {
+        fill: #175c98;
+        text-decoration: underline;
+      }
+      .metrics article:target {
+        outline: 2px solid #7ba9d2;
+        outline-offset: 3px;
+      }
+      [id^="metric-"] {
+        scroll-margin-top: 20px;
+      }
+      .kalman-why {
+        padding: 16px 20px;
+        border-left: 4px solid #aa9bd3;
+        border-radius: 0 12px 12px 0;
+        background: #f0edfa;
+        max-width: 960px;
+        color: #405a72;
+        line-height: 1.5;
+        margin-bottom: 22px;
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .metrics article {
+        padding: 18px 20px;
+        border: 1px solid #d8e3ec;
+        border-radius: 15px;
+        background: white;
+      }
+      .metrics h3 {
+        margin: 0 0 8px;
+        font-size: 19px;
+      }
+      .metrics p {
+        margin: 5px 0 0;
+        color: #526a7f;
+        line-height: 1.5;
+      }
+      .metrics b {
+        color: #29465f;
+      }
+      .buttons {
+        margin: 18px 0 10px;
+      }
+      .buttons button {
+        cursor: pointer;
+        padding: 10px 15px;
+        border: 1px solid #b8cad9;
+        border-radius: 100px;
+        background: white;
+        color: #34516a;
+        font: inherit;
+        font-weight: 700;
+      }
+      .buttons button[aria-pressed="true"] {
+        background: #213f5c;
+        border-color: #213f5c;
+        color: white;
+      }
+      .buttons button:focus-visible {
+        outline: 3px solid #72a9e3;
+        outline-offset: 2px;
+      }
+      #note {
+        min-height: 48px;
+        margin: 0 0 14px;
+        color: #405a72;
+        line-height: 1.5;
+      }
+      .diagram {
+        overflow-x: auto;
+        border: 1px solid #d5e2eb;
+        border-radius: 20px;
+        background: white;
+        box-shadow: 0 10px 32px #243f5b0b;
+      }
+      svg {
+        display: block;
+        width: 100%;
+        min-width: 850px;
+        height: auto;
+      }
+      .edge {
+        fill: none;
+        stroke: #8fa8bc;
+        stroke-width: 2.5;
+        marker-end: url(#arrow);
+        transition:
+          opacity 0.2s,
+          stroke 0.2s;
+      }
+      .edge.active {
+        stroke: #3d719e;
+        stroke-width: 4;
+      }
+      .node {
+        transition: opacity 0.2s;
+      }
+      .node rect {
+        stroke-width: 2;
+      }
+      .node text {
+        fill: #193047;
+        font-size: 17px;
+        font-weight: 750;
+        text-anchor: middle;
+      }
+      .node .sub {
+        fill: #49657d;
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .node.measured rect {
+        fill: #eaf3fc;
+        stroke: #7ba9d2;
+      }
+      .node.clue rect {
+        fill: #fff5e5;
+        stroke: #d8b06d;
+      }
+      .node.prior rect {
+        fill: #f0edfa;
+        stroke: #aa9bd3;
+      }
+      .node.good rect {
+        fill: #e8f6ec;
+        stroke: #86c69b;
+      }
+      .node.bad rect {
+        fill: #fcf0ef;
+        stroke: #dda39d;
+      }
+      .faded {
+        opacity: 0.5;
+      }
+      .label {
+        fill: #5d778e;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .mobile-path {
+        display: none;
+      }
+      .mobile-path ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .mobile-path li {
+        padding: 14px 16px;
+        border: 2px solid #91afd0;
+        border-radius: 14px;
+        background: #eaf3fc;
+        color: #193047;
+        font-weight: 700;
+        text-align: center;
+      }
+      .mobile-path li + li {
+        margin-top: 30px;
+        position: relative;
+      }
+      .mobile-path li + li::before {
+        content: "↓";
+        position: absolute;
+        top: -27px;
+        left: 50%;
+        color: #6286a5;
+      }
+      .mobile-path li.predicted {
+        border-color: #d8b06d;
+        background: #fff5e5;
+      }
+      .mobile-path li.observed {
+        border-color: #86c69b;
+        background: #e8f6ec;
+      }
+      .mobile-path li.lost {
+        border-color: #dda39d;
+        background: #fcf0ef;
+      }
+      .after {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-top: 16px;
+      }
+      .after strong {
+        font-size: 17px;
+      }
+      .after p {
+        margin-top: 7px;
+      }
+      footer {
+        padding: 12px 0 30px;
+        color: #61788c;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      footer a {
+        color: #22669e;
+      }
+      @media (max-width: 760px) {
+        .sources,
+        .after,
+        .lifecycle,
+        .metrics {
+          grid-template-columns: 1fr;
+        }
+        .depth-parallel,
+        .depth-options {
+          grid-template-columns: 1fr;
+        }
+        .depth-lane::before,
+        .depth-lane::after {
+          display: none;
+        }
+        .source {
+          min-height: 0;
+        }
+        .diagram {
+          display: none;
+        }
+        .mobile-path {
+          display: block;
+        }
+        .lifecycle article:not(:last-child)::after {
+          content: "↓";
+          right: 50%;
+          top: auto;
+          bottom: -25px;
+        }
+        .lifecycle {
+          gap: 22px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .edge,
+        .node {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">FLASH · current code path</div>
+      <h1>How FLASH tracks one object</h1>
+      <p class="lead">
+        Live camera, video experiments, and demo-editor object extraction use the same tracking code. For each
+        object, it combines what the camera sees now with motion clues and the
+        surface remembered from earlier frames.
+      </p>
+      <p class="lead">
+        <strong>Demo recording:</strong> one robot-owned camera saves synchronized RGB,
+        sensor depth and left/right IR to a LeRobot episode, together with capture times,
+        stereo calibration and robot geometry. Demo processing regenerates the selected
+        depth model from these saved inputs before running this same tracking pipeline.
+      </p>
+      <div class="context">
+        <span class="pill"
+          ><strong>Live:</strong> depth + mask + groups + growing surface</span
+        ><span class="pill"
+          ><strong>Video examples:</strong> same core, comparison variants
+          available</span
+        ><span class="pill"
+          ><strong>Demo editor:</strong> recorded RGB-D + named/clicked objects → same core</span
+        ><span class="pill"
+          ><strong>Result:</strong> observed, predicted, or lost</span
+        >
+      </div>
+      <p class="time-key">
+        <strong>Time key:</strong> <code>t</code> is the frame being processed;
+        <code>t−1</code> is the previous processed frame;
+        <code>&lt;t</code> means any earlier frame. <code>O[t]</code> is
+        the current mask plus selected depth (sensor or model);
+        <code>S[&lt;t]</code> is the confirmed surface stored before now;
+        <code>H[t]</code> is an inferred motion hint;
+        <code>Q[t]</code> is a candidate 6D pose being fitted;
+        <code>P[t]</code> is the estimated pose published for now.
+      </p>
+
+
+
+      <section>
+        <h2>1. What goes into this frame</h2>
+        <p class="intro">
+          These are different kinds of evidence. A tracked image point suggests
+          motion; it is not a new measurement of the object's shape.
+        </p>
+        <div class="depth-diagram" aria-label="Live mask and depth paths for frame t">
+          <div class="depth-capture">
+            One camera capture · frame <code>t</code>
+            <strong>RGB + aligned RealSense depth; infrared pair when stereo is selected</strong>
+          </div>
+          <div class="depth-parallel">
+            <div class="depth-lane">
+              <small>Object tracker · only after selection</small>
+              <strong>RGB[t] → SAM3 → visible mask[t]</strong>
+              <p>Video reruns normally load a saved or dataset mask for each frame.</p>
+            </div>
+            <div class="depth-lane">
+              <small>Independent camera-frame depth · runs before object selection</small>
+              <div class="depth-options">
+                <div class="depth-option">
+                  <strong>RealSense sensor · fallback when stereo model is absent</strong>
+                  <span>Aligned sensor depth[t]; optional spatial, temporal and hole-filling filters.</span>
+                </div>
+                <div class="depth-option">
+                  <strong>LingBot-Depth-v0.5</strong>
+                  <span>RGB[t] + aligned sensor depth[t] → refined depth.</span>
+                </div>
+                <div class="depth-option">
+                  <strong>Fast-FoundationStereo<br />Lite Any Stereo V2-S/M/L/H</strong>
+                  <span>IR left/right[t] → stereo depth → project onto RGB[t].</span>
+                </div>
+              </div>
+              <div class="depth-select">Latest completed color-aligned depth[t] · available to preview and tracker</div>
+            </div>
+          </div>
+          <div class="depth-join">
+            <strong>Tracker joins mask[t] + selected depth[t] by frame ID → O[t]</strong>
+            <a class="metric-link" href="#metric-depth">Depth source · valid pixels · model time</a>
+          </div>
+        </div>
+        <div class="sources">
+          <div class="source measure">
+            <small>Current frame t · image and selected depth</small>
+            <h3>O[t] · mask + depth</h3>
+            <p>
+              The segmentation mask marks visible object pixels. Cleaned depth
+              places reliable pixels in 3D. Background depth can show where the
+              object cannot be.
+            </p>
+            <p style="margin-top: 10px; font-size: 14px">
+              Learned depth is an estimate, distinct from sensor measurement.
+              Live history retains the sensor and selected model maps separately
+              for comparison in Depth and 3D views. Video examples read the
+              depth stored with each frame.
+            </p>
+            <a class="metric-link" href="#metric-input"
+              >Clean point count · 3D spread</a
+            >
+          </div>
+          <div class="source motion">
+            <small>Earlier image → frame t · inferred</small>
+            <h3>H[t] · image + group motion</h3>
+            <p>
+              Shared LK or UFM tracks scene points from <code>t−1</code> to
+              <code>t</code>, including when object masks are empty. Object image
+              matching can also join surviving IDs to an older accepted frame.
+              The <a href="#group-update">group update</a> below shows how these points become motion evidence.
+            </p>
+            <a class="metric-link" href="#metric-motion"
+              >Consistent point count · motion error</a
+            >
+          </div>
+          <div class="source memory">
+            <small>Earlier frames &lt;t · stored</small>
+            <h3>S[&lt;t] · grown surface</h3>
+            <p>
+              All <em>confirmed</em> depth patches, including the first one,
+              form the fitting surface. Pending additions are excluded. The last
+              pose is stored separately.
+            </p>
+            <a class="metric-link" href="#metric-growth"
+              >Active point count · patch confirmation</a
+            >
+          </div>
+        </div>
+        <div class="converge" aria-hidden="true">↓</div>
+        <div class="fit" id="surface-fit">
+          <strong>Find pose Q[t] that aligns stored surface S[&lt;t] with current observation O[t]</strong>
+          <span>
+            <code>S[&lt;t]</code> is the combined grown surface in fixed object
+            coordinates; fitting changes its candidate pose, not the stored
+            surface. The motion proposal is the motion of object image points since
+            the last accepted view applied to that view's pose. If those matches
+            are unavailable, use the associated group's predicted pose; if that
+            is unavailable, use the previous pose. Keep the proposed rotation and
+            compare its translation with one aligning the stored and current surface
+            centres; start the one solve from the lower geometry-cost option.
+            LK/UFM and group point
+            correspondences then guide the fit. Current mask and depth
+            <code>O[t]</code> decide whether the resulting pose is allowed.
+            Fresh sessions use small_gicp with shared LK image matching;
+            saved runs retain their recorded settings.
+            Library matchers use the prepared stored surface without removing
+            points based on visibility at the starting pose. Geometry checks
+            apply to candidate poses and again after Kalman fusion.
+          </span>
+        </div>
+      </section>
+
+      <section id="group-update">
+        <h2>Scene-wide group tracker</h2>
+        <p class="intro">The shared matcher supplies measured point IDs and 3D positions across the scene. It also samples more densely inside selected masks. Missing or rejected measurements have positions predicted from the group's current motion. Reliable current scene depth farther than a carried point's current camera Z removes that membership; nearer occluders, missing depth and offscreen positions preserve it. Current camera calibration supplies the projection, independently of object masks. A split needs a measured cohort whose motion is distinct beyond fit error. Locally co-moving points stay together, and uncertain neighbors follow the nearest measured branch after a split. New groups are seeded by coherent motion scored with bounded 3D error, so a compromise motion cannot win merely by placing a few extra points inside the fit tolerance. New IDs join after sustained measured co-motion. The group tracker receives no masks, object labels, poses, or Kalman state.</p>
+        <div class="group-scroll">
+          <svg class="group-diagram" viewBox="0 0 1200 470" role="img" aria-labelledby="group-title group-description">
+            <title id="group-title">Independent scene group update</title>
+            <desc id="group-description">Shared image matches and depth produce measured scene points. The group tracker combines them with its own prior group state, then exposes a read-only group snapshot for this frame and saves its state for the next frame.</desc>
+            <defs><marker id="group-arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#587894" /></marker></defs>
+            <rect x="150" y="25" width="570" height="85" rx="15" fill="#edf5fc" stroke="#b7cfdf" />
+            <text class="group-step" x="175" y="54">Shared LK / UFM: image t−1 → image t</text>
+            <text class="group-caption" x="175" y="80">Point IDs + measured depth → 3D scene points</text>
+            <text class="group-caption" x="175" y="100">Current depth image + calibration also check carried positions</text>
+            <rect x="825" y="25" width="330" height="85" rx="15" fill="#f0edf8" stroke="#c9bddf" />
+            <text class="group-step" x="845" y="54">Group state from t−1</text>
+            <text class="group-caption" x="845" y="80">Member IDs + fixed group coordinates</text>
+            <text class="group-caption" x="845" y="100">Prior measured motion and membership</text>
+            <path class="group-arrow" d="M435 110V155" /><path class="group-arrow" d="M990 110V140H700V155" />
+            <rect x="150" y="155" width="570" height="100" rx="15" fill="#edf5fc" stroke="#b7cfdf" />
+            <text class="group-step" x="175" y="185">Update scene groups from measured points</text>
+            <text class="group-caption" x="175" y="211">Fit ≥4 measured members; carry missing / rejected points</text>
+            <text class="group-caption" x="175" y="235">Reject carried positions contradicted by current depth</text>
+            <a class="metric-callout" href="#metric-group"><path d="M150 205H125" /><text x="110" y="186" text-anchor="end"><tspan x="110">Inlier count</tspan><tspan x="110" dy="18">Motion error</tspan><tspan x="110" dy="18">Agreement time</tspan></text></a>
+            <path class="group-arrow" d="M720 205H825" />
+            <rect x="825" y="165" width="330" height="80" rx="15" fill="#f0edf8" stroke="#c9bddf" />
+            <text class="group-step" x="845" y="195">Save group state for t+1</text>
+            <text class="group-caption" x="845" y="222">Bounded IDs and hidden-point history</text>
+            <path class="group-arrow" d="M435 255V300" />
+            <rect x="150" y="300" width="570" height="90" rx="15" fill="#fff3df" stroke="#d8bd8d" />
+            <text class="group-step" x="175" y="330">Read-only group snapshot G[t]</text>
+            <text class="group-caption" x="175" y="356">Per-group IDs, measured/predicted points and motion</text>
+            <text class="group-caption" x="175" y="378">Visible for debugging regardless of object pose status</text>
+            <a class="metric-callout" href="#metric-motion"><path d="M720 345H750" /><text x="765" y="350">Measured support per group →</text></a>
+          </svg>
+        </div>
+        <div class="mobile-path" aria-label="Independent group update steps"><ol>
+          <li>Shared image matching and depth supply measured 3D point IDs across the scene, with extra samples in selected masks. All samples enter grouping.</li>
+          <li>Scene groups score coherent motion by bounded 3D error and split only a measured branch with distinct motion. Missing and isolated discrepant points stay predicted unless current calibrated scene depth contradicts their carried position. After a split, uncertain points follow nearby reliable members. Scene points, scene depth and prior group state participate.<a class="metric-link" href="#metric-group">Inliers · motion error · agreement time</a></li>
+          <li>The group snapshot G[t] can be queried or displayed. A rejected object pose cannot change it.</li>
+        </ol></div>
+      </section>
+      <section id="group-query">
+        <h2>Object tracker queries scene groups</h2>
+        <p class="intro">This is a separate downstream path. Each object tracker owns its association between the object's point IDs and a scene group. An accepted object observation may add new IDs to that association; it never edits the scene group.</p>
+        <div class="lifecycle" aria-label="Object group query and pose decision">
+          <article><small>Scene perception</small><strong>G[t]</strong><p>Read-only group snapshot with measured and predicted members. Coherent measured motion creates split branches; proximity carries uncertain IDs, and merges preserve their positions in the merged frame.</p></article>
+          <article><small>Object-side query</small><strong>Persistent point membership → H[t]</strong><p>The object follows the group containing the most of its remembered point IDs, including hidden members; ties retain the existing group. Initial coordinates require measured support (12 points by default). A split can establish new coordinates from persistent anchors; a merge carries the existing relation through the group's exact coordinate transform. Unsupported groups retain the association but supply no motion hint.</p></article>
+          <article><small>Object pose decision</small><strong>Surface fit → Kalman → pose</strong><p>Depth and mask check the fit. Kalman belongs to the object pose estimator, not the group tracker. The pose can be observed, predicted or lost.</p></article>
+        </div>
+        <p class="intro">There is no separate visible-point disconnect vote. Ungrouped measurements alone do not cancel the association. Explicit scene-depth rejection of its last remembered member clears the fixed relation to that group. The absolute group hint can seed a fit or carry a predicted pose through occlusion. Accepting a pose does not rewrite the fixed group relation.</p>
+        <p class="intro"><a href="#metric-motion">Group support metric</a> → <a href="#metric-kalman">pose update metric</a> → <a href="#pose-flow">pose decision paths</a>. Display modes: None hides groups; Objects shows groups associated with tracked objects; All shows every scene group. Measured members and predicted members share one wireframe; edges involving predicted members have lower opacity. Demos persist the same group records and wireframe as live tracking. Live, demo, and rollout views use the same drawing functions. These display choices do not affect pose estimation.</p>
+      </section>
+
+      <section>
+        <h2>2. How the surface grows and is refined</h2>
+        <p class="intro">
+          Growth is separate from accepting a pose. Only confirmed patches enter
+          <code>S</code>, so a new patch cannot validate the same frame that
+          produced it.
+        </p>
+        <div class="lifecycle" aria-label="Grown surface timeline">
+          <article>
+            <small>Before frame t</small>
+            <strong>S[&lt;t] · active</strong>
+            <p>
+              Starts from the first usable depth measurement. Later fits read
+              the union of all confirmed patches.
+            </p>
+          </article>
+          <article>
+            <small>At frame t</small>
+            <strong>O[t] · measured</strong>
+            <p>An observed pose aligns this frame's clean depth to S[&lt;t].</p>
+          </article>
+          <article>
+            <small>After pose acceptance</small>
+            <strong>Existing points · refine / new cells · pending</strong>
+            <p>
+              Replace the overlapping visible region with current clean depth
+              in fixed object coordinates. Remove individual points contradicted
+              by reliable current depth and mask. Hidden or unknown points stay unchanged.
+              Broad overlap admits a consistent new patch. Optional local growth
+              admits only nearby, non-conflicting cells outside the mapped area.
+              New cells cannot affect fitting until confirmed by a later frame.
+            </p>
+            <a class="metric-link" href="#metric-growth"
+              >Overlap · depth agreement · refreshed points</a
+            >
+          </article>
+          <article>
+            <small>Later frame t+k</small>
+            <strong>S[≤t+k] · expanded</strong>
+            <p>
+              A later measurement confirms a pending patch; it joins the active
+              fitting surface.
+            </p>
+            <a class="metric-link" href="#metric-growth"
+              >Confirmed by later measured frames</a
+            >
+          </article>
+        </div>
+        <div class="loop">↶ The next fit reads the updated active surface.</div>
+        <p class="caveat">
+          <strong>Update rule:</strong> fresh sessions refresh the observed surface
+          after an accepted pose (<code>refresh_observed_surface = true</code>),
+          except when the fallback uses the fitted pose after fusion fails.
+          Replacement uses actual current samples, without averaging. Hidden,
+          unknown and uncertain boundary regions remain available to the next fit.
+          Only coordinates refreshed from the latest accepted reliable observation
+          can veto the next candidate; this set is fixed before fitting.
+          Replacement and removal follow acceptance and do not require the stricter
+          new-patch growth check. Rejected poses cannot change the map. The
+          patch-count limit may evict a patch covering little unique surface;
+          that remains a memory rule.
+          Separately, the first image remains a texture anchor; the
+          fresh-session default uses the latest accepted image for partial-view
+          geometry checks.
+        </p>
+      </section>
+
+      <section id="pose-flow">
+        <h2>3. Which pose is shown?</h2>
+        <p class="intro">
+          This is the loop after initialization. “Enough O[t]” asks only whether
+          the <em>current</em> mask is nonempty and its cleaned depth has at
+          least three 3D points spanning a plane. It permits a fit attempt; it
+          does not certify a pose. Select a situation to trace its path.
+        </p>
+        <div class="kalman-why">
+          <strong>Why Kalman?</strong> A small visible patch may constrain depth
+          well but leave tilt uncertain. Kalman keeps a pose and its uncertainty
+          across frames: predict first, then let the new fit correct the
+          directions it actually measures well. The size of the jump is recorded,
+          not a rejection rule. Geometry checks still apply.
+          <br /><strong>Scope:</strong> fitting can run without Kalman; it adds
+          memory and uncertainty handling. The flow below shows fresh-session
+          defaults with Kalman enabled, including the fitted-pose fallback.
+          Older saved results may use other settings.
+        </div>
+        <div class="buttons" role="group" aria-label="Example frame situations">
+          <button data-scenario="clear" aria-pressed="true">Clear view</button
+          ><button data-scenario="fitted" aria-pressed="false">
+            Fusion fails; fit passes</button
+          ><button data-scenario="fallback" aria-pressed="false">
+            Fit fails; group agrees</button
+          ><button data-scenario="hidden" aria-pressed="false">
+            Object hidden</button
+          ><button data-scenario="lost" aria-pressed="false">
+            No trustworthy pose
+          </button>
+        </div>
+        <p id="note" aria-live="polite">
+          The fit passes the depth and mask checks. After an optional Kalman
+          update, it is checked again and published as observed.
+        </p>
+        <div class="mobile-path" aria-label="Selected frame decision path">
+          <ol id="mobile-steps"></ol>
+        </div>
+        <p class="intro" style="font-size: 13px; margin-bottom: 10px">
+          Thin lines connect each step to its main checks. Click a metric label
+          for the detailed definition below.
+        </p>
+        <div class="diagram">
+          <svg
+            viewBox="-140 0 1400 910"
+            role="img"
+            aria-labelledby="title description"
+          >
+            <title id="title">
+              FLASH frame flow with checks beside each step
+            </title>
+            <desc id="description">
+              Predict with Kalman each frame. Fit the grown surface when current
+              measurements allow it. Check geometry, combine with the prediction
+              using uncertainty, and check geometry again. Fall back to a
+              compatible prediction or publish no pose. Thin lines lead from
+              steps to their main metrics; each label opens its details below.
+            </desc>
+            <defs>
+              <marker
+                id="arrow"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto-start-reverse"
+              >
+                <path d="M0 0L10 5L0 10Z" fill="#6688a4" />
+              </marker>
+            </defs>
+            <path
+              class="edge"
+              data-routes="clear fitted fallback hidden lost"
+              d="M560 100V155"
+            />
+            <path
+              class="edge"
+              data-routes="clear fitted fallback lost"
+              d="M560 230V260H238V295"
+            />
+            <path class="edge" data-routes="hidden" d="M560 230V260H885V295" />
+            <path
+              class="edge"
+              data-routes="clear fitted fallback lost"
+              d="M238 377V435"
+            />
+            <path class="edge" data-routes="clear fitted" d="M238 523V585" />
+            <path
+              class="edge"
+              data-routes="fallback lost"
+              d="M365 479H650V555H758"
+            />
+            <path class="edge" data-routes="hidden" d="M885 377V505" />
+            <path class="edge" data-routes="clear" d="M238 673V755" />
+            <path
+              class="edge"
+              data-routes="fallback hidden"
+              d="M885 610V715H690V755"
+            />
+            <path class="edge" data-routes="lost" d="M885 610V675H945V755" />
+            <path class="edge" data-routes="fitted" d="M365 628H680V585H758" />
+            <path class="edge" data-routes="fitted" d="M758 570H720V735H350V755" />
+            <text class="label" x="265" y="251">YES</text>
+            <text class="label" x="818" y="251">NO</text>
+            <text class="label" x="258" y="558">PASSES</text>
+            <text class="label" x="490" y="467">FAILS</text>
+            <text class="label" x="460" y="616">REJECTED / RECHECK FAILS</text>
+            <text class="label" x="270" y="719">PASSES</text>
+            <text class="label" x="628" y="704">AVAILABLE + COMPATIBLE</text>
+            <text class="label" x="962" y="704">NO</text>
+            <text class="label" data-routes="fitted" x="530" y="728">PREDICTION FAILS · USE CHECKED FIT</text>
+            <g class="node prior" data-routes="clear fitted fallback hidden lost">
+              <rect x="425" y="20" width="270" height="80" rx="17" />
+              <text x="560" y="50">
+                Kalman: predict for frame t
+                <tspan class="sub" x="560" dy="21">
+                  Previous pose + group motion
+                </tspan>
+                <tspan class="sub" x="560" dy="21">
+                  grow uncertainty with elapsed time
+                </tspan>
+              </text>
+            </g>
+            <g class="node measured" data-routes="clear fitted fallback hidden lost">
+              <rect x="425" y="155" width="270" height="75" rx="17" />
+              <text x="560" y="185">
+                Enough O[t] to attempt fit?
+                <tspan class="sub" x="560" dy="21">
+                  Current mask + clean 3D points
+                </tspan>
+              </text>
+            </g>
+            <g class="node measured" data-routes="clear fitted fallback lost">
+              <rect x="110" y="295" width="255" height="82" rx="17" />
+              <text x="237.5" y="325">
+                Fit confirmed map S[&lt;t]
+                <tspan class="sub" x="237.5" dy="21">
+                  Confirmed map S[&lt;t] → current O[t]
+                </tspan>
+              </text>
+            </g>
+            <g class="node clue" data-routes="hidden">
+              <rect x="758" y="295" width="255" height="82" rx="17" />
+              <text x="885.5" y="325">
+                Use predicted pose
+                <tspan class="sub" x="885.5" dy="21">
+                  Already calculated above
+                </tspan>
+              </text>
+            </g>
+            <g class="node measured" data-routes="clear fitted fallback lost">
+              <rect x="110" y="435" width="255" height="88" rx="17" />
+              <text x="237.5" y="465">
+                Check fitted pose
+                <tspan class="sub" x="237.5" dy="21">
+                  Against current mask + depth
+                </tspan>
+              </text>
+            </g>
+            <g class="node prior" data-routes="clear fitted">
+              <rect x="110" y="585" width="255" height="88" rx="17" />
+              <text x="237.5" y="615">
+                Kalman: combine poses
+                <tspan class="sub" x="237.5" dy="21">
+                  Prediction + fit, using uncertainty
+                </tspan>
+                <tspan class="sub" x="237.5" dy="21">
+                  Then recheck mask + depth
+                </tspan>
+              </text>
+            </g>
+            <g class="node clue" data-routes="fitted fallback hidden lost">
+              <rect x="758" y="505" width="255" height="105" rx="17" />
+              <text x="885.5" y="535">
+                Check predicted pose
+                <tspan class="sub" x="885.5" dy="21">
+                  Available? Compatible with
+                </tspan>
+                <tspan class="sub" x="885.5" dy="21">
+                  usable mask + depth, if present?
+                </tspan>
+              </text>
+            </g>
+            <g class="node good" data-routes="clear fitted">
+              <rect x="110" y="755" width="255" height="78" rx="17" />
+              <text x="237.5" y="785">
+                OBSERVED P[t]
+                <tspan class="sub" x="237.5" dy="21">
+                  Surface update checked separately
+                </tspan>
+              </text>
+            </g>
+            <g class="node clue" data-routes="fallback hidden">
+              <rect x="580" y="755" width="220" height="78" rx="17" />
+              <text x="690" y="785">
+                PREDICTED P[t]
+                <tspan class="sub" x="690" dy="21">No new surface</tspan>
+              </text>
+            </g>
+            <g class="node bad" data-routes="lost">
+              <rect x="840" y="755" width="210" height="78" rx="17" />
+              <text x="945" y="785">
+                LOST
+                <tspan class="sub" x="945" dy="21">No pose shown</tspan>
+              </text>
+            </g>
+            <a class="metric-callout" href="#metric-kalman">
+              <path d="M695 60H725" />
+              <text x="735" y="48" text-anchor="start">
+                <tspan x="735" dy="0">Group motion error</tspan>
+                <tspan x="735" dy="18">+ accumulated uncertainty</tspan>
+              </text>
+            </a>
+            <a class="metric-callout" href="#metric-input">
+              <path d="M425 192H400" />
+              <text x="385" y="183" text-anchor="end">
+                <tspan x="385" dy="0">Clean point count</tspan>
+                <tspan x="385" dy="18">3D spread</tspan>
+              </text>
+            </a>
+            <a class="metric-callout" href="#metric-fit">
+              <path d="M110 336H85" />
+              <text x="70" y="327" text-anchor="end">
+                <tspan x="70" dy="0">Fit cost</tspan>
+                <tspan x="70" dy="18">Solver budget</tspan>
+              </text>
+            </a>
+            <a class="metric-callout" href="#metric-motion">
+              <path d="M1013 336H1035" />
+              <text x="1048" y="327" text-anchor="start">
+                <tspan x="1048" dy="0">Motion support</tspan>
+                <tspan x="1048" dy="18">Prediction source</tspan>
+              </text>
+            </a>
+            <a class="metric-callout" href="#metric-geometry">
+              <path d="M110 479H85" />
+              <text x="70" y="470" text-anchor="end">
+                <tspan x="70" dy="0">Depth conflict</tspan>
+                <tspan x="70" dy="18">Overlap · outliers</tspan>
+              </text>
+            </a>
+            <a class="metric-callout" href="#metric-kalman">
+              <path d="M110 629H85" />
+              <text x="70" y="620" text-anchor="end">
+                <tspan x="70" dy="0">Pose disagreement</tspan>
+                <tspan x="70" dy="18">vs combined uncertainty</tspan>
+              </text>
+            </a>
+            <a class="metric-callout" href="#metric-geometry">
+              <path d="M1013 558H1035" />
+              <text x="1048" y="549" text-anchor="start">
+                <tspan x="1048" dy="0">Depth / mask</tspan>
+                <tspan x="1048" dy="18">agreement</tspan>
+              </text>
+            </a>
+            <a class="metric-callout" href="#metric-growth">
+              <path d="M110 794H85" />
+              <text x="70" y="785" text-anchor="end">
+                <tspan x="70" dy="0">Growth overlap</tspan>
+                <tspan x="70" dy="18">Patch confirmation</tspan>
+              </text>
+            </a>
+            <a class="metric-callout" href="#metric-output">
+              <path d="M690 833V853" />
+              <text x="690" y="874" text-anchor="middle">
+                <tspan x="690" dy="0">Uncertainty · prediction age</tspan>
+              </text>
+            </a>
+            <a class="metric-callout" href="#metric-output">
+              <path d="M945 833V853" />
+              <text x="945" y="874" text-anchor="middle">
+                <tspan x="945" dy="0">Reason pose was withheld</tspan>
+              </text>
+            </a>
+          </svg>
+        </div>
+        <div class="after">
+          <article>
+            <strong>Observed → update memory</strong>
+            <p>
+              Save this frame's RGB, depth, mask and accepted pose as the
+              reference for later image matching. Add depth points only after
+              the stricter growth checks. Object association can add new point IDs from an accepted observation; only a new reference replaces its existing coordinates.
+              <a href="#group-update">Scene groups</a> update before fitting and receive no fitted pose.
+            </p>
+          </article>
+          <article>
+            <strong>Predicted or lost → no surface growth</strong>
+            <p>
+              Prediction can move the displayed surface but cannot measure
+              hidden shape. “Lost” means no pose is published for this frame;
+              the object may still be visible.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>4. What each step measures</h2>
+        <p class="intro">
+          These are current diagnostic names and the decisions they inform, not
+          calibrated probabilities of a correct pose. The live camera uses
+          fresh-session settings; a saved video keeps the settings recorded when
+          it was processed. Both views expose these settings through their pipeline controls.
+        </p>
+        <p class="intro">
+          The live scene snapshot keeps the fit and prediction checks with its
+          RGB-D frame, including rejected poses for diagnosis only. Depth
+          conflicts identify whether they occurred in the current image or a
+          retained image. These diagnostic poses are never displayed as accepted
+          tracking. The same frame result is retained in saved video output or live rolling history.
+        </p>
+        <div class="metrics">
+          <article id="metric-depth">
+            <h3>Depth[t] · what reached the observation?</h3>
+            <p><b>Read:</b> selected depth source, valid versus missing depth pixels, applied camera filters, and <code>depth_ms</code> for a learned model.</p>
+            <p><b>Choice:</b> Fast-FoundationStereo by default when its engine is installed; otherwise RealSense sensor depth. LingBot-Depth-v0.5 and Lite Any Stereo V2 remain selectable. Model estimates do not turn sensor holes into measured depth.</p>
+            <p><b>Tune:</b> depth source before camera start; spatial, temporal and hole-filling filters while running.</p>
+          </article>
+          <article id="metric-input">
+            <h3>O[t] · can we attempt a fit?</h3>
+            <p>
+              <b>Read:</b> <code>clean_count</code>, current mask, 3D point
+              spread.
+            </p>
+            <p>
+              <b>Gate:</b> nonempty mask, at least three cleaned depth points
+              with two independent spatial directions. This is a minimum input
+              check, not pose confidence.
+            </p>
+            <p>
+              <b>Tune:</b> <code>mask_margin_px</code>,
+              <code>depth_span_m</code>, <code>depth_outlier_sigma</code>.
+            </p>
+          </article>
+          <article id="metric-motion">
+            <h3>H[t] · how well did points move?</h3>
+            <p>
+              <b>Read:</b> <code>matches</code>, <code>inliers</code>,
+              <code>match_residual_mm</code>; group support count and
+              disagreement.
+            </p>
+            <p>
+              <b>Gate:</b> enough mutually consistent tracked points. A
+              surrounding group joins only after sustained co-movement.
+            </p>
+            <p>
+              <b>Tune:</b> <code>ransac_distance_m</code>,
+              <code>min_inliers</code>, <code>min_motion_points</code>, <code>fit_threshold_m</code>,
+              <code>support_confirmation_s</code>.
+            </p>
+          </article>
+          <article id="metric-group">
+            <h3>Scene groups · membership and motion</h3>
+            <p><b>Read:</b> group count, confirmed/supported groups, measured inlier count,
+              motion residual, predicted hidden point count and group update time.</p>
+            <p><b>Gate:</b> four visible members can update an existing group's motion; forming a new group needs twelve agreeing measured point pairs. These are current default settings, not fixed mathematical requirements.
+              A split needs a coherently moving set of measured points that disagree for the split duration;
+              a confirmed split also transfers measured parent points whose pairwise distances are better preserved by the branch. Hidden points follow nearby measured departures. Independent points or groups join only after the longer co-motion duration.
+              Missing points retain predicted positions until capacity eviction, but do not measure motion.</p>
+            <p><b>Tune:</b> <code>fit_threshold_m</code>, <code>min_inliers</code>, <code>min_motion_points</code>,
+              <code>split_tolerance_m</code>, <code>split_confirmation_s</code>,
+              <code>merge_tolerance_m</code>, <code>merge_confirmation_s</code>,
+              <code>support_confirmation_s</code>,
+              <code>max_points</code>, <code>max_groups</code>, <code>motion_hypotheses</code>.</p>
+          </article>
+          <article id="metric-fit">
+            <h3>Surface fit · quality within the budget</h3>
+            <p>
+              <b>Read:</b> <code>geometry_cost</code>, <code>evaluations</code>,
+              <code>validation_count</code>, <code>translation_initialization</code>,
+              and <code>initial_translation_correction_m</code>.
+            </p>
+            <p>
+              <b>Optimize:</b> surface alignment, with outline coverage and
+              image/group evidence helping choose the fit. A lower cost cannot
+              excuse a failed geometry check.
+            </p>
+            <p>
+              <b>Initialize:</b> keep the proposed rotation. Compare the original
+              translation with a translation aligning the means of the stored and
+              current 3D object surfaces. Start the one solve from whichever has
+              lower geometry cost. Partial visibility can move the measured centre,
+              so centre alignment does not automatically replace a better motion estimate.
+            </p>
+            <p>
+              <b>Tune:</b> the selected matcher's numerical iteration budget and
+              the fitting weights. One local solve; no outer restart search.
+            </p>
+          </article>
+          <article id="metric-geometry">
+            <h3>S[&lt;t] ↔ O[t] · does the pose fit?</h3>
+            <p>
+              <b>Read:</b> <code>surface_median_mm</code>,
+              <code>observed_overlap</code>, visible outlier fractions, and
+              <code>scene_depth_coherent_protrusion</code>,
+              <code>reliable_reference_points</code>, <code>full_reference_points</code>,
+              and <code>rejection_reference_frame</code>.
+            </p>
+            <p>
+              <b>Gate:</b> reject a broad protrusion or three separate small
+              patches in reliably measured empty space, even when most of the surface fits;
+              enough overlap and no more than the configured outlier fraction.
+              Missing depth and nearer occluders are unknown, not conflicts.
+              A small isolated patch alone does not trigger the hard veto.
+            </p>
+            <p>
+              <b>Fit source:</b> one local solve aligns the unchanged confirmed
+              map S[&lt;t] to current O[t]. Positive overlap uses the full map.
+              Negative evidence uses only its latest reliably refreshed points
+              and the latest accepted view. The candidate and any Kalman-adjusted
+              pose must pass these checks before O[t] changes the map. No eligible
+              old points means no stored-point veto; positive overlap is still
+              required. The candidate cannot erase conflicts to pass its own check.
+            </p>
+            <p>
+              <b>Tune:</b> <code>depth_tolerance_m</code>,
+              <code>free_space_min_supports</code> (default 3),
+              <code>min_overlap</code>,
+              <code>max_visible_outlier_fraction</code>. Outline coverage is a
+              soft preference, not a hard requirement.
+            </p>
+          </article>
+          <article id="metric-kalman">
+            <h3>Kalman · prediction and correction</h3>
+            <p>
+              <b>Read:</b> pose covariance and <code>kalman.innovation_squared</code>
+              (disagreement relative to combined uncertainty).
+            </p>
+            <p>
+              <b>Predict:</b> move the previous pose with measured group motion
+              when available and account for supplied camera motion. Add
+              uncertainty for motion error and elapsed time. Surface refresh
+              does not change this motion source.
+              If no usable measured group motion advances the pose,
+              <code>unmeasured_rotation_std_deg_sqrt_s</code> increases rotation
+              uncertainty before fitting (fresh-session default: 10°/√s).
+              With measured motion, the ordinary process noise applies.
+            </p>
+            <p>
+              <b>Correct:</b> combine fitted and predicted poses, giving more
+              weight to the more certain estimate in each direction, then
+              recheck geometry. Large disagreement alone does not veto the fit;
+              the innovation score is recorded for diagnosis.
+            </p>
+            <p>
+              <b>If fusion fails:</b> prefer the prediction if it passes the
+              current checks. Otherwise accept the already checked fit as the
+              published pose and next filter pose. Keep the prediction covariance
+              unchanged, retain the previous accepted image and its pose, and
+              skip surface refresh/growth. No extra fit is run. Geometry
+              compatibility does not prove the pose is unique or accurate, especially with a thin
+              visible strip or symmetric object.
+            </p>
+            <p>
+              <b>Limits:</b> uncertainty is a joint 6D covariance, not one
+              confidence percentage. Observation uncertainty currently comes
+              from depth-surface constraints; it does not yet include the
+              outline and texture constraints. Large disagreement alone does
+              not increase the posterior covariance or reject the current fit.
+            </p>
+            <p>
+              <b>Tune:</b> process noise and measurement noise; these are
+              assumptions, not measured correctness.
+              The missing-motion uncertainty floor changes the prediction's
+              covariance, never the geometry checks.
+            </p>
+          </article>
+          <article id="metric-growth">
+            <h3>Surface update · refine existing points and grow?</h3>
+            <p>
+              <b>Which surface:</b> <code>map_version_used</code> and
+              <code>surface_frames_used</code> identify the confirmed map read
+              by this frame. <code>accepted_frame_before</code> identifies the
+              saved RGB-D reference; <code>image_source_frame</code> identifies
+              the actual source used for image matching.
+            </p>
+            <p>
+              <b>Read:</b> <code>growth.growth_mode</code>,
+              <code>growth.observed_overlap</code>,
+              <code>growth.patch_consistent</code>,
+              <code>growth.admitted_points</code>,
+              <code>growth.refined_points</code>,
+              <code>growth.refinement_mean_shift_mm</code>,
+              <code>growth.retired_points</code>, <code>map_points</code>.
+            </p>
+            <p>
+              <b>Gate:</b> normally 75% of current depth points must agree within
+              3 mm of active S; 95% of proposed new cells must not contradict
+              retained views. Optional local growth instead checks overlap in
+              each nearby region and individually vetoes conflicting cells.
+              Either path needs a later measured frame to confirm a pending patch.
+              After acceptance, surface refresh replaces the overlapping visible
+              region with actual current samples. It uses one storage-cell image
+              footprint for association and the pose's depth tolerance to distinguish
+              overlap from occlusion; the 3 mm new-growth distance does not limit
+              replacement. Individual active or pending points contradicted by
+              reliable depth and mask are removed. Hidden, unknown and uncertain
+              boundary points remain; pending points are cleaned before confirmation.
+            </p>
+            <p>
+              <b>Tune:</b> <code>growth_agreement_m</code>,
+              <code>growth_min_overlap</code>, <code>local_growth_enabled</code>,
+              <code>growth_local_overlap</code>, <code>patch_consistency</code>,
+              <code>patch_overlap</code>, <code>confirmations</code>,
+              <code>refresh_observed_surface</code> (fresh-session default: on).
+            </p>
+          </article>
+          <article id="metric-output">
+            <h3>Published result · what supports it?</h3>
+            <p>
+              <b>Read:</b> output status, <code>prediction_source</code>,
+              <code>prediction_age_s</code>, <code>covariance</code> and the
+              rejection <code>reason</code>.
+            </p>
+            <p>
+              <b>Meaning:</b> observed passed this frame's checks; predicted
+              relies on earlier evidence and motion. Lost means no pose is
+              published. These labels do not guarantee real-world correctness.
+            </p>
+          </article>
+        </div>
+      </section>
+      <section class="panel" id="demo-execution">
+        <h2>Demo editor → robot action</h2>
+        <p>Computed results carry the integer <code>PIPELINE_VERSION</code> from
+          <code>policies/flash/pipeline_version.py</code>. Increment it whenever processing,
+          grouping, association, pose estimation or saved display evidence changes.
+          Opening a demo compares this version, object selection, tracking settings and depth source;
+          missing or outdated results rebuild from the recorded inputs. Apply waits for a successful
+          rebuild and prepares a new plan. The server rejects outdated results and plans even if a
+          client bypasses this flow. Failed rebuilds require an explicit Track retry.
+          Recorded rollout and live-history results retain their original version and evidence;
+          a server restart does not rewrite what happened during a run.</p>
+        <p>The editor obtains a live object pose from the tracker above. A recorded robot episode
+          supplies marked tool poses and gripper commands; each tool pose is stored relative to
+          its selected object or the robot base.</p>
+        <svg viewBox="0 0 1080 220" role="img" aria-label="Recorded tool poses and live object poses form Cartesian targets, which robot kinematics convert to joint commands for the motor loop" style="width:100%;height:auto">
+          <defs><marker id="demo-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#88a6bb"/></marker></defs>
+          <g fill="none" stroke="#88a6bb" stroke-width="2" marker-end="url(#demo-arrow)">
+            <path d="M250 65 H315"/><path d="M250 165 H285 V100 H315"/>
+            <path d="M515 80 H555"/><path d="M755 80 H795"/>
+          </g>
+          <g fill="#172a38" stroke="#58778c">
+            <rect x="10" y="20" width="240" height="90" rx="10"/>
+            <rect x="10" y="125" width="240" height="80" rx="10"/>
+            <rect x="315" y="35" width="200" height="95" rx="10"/>
+            <rect x="555" y="35" width="200" height="95" rx="10"/>
+            <rect x="795" y="35" width="275" height="95" rx="10"/>
+          </g>
+          <g fill="#e5edf4" font-size="16" text-anchor="middle">
+            <text x="130" y="47">Recorded demo</text>
+            <text x="130" y="73" font-size="14">Relative tool path + gripper</text>
+            <text x="130" y="155">Live tracker</text>
+            <text x="130" y="182" font-size="14">Current object pose</text>
+            <text x="415" y="65">Cartesian tool targets</text>
+            <text x="415" y="95" font-size="14">In the robot base frame</text>
+            <text x="655" y="65">Robot kinematics</text>
+            <text x="655" y="95" font-size="14">IK → joint actions</text>
+            <text x="932" y="65">Action queue → motor loop</text>
+            <text x="932" y="95" font-size="14">30 Hz → Robot.send_action</text>
+          </g>
+        </svg>
+        <p>The planner converts Cartesian targets to joint and gripper actions before
+          publishing the unissued queue. New live poses can revise future commands;
+          already issued commands remain issued. The motor loop reads robot state and
+          sends joint actions at 30 Hz without waiting for a tracker frame or an IK solve.
+          The robot's <code>send_action</code> API does not receive Cartesian targets.
+          The current IK adapter can return a joint-clipped approximation; issuing its
+          actions does not prove that the tool reached the Cartesian goal.</p>
+        <p>Record with teleop, then Stop: the finished recording enters Demos automatically and can
+          be renamed. Apply to robot starts execution directly and creates a separate, persistent
+          Rollout with a snapshot of the demo, reference geometry, robot profile and pipeline settings.
+          Demos and Rollouts occupy independently scrollable sections separated by a movable divider.
+          The robot's calibrated camera is selected in Demo Settings; the editor does not offer a
+          second camera selector. Demo replay shows the saved episode's image resolution, and rollout
+          replay shows the resolution of the captured frames.</p>
+        <p>Each rollout keeps an append-only event journal: camera capture, processed depth and masks,
+          full perception results, operator controls, planning requests and published action revisions,
+          every motor tick, requested and accepted robot commands, measured readback, and lifecycle
+          transitions including failure reasons. Events share a monotonic clock and preserve source
+          frame IDs. Reset motion uses the same recorded robot interface as demo execution.</p>
+        <p>Rollout RGB-D and processed evidence use the live history format without its rolling expiry.
+          Camera capture starts before motor execution; writers drain on Stop. Queue overflow or a
+          write failure fails the recording explicitly. Opening a rollout reuses the Raw, Processed,
+          2D, 3D and Depth replay views. The Actions overlay fits a shape-preserving curve through
+          dispatched Cartesian targets. Each queued demo action carries its adapted tool pose before IK
+          and motor compensation; the dispatch receipt retains that pose even after replanning. Older
+          journals recover it from the dispatched revision’s reference transform and the saved demo.
+          Reset and approach are joint-space transitions, visualized from their requested joints before
+          compensation. Merely planned or replaced actions do not appear. Every waypoint has a signed
+          time offset from playback; selecting it seeks the replay. Demos use the same Actions overlay
+          for the measured tool poses that adaptation uses, reconstructed from observation.state with
+          the saved robot model and camera calibration. These paths describe targets and demonstrated
+          poses, not proof of physical task success. Camera-only history has no Actions control. Viewer controls sit above the image and the
+          shared playback bar below it in Live camera, demo editing and rollouts. The same camera projection is used in 2D and the orbitable 3D view. The Output field
+          uses the shared Run terminal and Copy action, with a draggable divider; new runs persist stdout and stderr. Older runs
+          expose their recorded execution messages. Saved entries show recording times without task verdicts.</p>
+      </section>
+      <section class="panel" id="frame-evidence">
+        <h2>5. Inspect the same result from either source</h2>
+        <p>Each call to the shared frame loop returns poses, rejection reasons, geometry checks,
+          covariance, group points and the frame/map IDs it used.</p>
+        <div class="after">
+          <article class="source measure"><h3>Video examples → saved frame results</h3>
+            <p>The player reads these results alongside the recorded RGB-D, masks, image matches
+              and surface versions. Inspecting a frame does not rerun the tracker.</p></article>
+          <article class="source memory"><h3>Live camera → rolling frame history</h3>
+            <p>Every captured RGB-D frame enters history from camera start, including frames before selection
+              and frames skipped by the tracker. Processed depth, SAM masks, and the later pose result
+              each retain their source frame ID and completion time. Scrub recent frames or save the
+              window across sessions.</p></article>
+        </div>
+        <div class="after">
+          <article class="source measure"><h3>Raw · camera capture time</h3>
+            <p>Every camera RGB-D frame. A saved clip stores RGB as a LeRobot video and sensor depth
+              as episode data.</p></article>
+          <article class="source memory"><h3>Processed · completion time</h3>
+            <p>Only frames whose selected depth and enabled SAM mask are ready. This variable-rate
+              stream feeds group tracking and pose estimation. A saved clip references the matching
+              RGB video frame and stores exact processed depth and masks in compressed sidecars.</p></article>
+        </div>
+        <p>Compression and disk writing run on a separate thread. The default window is 60 seconds.
+          If the writer cannot keep up, the UI reports dropped camera frames. A full disk stops recording
+          with an error. Saved windows preserve evidence for inspection, not a complete tracker checkpoint.</p>
+        <p>Live and video settings use the same typed controls and units. Live changes apply when opening
+          the camera; video changes apply on rerun. Segmentation controls are hidden for video reruns
+          that reuse recorded masks.</p>
+      </section>
+      <footer>
+        Code owners:
+        <a
+          href="https://github.com/TheWisp/lerobot/blob/research/flash-tracker-restart/src/lerobot/policies/flash/surface_frame_session.py"
+          >frame processing</a
+        >,
+        <a
+          href="https://github.com/TheWisp/lerobot/blob/research/flash-tracker-restart/src/lerobot/policies/flash/shared_image_tracking.py"
+          >image matching</a
+        >,
+        <a
+          href="https://github.com/TheWisp/lerobot/blob/research/flash-tracker-restart/src/lerobot/policies/flash/motion_groups.py"
+          >group motion</a
+        >,
+        <a
+          href="https://github.com/TheWisp/lerobot/blob/research/flash-tracker-restart/src/lerobot/policies/flash/experimental_surface_session.py"
+          >pose and surface</a
+        >,
+        <a
+          href="https://github.com/TheWisp/lerobot/blob/research/flash-tracker-restart/src/lerobot/policies/flash/surface_kalman.py"
+          >Kalman filter</a
+        >,
+        <a
+          href="https://github.com/TheWisp/lerobot/blob/research/flash-tracker-restart/benchmarks/flash_experiment_inputs.py"
+          >recorded RGB-D and mask loading</a
+        >. Demo execution and rollout recording are described above.
+      </footer>
+    </main>
+    <script>
+      const notes = {
+        clear:
+          "S[<t] fits the current O[t]. The pose passes depth/mask checks. Kalman combines it with the prediction; the result is checked again and published as observed P[t].",
+        fitted:
+          "The fit passes, but Kalman's combined pose fails. The prediction also fails this frame's checks, so the already checked fit becomes the observed pose and next filter state. The prediction covariance, previous accepted image and stored surface stay unchanged. If the prediction passed, it would take precedence.",
+        fallback:
+          "S[<t] does not produce an accepted fit to O[t]. A motion prediction can still be shown if it passes the applicable current depth/mask check. It stays predicted and cannot add surface.",
+        hidden:
+          "O[t] cannot be formed from this frame. A confirmed group motion or retained pose may carry the object forward as predicted P[t]. No hidden surface is invented.",
+        lost: "Neither the fit nor a prediction is trustworthy against this frame. The tracker publishes no pose, even if the object is partly visible.",
+      };
+      // Keep the phone-sized flow equivalent to the highlighted SVG path.
+      const stepDefinitions = {
+        predict: [
+          "Kalman: predict pose and uncertainty",
+          "kalman",
+          "Group motion error · accumulated uncertainty",
+        ],
+        input: [
+          "Enough current mask and depth to attempt a fit?",
+          "input",
+          "Clean point count · 3D spread",
+        ],
+        fit: [
+          "Fit grown surface S[<t] to O[t]",
+          "fit",
+          "Fit cost · solver budget",
+        ],
+        geometry: [
+          "Check fitted pose against mask and depth",
+          "geometry",
+          "Depth conflict · overlap · outliers",
+        ],
+        combine: [
+          "Kalman: combine prediction and fit; recheck geometry",
+          "kalman",
+          "Pose disagreement vs combined uncertainty",
+        ],
+        fallback: [
+          "Check the predicted pose against available measurements",
+          "geometry",
+          "Current depth / mask agreement",
+        ],
+        observed: [
+          "Observed pose — surface updates checked separately",
+          "growth",
+          "Growth overlap · patch confirmation",
+        ],
+        checkedFit: [
+          "Use the checked fit; keep covariance, matching image and surface",
+          "kalman",
+          "Prediction failed current geometry · no surface update",
+        ],
+        predicted: [
+          "Predicted pose — no surface growth",
+          "output",
+          "Uncertainty · prediction age",
+        ],
+        lost: ["Lost — no pose shown", "output", "Reason pose was withheld"],
+      };
+      const paths = {
+        clear: ["predict", "input", "fit", "geometry", "combine", "observed"],
+        fitted: ["predict", "input", "fit", "geometry", "combine", "fallback", "checkedFit", "observed"],
+        fallback: [
+          "predict",
+          "input",
+          "fit",
+          "geometry",
+          "fallback",
+          "predicted",
+        ],
+        hidden: ["predict", "input", "fallback", "predicted"],
+        lost: ["predict", "input", "fit", "geometry", "fallback", "lost"],
+      };
+      function selectScenario(name) {
+        document
+          .querySelectorAll("[data-scenario]")
+          .forEach((b) =>
+            b.setAttribute("aria-pressed", String(b.dataset.scenario === name)),
+          );
+        document.querySelectorAll("[data-routes]").forEach((item) => {
+          const on = item.dataset.routes.split(" ").includes(name);
+          item.classList.toggle("faded", !on);
+          item.classList.toggle(
+            "active",
+            on && item.classList.contains("edge"),
+          );
+        });
+        document.getElementById("note").textContent = notes[name];
+        const steps = document.getElementById("mobile-steps");
+        steps.replaceChildren(
+          ...paths[name].map((key, index) => {
+            const [label, metric, reading] = stepDefinitions[key];
+            const step = document.createElement("li");
+            step.textContent = label;
+            const link = document.createElement("a");
+            link.className = "metric-link";
+            link.href = "#metric-" + metric;
+            link.textContent = reading;
+            step.append(link);
+            if (index === paths[name].length - 1) {
+              step.className =
+                name === "clear" || name === "fitted"
+                  ? "observed"
+                  : name === "lost"
+                    ? "lost"
+                    : "predicted";
+            }
+            return step;
+          }),
+        );
+      }
+      document
+        .querySelectorAll("[data-scenario]")
+        .forEach((b) =>
+          b.addEventListener("click", () => selectScenario(b.dataset.scenario)),
+        );
+      selectScenario("clear");
+    </script>
+  </body>
+</html>

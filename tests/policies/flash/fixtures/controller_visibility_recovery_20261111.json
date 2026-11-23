@@ -1,0 +1,19 @@
+{
+  "clip": "saved-c596d12cdcd34c7e917ba036f01fa286",
+  "frame": 614,
+  "accepted_frame": 583,
+  "last_frame": 610,
+  "reference_frame": 143,
+  "map_version": 37,
+  "last_time": 862744.661181305,
+  "accepted_time": 862743.761663156,
+  "target_time": 862744.794616414,
+  "scope": "Recorded accumulated surface, prior Kalman state, full-frame RGB, selected Fast-FoundationStereo depth and SAM masks. Frame 614 has no usable object matches or group hint. Does not rerun depth, SAM or groups; initial appearance view and pending growth were pruned. No pose ground truth.",
+  "sha256": "56e7d83cd348047775db5b80e39aa790f43fda971fe22768ebcc7453055f5b84",
+  "depth_units": "metres, float32, losslessly stored before SurfaceTrackingSession.prepare cleanup",
+  "source_frame": 583,
+  "target_frame": 614,
+  "baseline_commit": "8516b1eaae023fcf7527e1978effabb0594a07fa",
+  "baseline_failure": "no_observation_compatible_candidate; no recovery on 51 frozen solves through ten seconds",
+  "expected_behavior": "Existing native solve finds a geometry-compatible candidate; unchanged Kalman may delay publication. Final geometry must still pass."
+}
