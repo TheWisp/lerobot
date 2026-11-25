@@ -152,9 +152,9 @@ centre. Converting a tracker pose for robot use requires the camera-to-base tran
 `base_from_reference = base_from_camera @ camera_from_reference`.
 Camera coordinates, robot-base coordinates, and the fixed object coordinates are distinct.
 
-Code: [`SurfacePatch.points`](../experimental_surface_session.py#L291) converts measured camera
-points into reference coordinates; [`PoseKalmanFilter`](../surface_kalman.py#L71) uses a fixed
-object point. [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L767)
+Code: [`SurfacePatch.points`](../experimental_surface_session.py#L295) converts measured camera
+points into reference coordinates; [`PoseKalmanFilter`](../surface_kalman.py#L70) uses a fixed
+object point. [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L771)
 initializes the fixed coordinates; [`ObjectGroupAssociation.record_observation`](../object_group_association.py#L174)
 composes the camera-to-base transform.
 Design: [persistent coordinates](tracking_pipeline.md#what-persists-between-frames).
@@ -177,7 +177,7 @@ depend on its unsupported axes.
 A consumer uses an estimate only if it is not lost, was already published, is no older than the
 consumer's age limit, is allowed to be a prediction, and supports every axis the task needs.
 
-Code: [`PoseEstimate`](../pose.py#L20) and [`usable`](../pose.py#L82).
+Code: [`PoseEstimate`](../pose.py#L20) and [`usable`](../pose.py#L84).
 
 ## Pose disagreement
 
@@ -217,9 +217,9 @@ Hidden or unknown surface is not removed merely for being unseen. This working m
 the coordinate origin and original patch measurements remain fixed. Rejected poses and predictions
 cannot refresh or grow the map. See [surface persistence and refresh](tracking_pipeline.md#what-persists-between-frames).
 
-Code: [`SurfacePatch`](../experimental_surface_session.py#L282) and
-[`SurfaceStore`](../experimental_surface_session.py#L295), and
-[`RefreshingSurfaceStore`](../surface_refresh.py#L28).
+Code: [`SurfacePatch`](../experimental_surface_session.py#L286) and
+[`SurfaceStore`](../experimental_surface_session.py#L299), and
+[`RefreshingSurfaceStore`](../surface_refresh.py#L27).
 
 ## Local surface fitting
 
@@ -254,7 +254,7 @@ the two surface means, and start one fit from whichever has lower geometry cost.
 can shift the measured centre, so the original translation remains eligible. Acceptance still
 requires the geometry checks.
 
-Code: [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L851) chooses the starting
+Code: [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L856) chooses the starting
 pose; [`WholeSurfaceFit._solve`](../surface_grounding.py#L743) and
 [`fit_once`](../surface_grounding.py#L757) run one bounded fit;
 [`LibraryMatcher.refine`](../surface_registration.py#L202) supplies the correspondence-distance and
@@ -349,7 +349,7 @@ object was measured this frame.
 
 Code: [`PoseKalmanFilter.predict`](../surface_kalman.py#L113),
 [`ObjectGroupAssociation.query`](../object_group_association.py#L129), and
-[`GrowingSurfaceSession.update`](../experimental_surface_session.py#L851).
+[`GrowingSurfaceSession.update`](../experimental_surface_session.py#L856).
 
 ## Kalman pose update
 
@@ -413,7 +413,7 @@ Loss of point tracks does not imply loss of segmentation or depth. An object can
 a usable current surface observation after all old point tracks disappear. Conversely, a
 segmentation mask alone does not establish an accepted 3D pose.
 
-Code: [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L767),
-[`_publish_prediction`](../experimental_surface_session.py#L1102), and
-[`_result`](../experimental_surface_session.py#L1158).
+Code: [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L771),
+[`_publish_prediction`](../experimental_surface_session.py#L1123), and
+[`_result`](../experimental_surface_session.py#L1179).
 Design: [initialization and frame sequence](tracking_pipeline.md#initialization-and-frame-sequence).
