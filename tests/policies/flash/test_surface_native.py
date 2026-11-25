@@ -1,17 +1,32 @@
 """Deployment parity, configuration and lifetime of the native CPU path."""
 
 import sys
+from dataclasses import asdict
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 import pytest
-from test_native_acceleration_candidates import recorded_fit
 from test_vision_pipeline import Masks, frames, reference, synthetic_pairs
 
 from lerobot.policies.flash.perception_step import PerceptionPipeline, PerceptionRunner
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
-from lerobot.policies.flash.surface_grounding import WholeSurfaceFit
+from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFit
+from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig, build_vision_backend
+
+
+def recorded_fit(name):
+    data = np.load(Path(__file__).with_name("fixtures") / f"{name}.npz")
+    is_ring = "source_surface" in data
+    points = data["source_surface" if is_ring else "model_points"]
+    depth = data["target_depth_mm" if is_ring else "depth"].astype(np.float32) * 0.001
+    mask = data["target_mask" if is_ring else "mask"].astype(bool)
+    k = data["intrinsics"]
+    obs = observation(depth, mask, k, asdict(SurfaceObservationConfig()))
+    current = {"obs": obs, "mask": mask, "depth": depth, "all_surface_points": obs["points"]}
+    initial = np.eye(4) if is_ring else data["candidate"]
+    return WholeSurfaceFit(points, current, k, ShapeConfig()), initial
 
 
 @pytest.mark.parametrize("name", ["ring_visible_motion_20261016", "dowel_held_frame_315"])

@@ -136,7 +136,8 @@ def test_recorded_matches_depth_fit_and_scene_ids_equal_original(name, monkeypat
         np.testing.assert_array_equal(source, data["expected_source_xyz"])
         np.testing.assert_array_equal(target, data["expected_target_xyz"])
         step, _, _ = robust_fit(source, target)
-        np.testing.assert_array_equal(step, data["expected_step"])
+        # The solver's last bits differ between CPUs (seen at 2e-16 on CI runners).
+        np.testing.assert_allclose(step, data["expected_step"], rtol=0, atol=1e-12)
         assert model.calls == 1
         np.testing.assert_array_equal(model.inputs[0], data["source_rgb"])
         np.testing.assert_array_equal(model.inputs[1], data["target_rgb"])

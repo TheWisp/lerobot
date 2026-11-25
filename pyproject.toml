@@ -240,7 +240,9 @@ quest-vr = ["aiohttp>=3.9,<4.0"]
 flash = [
     "lerobot[dataset]",
     "lerobot[scipy-dep]",
+    "numba>=0.65.0,<1.0.0",  # compiled surface fitting; NumPy fallback without it
     "small-gicp>=1.0.1,<2.0.0",
+    "threadpoolctl>=3.6.0,<4.0.0",  # benchmark thread limits
     "zstandard>=0.23.0,<1.0.0",  # lossless RGB-D history
 ]
 diffusion = ["lerobot[diffusers-dep]"]
