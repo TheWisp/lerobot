@@ -131,7 +131,7 @@ def rebuild(job: Path):
     from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
     from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
     from lerobot.policies.flash.surface_tracking import load_ufm
-    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
     request = json.loads((job / "request.json").read_text())
     state = json.loads((job / "status.json").read_text())

@@ -74,7 +74,7 @@ def test_visible_live_controller_has_a_depth_compatible_local_fit():
     import json
     from pathlib import Path
 
-    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
     with np.load(Path(__file__).parent / "fixtures/green_controller_live_loss_20261107.npz") as saved:
         config = VisionPipelineConfig.from_dict(json.loads(str(saved["settings_json"]))["config"])
@@ -239,7 +239,7 @@ def test_recorded_gamepad_wrong_pose_is_rejected_without_growing_surface():
 
     from benchmarks.flash_kalman_recovery_control import StrictPoseKalmanFilter
     from benchmarks.flash_recorded_recovery import load, replay
-    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
     data, metadata = load("gamepad_271")
     vision = VisionPipelineConfig.from_dict(metadata["vision"])

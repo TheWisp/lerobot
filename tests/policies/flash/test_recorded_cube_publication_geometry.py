@@ -21,7 +21,7 @@ from lerobot.policies.flash.surface_acceleration import compiled_kernels
 from lerobot.policies.flash.surface_grounding import SurfaceFitView, WholeSurfaceFit, project
 from lerobot.policies.flash.surface_observation import move
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 @pytest.fixture(scope="module")

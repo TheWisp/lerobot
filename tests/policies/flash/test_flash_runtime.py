@@ -7,9 +7,10 @@ import pytest
 
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.execution import ActionReceipt, MissedEventError, MotorTick, TimedAction
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.planner import PlannerLimits
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.progress import MilestoneUpdate, Phase, Verdict
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits, FlashRuntime
 from lerobot.policies.flash.skill import (
@@ -23,7 +24,6 @@ from lerobot.policies.flash.skill import (
     SpatialSample,
 )
 from lerobot.policies.flash.symmetry import AxialSymmetry
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def test_attachment_policy_has_one_validated_configuration_boundary():

@@ -40,6 +40,7 @@ def _adapter_with_masks(masks):
     a.device = "cpu"
     a._det_threshold = 0.5
     a._seed_multi = False
+    a._signs = {}
     a._proc_size = {"height": 672, "width": 672}  # processor size override (matches load-time res)
     a._text_cache = {}
     a._pv_cache = {}
@@ -378,10 +379,10 @@ def test_select_instances_skips_a_region_another_concept_holds():
     assert (out == cube).all()
     # Only the gamepad on offer: nothing, rather than a second label on the same object.
     assert ad._select_instances({"masks": [offered]}, h, w, taken=taken, concept="green cube") is None
-    # Multi-instance unions what is left, not what another concept holds.
+    # Data editing keeps every matching instance, even when concepts overlap.
     ad._seed_multi = True
     out = ad._select_instances({"masks": [offered, cube]}, h, w, taken=taken, concept="green cube")
-    assert (out == cube).all()
+    assert (out == (offered | cube)).all()
     ad._seed_multi = False
     # A part of a held object is not that object: a gripper on the arm it sits on stays recoverable.
     arm = _rect(h, w, slice(0, 20), slice(0, 30))
@@ -504,6 +505,83 @@ def test_hidden_object_stays_lost_and_recovers_only_on_itself():
     ], seeded
     assert all(px > 0 for s in seeded for px in s.values()), seeded
     assert len(live_cube[25]) == 1 and _iou(live_cube[25][0], cube) > 0.5
+
+
+@pytest.mark.parametrize("lost_concept", ["cup", "red cup"])
+@pytest.mark.parametrize(
+    ("multi_instance", "signs"),
+    [(False, "+-"), (True, "+-"), (True, "++"), (True, "--")],
+    ids=["single-subtraction", "multi-subtraction", "multi-positive", "multi-negative"],
+)
+def test_overlapping_selections_can_recover_masks(lost_concept, multi_instance, signs):
+    # Subtraction and all-instance data editing deliberately allow two
+    # descriptions of the same region, including two positives or two negatives.
+    # Exercise the real control, recovery and segment consumer; only the model
+    # outputs are supplied, as in the distinct-object recovery test above.
+    h, w = 20, 40
+    cup = _rect(h, w, slice(2, 14), slice(2, 22))
+    ad = _adapter_with_masks([])
+    ad.prompt = "object"
+    ad._colors = {}
+    ad._tracks = {}
+    ad._cam = "cam"
+    ad._pv = lambda frame: None
+    ad.FLUSH_EVERY = 10
+    ad.set_control(
+        {
+            "objects": [{"name": "cup", "sign": signs[0]}, {"name": "red cup", "sign": signs[1]}],
+            "multi_instance": multi_instance,
+        }
+    )
+    processor = MagicMock()
+    processor.init_video_session.side_effect = lambda **_: _FakeSession()
+    processor.process_new_mask_for_video_frame.side_effect = (
+        lambda inference_session, frame_idx, obj_ids, input_masks: (
+            inference_session.seeded.__setitem__(obj_ids[0], np.asarray(input_masks).astype(bool))
+        )
+    )
+    processor.post_process_masks.side_effect = lambda masks, original_sizes: masks
+    ad.trk_proc = processor
+    missing = False
+
+    def track(inference_session, frame=None, frame_idx=None):
+        ids = sorted(inference_session.seeded)
+        lost_id = ad._tracks["cam"]["objs"].get(lost_concept) if missing and frame_idx is None else None
+        masks = [np.zeros_like(cup) if i == lost_id else inference_session.seeded[i] for i in ids]
+        return _tracker_out(ids, masks, [0.9] * len(ids))
+
+    ad.trk = track
+    detect = ad._detect_many
+
+    def detector(frame, concepts, h, w, *, taken=None):
+        ad.det_proc.post_process_instance_segmentation.side_effect = lambda *_, **__: [
+            {"masks": [] if missing and concept == lost_concept else [cup]} for concept in concepts
+        ]
+        return detect(frame, concepts, h, w, taken=taken)
+
+    ad._detect_many = detector
+    rgb = np.zeros((h, w, 3), np.uint8)
+    initial = ad.segment(rgb)
+    for concept, sign in zip(("cup", "red cup"), signs, strict=True):
+        if sign == "+":
+            np.testing.assert_array_equal(initial[concept], cup if signs == "++" else np.zeros_like(cup))
+        else:
+            assert concept not in initial
+    missing = True
+    for _ in range(ad.FLUSH_EVERY + ad.RECOVER_EVERY):
+        output = ad.segment(rgb)
+    assert lost_concept not in ad._tracks["cam"]["masks"]
+    if lost_concept == "red cup" and signs == "+-":
+        np.testing.assert_array_equal(output["cup"], cup)
+    missing = False
+    for _ in range(ad.RECOVER_EVERY):
+        output = ad.segment(rgb)
+    assert set(ad._tracks["cam"]["masks"]) == {"cup", "red cup"}
+    for concept in ("cup", "red cup"):
+        np.testing.assert_array_equal(ad._tracks["cam"]["masks"][concept], cup)
+    assert output.keys() == initial.keys()
+    for concept in output:
+        np.testing.assert_array_equal(output[concept], initial[concept])
 
 
 if __name__ == "__main__":

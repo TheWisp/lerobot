@@ -16,7 +16,7 @@ import numpy as np
 
 from .demo_document import DemoDocument, atomic_json, load_document
 from .live_surface_session import LIVE_METHOD, LiveSurfaceSession
-from .perception import RGBDFrame
+from .observations import RGBDFrame
 from .pipeline_version import PIPELINE_VERSION
 from .surface_session_config import defaults, validate
 
@@ -124,7 +124,7 @@ def track_demo(
 
     from .appearance import Sam3MaskSource
     from .depth_enhancement import make_depth_source, tracking_frame_with_depth_source
-    from .vision_pipeline import VisionPipelineConfig
+    from .vision_config import VisionPipelineConfig
 
     frames = DemoFrames(dataset, episode, document)
     frames.require_depth_source(depth_source)

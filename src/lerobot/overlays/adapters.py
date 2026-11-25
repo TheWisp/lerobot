@@ -705,20 +705,32 @@ class Sam3TrackByDetectionAdapter(ConceptMaskAdapter):
         taking the largest silently dropped the second). Instances under the small
         area gate are noise, not objects.
 
-        ``taken`` maps the OTHER concepts to the masks they hold on this frame. An
-        instance that is one of those regions is that object, however well the name
-        fits it — the detector offered the tracked gamepad for "green cube" once the
-        cube was hidden under it (#270) — so it is skipped, per instance and before
-        the size rule, and a smaller instance that really is ``concept`` still wins."""
+        ``taken`` maps the OTHER concepts to the masks they hold on this frame.
+        For single-object tracking, an instance held by another same-sign concept
+        is skipped before the size rule: the detector offered the tracked gamepad
+        for "green cube" once the cube was hidden under it (#270). A smaller
+        instance that really is ``concept`` still wins. Positive and negative
+        concepts intentionally overlap for subtraction; neither may prevent the
+        other from recovering its mask. Data editing unions every matching
+        instance, so overlapping concepts must remain recoverable regardless of
+        sign."""
         masks = res.get("masks", [])
         if len(masks) == 0:
             return None
         arrs = [(m.cpu().numpy() if hasattr(m, "cpu") else np.asarray(m)) > 0 for m in masks]
         arrs = [a for a in arrs if int(a.sum()) > 50]
-        if taken:
+        if taken and not self._seed_multi:
+            sign = self._signs.get(concept, "+")
             free = []
             for a in arrs:
-                owner = next((name for name, held in taken.items() if _same_region(a, held)), None)
+                owner = next(
+                    (
+                        name
+                        for name, held in taken.items()
+                        if self._signs.get(name, "+") == sign and _same_region(a, held)
+                    ),
+                    None,
+                )
                 if owner is None:
                     free.append(a)
                 else:

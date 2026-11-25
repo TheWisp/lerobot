@@ -13,7 +13,7 @@ import numpy as np
 
 from lerobot.policies.flash.motion_groups import GroupConfig, SceneMotionGroups
 from lerobot.policies.flash.object_group_association import ObjectGroupAssociation
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.scene_groups import SceneTracks
 
 

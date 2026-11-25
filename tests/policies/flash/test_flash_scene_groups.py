@@ -3,20 +3,16 @@
 import time
 from pathlib import Path
 
-import cv2
 import numpy as np
 import pytest
 
 from lerobot.policies.flash.causal_service import CausalPoseService, _Anchor
-from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
-from lerobot.policies.flash.registration import DegenerateRegistrationError, register_object
+from lerobot.policies.flash.observations import LatestPoseStore, RGBDFrame
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.scene_groups import (
     EnvironmentRelationship,
-    ScenePointTracker,
     SceneTracks,
-    establish_environment_relationship,
 )
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 RECORDED_MOTION = Path(__file__).parent / "fixtures/ring_tray_motion_20261016.npz"
 
@@ -80,121 +76,6 @@ def test_scene_support_callback_reports_the_same_group_used_on_that_camera_frame
     assert captured[0][1]["object"]["verified"] is True
     np.testing.assert_array_equal(captured[0][1]["object"]["ids"], tracks.ids)
     np.testing.assert_array_equal(captured[0][1]["object"]["xy"], tracks.xy)
-
-
-def test_environment_relation_needs_non_object_co_motion_and_tracks_occlusion():
-    rng = np.random.default_rng(8)
-    group = rng.uniform((-0.12, -0.12, 0.98), (0.12, 0.12, 1.02), (36, 3))
-    static = rng.uniform((-0.12, -0.12, 0.98), (0.12, 0.12, 1.02), (20, 3))
-    pixels = np.column_stack((rng.integers(20, 76, 56), rng.integers(20, 76, 56)))
-    before = _tracks(0, np.concatenate((group, static)), pixels)
-    after = _tracks(1, np.concatenate((group + [0.02, 0, 0], static)), pixels)
-    hidden = _tracks(2, np.concatenate((group + [0.04, 0, 0], static)), pixels)
-    mask = np.zeros((96, 96), dtype=bool)
-    mask[pixels[:8, 1], pixels[:8, 0]] = True  # Object points cannot certify its environment.
-    relation = establish_environment_relationship(
-        before,
-        after,
-        _pose(0),
-        _pose(0.02),
-        (mask,),
-        context_radius_m=0.25,
-        fit_threshold_m=0.003,
-        min_motion_m=0.008,
-        min_inliers=12,
-        reference_version="v1",
-    )
-    assert relation is not None
-    assert len(relation.ids) >= 20
-    np.testing.assert_allclose(
-        relation.predict(hidden, fit_threshold_m=0.003, min_inliers=12)[:3, 3],
-        [0.04, 0, 1.0],
-        atol=1e-6,
-    )
-    too_few = SceneTracks(2, 2 / 30, hidden.ids[:5], hidden.xy[:5], hidden.base_xyz[:5])
-    assert relation.predict(too_few, fit_threshold_m=0.003, min_inliers=12) is None
-
-    # A moving object over a static support, or a scene with no measured
-    # motion, must not acquire an environmental attachment by proximity.
-    for new_points, new_pose in [(before.base_xyz, _pose(0.02)), (before.base_xyz, _pose(0))]:
-        assert (
-            establish_environment_relationship(
-                before,
-                _tracks(1, new_points, pixels),
-                _pose(0),
-                new_pose,
-                (mask,),
-                context_radius_m=0.25,
-                fit_threshold_m=0.003,
-                min_motion_m=0.008,
-                min_inliers=12,
-                reference_version="v1",
-            )
-            is None
-        )
-
-
-def test_clear_environment_relation_uses_all_measured_correspondences_without_ransac(monkeypatch):
-    rng = np.random.default_rng(19)
-    points = rng.uniform((-0.08, -0.08, 0.98), (0.08, 0.08, 1.02), (48, 3))
-    pixels = np.column_stack((rng.integers(10, 80, 48), rng.integers(10, 80, 48)))
-    before = _tracks(0, points, pixels)
-    after = _tracks(1, points + [0.02, 0, 0], pixels)
-    mask = np.zeros((96, 96), dtype=bool)
-
-    def unexpected_ransac(*_args, **_kwargs):
-        raise AssertionError("fully consistent measured support does not need randomized fitting")
-
-    monkeypatch.setattr("lerobot.policies.flash.scene_groups.register_object", unexpected_ransac)
-    relation = establish_environment_relationship(
-        before,
-        after,
-        _pose(0),
-        _pose(0.02),
-        (mask,),
-        context_radius_m=0.25,
-        fit_threshold_m=0.003,
-        min_motion_m=0.008,
-        min_inliers=12,
-        reference_version="v1",
-    )
-    assert relation is not None
-    np.testing.assert_array_equal(relation.ids, before.ids)
-    np.testing.assert_allclose(relation.anchor_xyz, after.base_xyz, atol=1e-10)
-
-
-def test_environment_relation_retains_robust_fit_for_contaminated_correspondences(monkeypatch):
-    threshold_m = 0.005
-    rng = np.random.default_rng(0)
-    points = rng.uniform((-0.1, -0.1, 0.98), (0.1, 0.1, 1.02), (50, 3))
-    moved = points + [0.02, 0, 0]
-    noisy = rng.choice(len(points), 15, replace=False)
-    perturbation = rng.normal(size=(len(noisy), 3))
-    perturbation /= np.linalg.norm(perturbation, axis=1)[:, None]
-    moved[noisy] += perturbation * (0.98 * threshold_m)
-    pixels = np.column_stack((np.arange(50) + 10, np.arange(50) + 10))
-    calls = []
-
-    def robust_fit(*args, **kwargs):
-        calls.append(True)
-        return register_object(*args, **kwargs)
-
-    monkeypatch.setattr("lerobot.policies.flash.scene_groups.register_object", robust_fit)
-    relation = establish_environment_relationship(
-        _tracks(0, points, pixels),
-        _tracks(1, moved, pixels),
-        _pose(0),
-        _pose(0.02),
-        (np.zeros((96, 96), dtype=bool),),
-        context_radius_m=0.25,
-        fit_threshold_m=threshold_m,
-        min_motion_m=0.008,
-        min_inliers=12,
-        reference_version="v1",
-    )
-    assert calls == [True]
-    assert relation is not None
-    assert len(relation.ids) >= 12
 
 
 def test_group_bridge_is_same_when_first_direct_pose_arrives_after_second():
@@ -289,66 +170,6 @@ def test_late_group_bridge_rejects_intervening_direct_pose_contradiction():
     assert len(service.direct_history["object"]) == 4
     assert store.snapshot()[1]["object"].source_time_s == frames[4].source_time_s
     assert store.snapshot()[1]["object"].estimator == "environment_support_hypothesis"
-
-
-def test_unresolved_support_rotation_does_not_rotate_object_frame():
-    """Small stationary support patches cannot justify a rigid-body tilt."""
-    rng = np.random.default_rng(44)
-    points = rng.uniform((-0.01, -0.01, 1.0), (0.01, 0.01, 1.0), (40, 3))
-    pixels = np.column_stack((rng.integers(20, 76, 40), rng.integers(20, 76, 40)))
-    angle = np.deg2rad(15)
-    rotation = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
-    center = points.mean(axis=0)
-    changed = (points - center) @ rotation.T + center
-    relation = EnvironmentRelationship(np.arange(len(points)), points, _pose(0), 0.0, "v1", 0.0)
-    predicted = relation.predict(_tracks(1, changed, pixels), fit_threshold_m=0.005, min_inliers=12)
-    assert predicted is not None
-    np.testing.assert_allclose(predicted[:3, :3], np.eye(3), atol=1e-8)
-    np.testing.assert_allclose(predicted[:3, 3], _pose(0)[:3, 3], atol=0.001)
-
-
-def test_stationary_support_requires_direct_agreement_and_surviving_context_points():
-    rng = np.random.default_rng(31)
-    points = rng.uniform((-0.1, -0.1, 0.98), (0.1, 0.1, 1.02), (40, 3))
-    pixels = np.column_stack((rng.integers(20, 76, 40), rng.integers(20, 76, 40)))
-    before = _tracks(0, points, pixels)
-    after = _tracks(1, points.copy(), pixels)
-    mask = np.zeros((96, 96), dtype=bool)
-    mask[pixels[:4, 1], pixels[:4, 0]] = True
-    options = {
-        "context_radius_m": 0.25,
-        "fit_threshold_m": 0.005,
-        "min_motion_m": 0.008,
-        "min_inliers": 12,
-        "reference_version": "v1",
-        "allow_stationary": True,
-    }
-    relation = establish_environment_relationship(before, after, _pose(0), _pose(0), (mask,), **options)
-    assert relation is not None
-    assert len(relation.ids) >= 12
-    assert relation.predict(after, fit_threshold_m=0.005, min_inliers=12) is not None
-    assert (
-        establish_environment_relationship(before, after, _pose(0), _pose(0.02), (mask,), **options) is None
-    )
-
-    # The object frame can be far from its visible surface. A small rotation
-    # around that surface moves the frame origin without moving the support.
-    remote_center = np.array([0.0, 0.0, 0.4])
-    baseline = _pose(0)
-    baseline[:3, 3] -= remote_center
-    theta = np.deg2rad(4)
-    turned = baseline.copy()
-    turned[:3, :3] = np.array(
-        [[np.cos(theta), 0, np.sin(theta)], [0, 1, 0], [-np.sin(theta), 0, np.cos(theta)]]
-    )
-    turned[:3, 3] = _pose(0)[:3, 3] - turned[:3, :3] @ remote_center
-    assert np.linalg.norm(turned[:3, 3] - baseline[:3, 3]) > 0.02
-    assert (
-        establish_environment_relationship(
-            before, after, baseline, turned, (mask,), **options, object_center_object_m=remote_center
-        )
-        is not None
-    )
 
 
 def _camera_frame(rgb: np.ndarray, frame_id: int) -> RGBDFrame:
@@ -839,120 +660,3 @@ def test_older_delayed_proposal_cannot_erase_newer_direct_observation():
         assert estimate.pose[0, 3] == pytest.approx(0.04)
     finally:
         service.close()
-
-
-def test_scene_tracks_keep_identities_on_every_frame():
-    image = np.random.default_rng(4).integers(0, 255, (96, 96, 3), dtype=np.uint8)
-    tracker = ScenePointTracker(image_scale=1.0)
-    first = tracker.update(_camera_frame(image, 0))
-    shifted = cv2.warpAffine(image, np.float32([[1, 0, 2], [0, 1, 0]]), (96, 96))
-    second = tracker.update(_camera_frame(shifted, 1))
-    shared = np.intersect1d(first.ids, second.ids)
-    assert len(shared) >= 12
-    before = first.base_xyz[np.searchsorted(first.ids, shared)]
-    after = second.base_xyz[np.searchsorted(second.ids, shared)]
-    assert np.median(after[:, 0] - before[:, 0]) == pytest.approx(0.02, abs=0.004)
-
-    missing = _camera_frame(shifted, 2)
-    missing = RGBDFrame(
-        missing.frame_id,
-        missing.rgb,
-        np.zeros_like(missing.depth),
-        missing.intrinsics,
-        missing.depth_m_per_unit,
-        missing.base_from_camera,
-        missing.source_time_s,
-        missing.available_time_s,
-        missing.calibration_version,
-    )
-    assert len(tracker.update(missing).ids) == 0
-    restored = tracker.update(_camera_frame(shifted, 3))
-    assert len(np.intersect1d(second.ids, restored.ids)) >= 12
-
-    interrupted = _camera_frame(shifted, 4)
-    interrupted = RGBDFrame(
-        interrupted.frame_id,
-        interrupted.rgb,
-        interrupted.depth,
-        interrupted.intrinsics,
-        interrupted.depth_m_per_unit,
-        interrupted.base_from_camera,
-        2.0,
-        2.0,
-        interrupted.calibration_version,
-    )
-    after_gap = tracker.update(interrupted)
-    assert len(np.intersect1d(second.ids, after_gap.ids)) >= 12
-    assert tracker.gaps == 1
-
-
-def test_recorded_moving_tray_group_predicts_ring_but_not_independent_motion(monkeypatch):
-    """The old run supplies measured scene tracks, not synthetic pixel shifts."""
-    with np.load(RECORDED_MOTION) as recorded:
-
-        def snapshot(frame_id: int) -> SceneTracks:
-            return SceneTracks(
-                frame_id,
-                float(recorded[f"time_{frame_id}"]),
-                recorded[f"ids_{frame_id}"],
-                recorded[f"xy_{frame_id}"],
-                recorded[f"xyz_{frame_id}"],
-            )
-
-        before, after = snapshot(331), snapshot(360)
-        relation = establish_environment_relationship(
-            before,
-            after,
-            recorded["pose_331"],
-            recorded["pose_360"],
-            (recorded["mask_331"],),
-            context_radius_m=0.25,
-            fit_threshold_m=0.005,
-            min_motion_m=0.008,
-            min_inliers=12,
-            reference_version="ring-v1",
-        )
-        assert relation is not None and len(relation.ids) >= 12
-        with monkeypatch.context() as forced_legacy:
-
-            def skip_direct_fit(*_args, **_kwargs):
-                raise DegenerateRegistrationError("use randomized fit")
-
-            forced_legacy.setattr("lerobot.policies.flash.scene_groups.rigid_fit", skip_direct_fit)
-            legacy = establish_environment_relationship(
-                before,
-                after,
-                recorded["pose_331"],
-                recorded["pose_360"],
-                (recorded["mask_331"],),
-                context_radius_m=0.25,
-                fit_threshold_m=0.005,
-                min_motion_m=0.008,
-                min_inliers=12,
-                reference_version="ring-v1",
-            )
-        assert legacy is not None
-        np.testing.assert_array_equal(relation.ids, legacy.ids)
-        np.testing.assert_allclose(relation.anchor_xyz, legacy.anchor_xyz, atol=1e-10)
-        for frame_id in (390, 422):
-            predicted = relation.predict(snapshot(frame_id), fit_threshold_m=0.005, min_inliers=12)
-            assert predicted is not None
-            assert np.linalg.norm(predicted[:3, 3] - recorded[f"pose_{frame_id}"][:3, 3]) < 0.005
-
-        independently_moved = recorded["pose_360"].copy()
-        independently_moved[0, 3] += 0.04
-        assert (
-            establish_environment_relationship(
-                before,
-                after,
-                recorded["pose_331"],
-                independently_moved,
-                (recorded["mask_331"],),
-                context_radius_m=0.25,
-                fit_threshold_m=0.005,
-                min_motion_m=0.008,
-                min_inliers=12,
-                reference_version="ring-v1",
-            )
-            is None
-        )

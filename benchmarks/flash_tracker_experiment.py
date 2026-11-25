@@ -38,7 +38,7 @@ from lerobot.policies.flash.surface_frame_session import (
     match_record as match_record,
 )
 from lerobot.policies.flash.surface_tracking import load_ufm
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def quantiles(values):

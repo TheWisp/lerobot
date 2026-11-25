@@ -28,7 +28,7 @@ FILTERS = {
 
 def configurations(provenance, fitting, filter_name):
     from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
-    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
     if filter_name not in FILTERS or fitting not in {"baseline", "partial", "recovery"}:
         raise ValueError("Unknown recovery comparison configuration")

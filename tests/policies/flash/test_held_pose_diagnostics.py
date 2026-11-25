@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from lerobot.policies.flash.held_pose_diagnostics import compare_demo_held_pose
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 
 
 def _pose(x: float = 0.0) -> np.ndarray:

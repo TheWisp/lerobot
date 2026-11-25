@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from lerobot.policies.flash.causal_points import CausalRigidPointTracker
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 
 
 def frame(rgb, source_time_s, depth=None):

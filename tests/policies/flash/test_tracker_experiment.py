@@ -12,7 +12,7 @@ from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_tracker_experiment import MotionChain, RetainedMotionReference, run_case, score_case
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.surface_correspondence import SurfaceMotionConfig
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def demo(tmp_path):

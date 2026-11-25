@@ -10,7 +10,7 @@ from typing import Protocol
 import numpy as np
 
 from .matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel, PixelMatches
-from .perception import ObjectReference, PoseBackend, ReferenceSnippet, RGBDFrame
+from .observations import ObjectReference, PoseBackend, ReferenceSnippet, RGBDFrame
 from .registration import transform_points, unproject_pixels, valid_depth_pixels
 from .symmetry import AxialSymmetry
 

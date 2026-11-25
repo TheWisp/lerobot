@@ -9,7 +9,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.flash.appearance import AppearanceModel
 from lerobot.policies.flash.compiler import IntervalAnnotation
 from lerobot.policies.flash.matched_rgbd import ObjectPointModel
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
+from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.recorded_demo import prepare_recorded_episode
 from lerobot.policies.flash.recorded_trial import inspect_recorded_trial, prepare_recorded_trial

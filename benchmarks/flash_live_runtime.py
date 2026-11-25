@@ -38,7 +38,7 @@ from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
 from lerobot.policies.flash.surface_session_config import validate
 from lerobot.policies.flash.tracking_history import decode_record, read_index, read_packet
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def recorded_history_samples(directory: Path):

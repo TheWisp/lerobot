@@ -237,6 +237,12 @@ phone = ["hebi-py>=2.8.0,<2.12.0", "teleop>=0.1.0,<0.2.0", "fastapi<1.0", "lerob
 quest-vr = ["aiohttp>=3.9,<4.0"]
 
 # Policies
+flash = [
+    "lerobot[dataset]",
+    "lerobot[scipy-dep]",
+    "small-gicp>=1.0.1,<2.0.0",
+    "zstandard>=0.23.0,<1.0.0",  # lossless RGB-D history
+]
 diffusion = ["lerobot[diffusers-dep]"]
 wallx = [
     "lerobot[transformers-dep]",
@@ -290,7 +296,7 @@ peft = ["lerobot[transformers-dep]", "lerobot[peft-dep]"]
 # explicitly — keeps the install resilient if fastapi ever swaps backend.
 gui = [
     "fastapi>=0.115.0,<1.0.0",
-    "zstandard>=0.23.0,<1.0.0",  # lossless full-rate RGB-D history writer
+    "lerobot[flash]",
     "uvicorn>=0.30.0,<1.0.0",
     "python-multipart>=0.0.9,<1.0.0",
     "lerobot[mcp]",  # gui/server.py unconditionally mounts the MCP app

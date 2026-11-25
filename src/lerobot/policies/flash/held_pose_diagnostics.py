@@ -12,8 +12,8 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 
 from .geometry import interpolate, inverse, transform
+from .pose import Evidence, PoseEstimate
 from .registration import transform_points
-from .trajectory import Evidence, PoseEstimate
 
 
 def _arm_pose_at(times: np.ndarray, poses: np.ndarray, at_s: float) -> np.ndarray | None:

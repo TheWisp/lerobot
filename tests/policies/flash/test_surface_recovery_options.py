@@ -11,7 +11,7 @@ from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFi
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, move
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig, check_surface_contradiction
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def test_rejected_depth_cannot_reenter_pose_validation_with_either_legacy_setting():

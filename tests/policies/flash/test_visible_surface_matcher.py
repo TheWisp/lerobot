@@ -7,7 +7,7 @@ from benchmarks.flash_gamepad_placement import METHODS, replay
 from benchmarks.flash_partial_surface_control import box_observation, perturbed_pose, pose_error
 from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFit
 from lerobot.policies.flash.surface_registration import LibraryConfig
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 @pytest.mark.parametrize("history", METHODS)
@@ -83,7 +83,7 @@ def test_retired_settings_migrate_only_when_starting_a_new_session():
     from dataclasses import asdict
 
     from lerobot.policies.flash.surface_registration import MATCHERS, LibraryConfig
-    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
     saved = {
         "shape": {

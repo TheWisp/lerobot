@@ -13,10 +13,10 @@ from statistics import median
 import numpy as np
 
 from .geometry import inverse
+from .pose import Evidence, PoseEstimate
 from .pose_evidence import SurfaceAgreement
 from .surface_observation import move, spatial_sample
 from .surface_reference import PreparedSurfaceAgreement, RegisteredSurfaceModel, registered_surface_agreement
-from .trajectory import Evidence, PoseEstimate
 
 
 @dataclass(frozen=True)

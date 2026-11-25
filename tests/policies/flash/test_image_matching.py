@@ -14,7 +14,7 @@ from lerobot.policies.flash.image_matching import (
     UFMMatchConfig,
     prepare_image_pair,
 )
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.scene_groups import ScenePointTracker
 from lerobot.policies.flash.surface_correspondence import robust_fit, ufm_pairs
 

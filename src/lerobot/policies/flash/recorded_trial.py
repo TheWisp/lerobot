@@ -12,11 +12,11 @@ from lerobot.robots.so107_description.joint_alignment import MOTOR_NAMES
 
 from .compiler import ActionEventAnnotation, IntervalAnnotation, PoseRelationAnnotation
 from .kinematics import SelectedJointKinematics
+from .pose import Evidence
 from .prepared import PreparedFlashSkill
 from .recorded_demo import prepare_recorded_episode
 from .recording import load_pose_estimates
 from .skill import AttachmentAction, AttachmentTransition, EndpointRequirement, MotionMode, Relation
-from .trajectory import Evidence
 
 
 def _local_file(root: Path, relative: str, directory: Path, label: str) -> Path:

@@ -18,7 +18,6 @@ from lerobot.policies.flash.execution import (
     PlanRejectedError,
     TimedAction,
 )
-from lerobot.policies.flash.geometry import held_object_goal
 from lerobot.policies.flash.perception import (
     AttachmentEstimate,
     HeldAttachmentUpdater,
@@ -73,15 +72,6 @@ def pose(x=0.0, y=0.0, z=0.0):
 
 def sample(t, ee, target, held=None, gripper=None):
     return SpatialSample(t, pose(*ee), pose(*target), pose(*held) if held is not None else None, gripper)
-
-
-def test_live_held_object_follows_live_target_with_changed_grasp_attachment():
-    demo_held = pose(0.2, 0, 0.1)
-    demo_target = pose(0.2, 0, 0)
-    live_target = pose(0.4, 0.1, 0)
-    live_attachment = pose(0.01, 0.02, 0)
-    ee_goal = held_object_goal(demo_held, demo_target, live_target, live_attachment)
-    np.testing.assert_allclose((ee_goal @ live_attachment)[:3, 3], [0.4, 0.1, 0.1])
 
 
 def test_demonstrated_interval_keeps_its_local_time_and_updates_live_target():
@@ -857,21 +847,6 @@ def test_planner_places_semantic_event_on_first_tick_after_demo_frame():
     assert replanned[0].event_id is None
 
 
-def test_partial_pose_is_represented_but_cannot_satisfy_strict_six_dof_goal():
-    estimate = PoseEstimate(
-        "held", pose(), 0, 0, Evidence.OBSERVED, "v1", (True, True, True), (True, False, False)
-    )
-    assert estimate.pose is not None
-    assert not estimate.usable(0.1, 1.0, allow_prediction=False)
-    assert estimate.usable(
-        0.1,
-        1.0,
-        allow_prediction=False,
-        translation=(True, True, True),
-        rotation=(True, False, False),
-    )
-
-
 def test_joint_planner_uses_gripper_attachment_frame_and_checks_reference_version():
     class LinearKinematics:
         def inverse_kinematics(self, _seed, target):
@@ -1520,33 +1495,6 @@ def test_demonstrated_attachment_events_bind_and_release_live_object():
     lifecycle.on_motor_tick(tick(0.16))
     after_new_motor = replace(released_camera, frame_id=13, source_time_s=0.165, available_time_s=0.165)
     assert lifecycle.prediction_at("object", after_new_motor) is not None
-
-
-def test_rgbd_alignment_and_pose_handoff_preserve_source_time():
-    frame = RGBDFrame(
-        1,
-        np.zeros((2, 3, 3), dtype=np.uint8),
-        np.full((2, 3), 1000, dtype=np.uint16),
-        np.eye(3),
-        0.001,
-        pose(),
-        1.0,
-        1.05,
-        "cal1",
-    )
-    np.testing.assert_allclose(frame.metric_depth(), 1.0)
-    with pytest.raises(ValueError, match="aligned"):
-        RGBDFrame(2, frame.rgb, np.zeros((3, 2), dtype=np.uint16), np.eye(3), 0.001, pose(), 1.0, 1.1, "cal1")
-    store = LatestPoseStore()
-    fresh = PoseEstimate(
-        "target", pose(0.2), 1.0, 1.1, Evidence.OBSERVED, "ref1", (True, True, True), (True, True, True)
-    )
-    stale = PoseEstimate(
-        "target", pose(0.1), 0.9, 1.2, Evidence.OBSERVED, "ref1", (True, True, True), (True, True, True)
-    )
-    assert store.publish((fresh,)) == 1
-    assert store.publish((stale,)) == 1
-    assert store.snapshot()[1]["target"].source_time_s == 1.0
 
 
 def test_tick_record_uses_only_camera_and_pose_evidence_available_at_that_time():

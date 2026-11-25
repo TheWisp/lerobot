@@ -24,7 +24,7 @@ from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_ker
 from lerobot.policies.flash.surface_frame_session import SurfaceFrameSession
 from lerobot.policies.flash.surface_observation import move
 from lerobot.policies.flash.surface_tracking import load_ufm
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 ANNOTATION = Path(__file__).with_name("fixtures") / "gamepad_stationary.json"
 

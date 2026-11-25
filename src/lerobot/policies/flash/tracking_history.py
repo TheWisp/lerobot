@@ -185,7 +185,7 @@ def decode_record(packet):
     import cv2
     import numpy as np
 
-    from .perception import RGBDFrame
+    from .observations import RGBDFrame
 
     n = struct.unpack("<I", packet[:4])[0]
     header = json.loads(packet[4 : 4 + n])

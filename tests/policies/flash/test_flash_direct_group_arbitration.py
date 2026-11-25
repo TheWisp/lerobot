@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import numpy as np
 
 from lerobot.policies.flash.causal_service import CausalPoseService, _Anchor
-from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
+from lerobot.policies.flash.observations import LatestPoseStore, RGBDFrame
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.pose_disagreement import PoseComparisonVerdict
 from lerobot.policies.flash.scene_groups import SceneTracks
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def test_real_partial_dowel_view_keeps_ambiguous_direct_pose_out_of_group_anchor():

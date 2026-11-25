@@ -9,8 +9,9 @@ import numpy as np
 import pytest
 
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.perception_step import PerceptionResult
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.tracking_debug_worker import (
@@ -19,7 +20,6 @@ from lerobot.policies.flash.tracking_debug_worker import (
     group_display,
     seed_frame,
 )
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def frame(number):
@@ -34,6 +34,80 @@ def frame(number):
         float(number),
         "test",
     )
+
+
+def test_debug_worker_consumes_real_camera_depth_layout(tmp_path, monkeypatch):
+    from threading import Event
+    from types import SimpleNamespace
+
+    from lerobot.cameras import realsense
+    from lerobot.policies.flash import tracking_debug_worker as worker
+
+    # Replace hardware startup, but keep the real camera read method and the
+    # worker's capture/preview path. RealSense publishes HxWx1 recording depth.
+    camera = realsense.RealSenseCamera(
+        realsense.RealSenseCameraConfig(
+            serial_number_or_name="123", width=10, height=8, fps=30, use_depth=True
+        )
+    )
+    intrinsics = SimpleNamespace(fx=10, fy=10, ppx=5, ppy=4)
+    profile = SimpleNamespace(get_intrinsics=lambda: intrinsics)
+    profile.as_video_stream_profile = lambda: profile
+    camera.rs_pipeline = object()
+    camera.rs_profile = SimpleNamespace(
+        get_stream=lambda _: profile,
+        get_device=lambda: SimpleNamespace(
+            first_depth_sensor=lambda: SimpleNamespace(get_depth_scale=lambda: 0.00025)
+        ),
+    )
+    camera.latest_color_frame = np.zeros((8, 10, 3), np.uint8)
+    camera.latest_depth_frame = np.full((8, 10, 1), 4000, np.uint16)
+    camera.latest_timestamp = 1.0
+    camera.new_frame_event.set()
+    camera.thread = SimpleNamespace(is_alive=lambda: True)
+    monkeypatch.setattr(camera, "connect", lambda: None)
+    disconnected = []
+    monkeypatch.setattr(camera, "disconnect", lambda: disconnected.append(True))
+    monkeypatch.setattr(realsense, "RealSenseCamera", lambda _: camera)
+    monkeypatch.setattr(worker.signal, "signal", lambda *_: None)
+    stop = Event()
+    monkeypatch.setattr(worker, "Event", lambda: stop)
+
+    class CaptureThread:
+        def __init__(self, *, target, name, **kwargs):
+            self.target, self.name = target, name
+
+        def start(self):
+            if self.name == "surface-debug-capture":
+                self.target()
+
+        def join(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(worker, "Thread", CaptureThread)
+    snapshots = worker.write_snapshot
+
+    def save_snapshot(path, value):
+        snapshots(path, value)
+        if path.name == "preview.json":
+            stop.set()
+
+    monkeypatch.setattr(worker, "write_snapshot", save_snapshot)
+    published = []
+    publish = worker.LatestRGBDFrameStore.publish
+
+    def capture_published(store, frame):
+        published.append(frame)
+        publish(store, frame)
+
+    monkeypatch.setattr(worker.LatestRGBDFrameStore, "publish", capture_published)
+    worker.run(tmp_path, {"serial": "123", "width": 10, "height": 8, "fps": 30, "preview_fps": 15})
+    assert len(published) == 1
+    np.testing.assert_array_equal(published[0].depth, camera.latest_depth_frame[..., 0])
+    np.testing.assert_array_equal(published[0].metric_depth(), np.ones((8, 10)))
+    preview = json.loads((tmp_path / "preview.json").read_text())
+    assert (preview["width"], preview["height"], preview["frame_id"]) == (10, 8, 0)
+    assert disconnected == [True]
 
 
 def test_click_is_bound_to_displayed_image_not_newest_camera_frame():

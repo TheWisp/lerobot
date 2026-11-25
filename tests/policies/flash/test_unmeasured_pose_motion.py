@@ -24,7 +24,7 @@ from lerobot.policies.flash.surface_kalman import MeasuredGroupMotion, PoseKalma
 from lerobot.policies.flash.surface_observation import move
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig, SurfacePoseUncertainty
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def settings(**kwargs):

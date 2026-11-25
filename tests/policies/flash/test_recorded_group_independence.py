@@ -6,7 +6,7 @@ import numpy as np
 
 from lerobot.policies.flash.motion_groups import GroupConfig, SceneMotionGroups
 from lerobot.policies.flash.object_group_association import ObjectGroupAssociation
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.shared_image_tracking import SharedFrameTracker, SharedMatchingConfig
 from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFit
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession

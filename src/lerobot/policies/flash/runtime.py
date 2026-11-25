@@ -23,13 +23,13 @@ from .planner import CartesianKinematics, JointPlanner, PlannerLimits
 from .planner_worker import PlannerWorker
 from .planning_belief import PlanningBeliefStore
 from .planning_coordinator import PlanBufferConfig, PlanningCoordinator
+from .pose import PoseEstimate
 from .progress import Phase, Verdict
 from .recording import RecordedTick, TickRecordAssembler
 from .session import FlashSession, PoseChange
 from .skill import AttachmentAction, FlashSkill, Relation
 from .surface_observation import SurfaceObservationConfig
 from .symmetry import AxialSymmetry
-from .trajectory import PoseEstimate
 
 
 class AttemptRecorder(Protocol):

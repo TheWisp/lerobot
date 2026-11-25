@@ -107,7 +107,7 @@ def test_failed_local_fit_only_publishes_depth_compatible_group_prediction(
         from types import SimpleNamespace
 
         from lerobot.gui.flash_live_scene import live_scene_packet
-        from lerobot.policies.flash.perception import RGBDFrame
+        from lerobot.policies.flash.observations import RGBDFrame
 
         current = frame(1)["current"]
         measured = RGBDFrame(

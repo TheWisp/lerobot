@@ -16,7 +16,7 @@ from lerobot.policies.flash.surface_observation import move, spatial_sample
 from lerobot.policies.flash.surface_session_config import defaults
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 @pytest.mark.parametrize(

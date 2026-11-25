@@ -17,7 +17,8 @@ from lerobot.gui.api.run import _flash_recordings, _flash_tracker_replay
 from lerobot.policies.flash.causal_service import AnchorDecision
 from lerobot.policies.flash.execution import MotorTick, PlanEvidence
 from lerobot.policies.flash.live_telemetry import FlashLiveTelemetry, _mask_contours, live_frame_path
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
+from lerobot.policies.flash.pose import AttachmentState, Evidence, PoseEstimate
 from lerobot.policies.flash.pose_disagreement import (
     FreeSpaceComparison,
     FreeSpaceSupport,
@@ -31,7 +32,6 @@ from lerobot.policies.flash.pose_evidence import (
     PoseProposal,
     VisibleSurfaceSupport,
 )
-from lerobot.policies.flash.trajectory import AttachmentState, Evidence, PoseEstimate
 
 
 def _estimate(source_s: float, estimator: str, evidence: Evidence) -> PoseEstimate:

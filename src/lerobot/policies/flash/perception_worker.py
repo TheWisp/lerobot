@@ -19,7 +19,7 @@ from math import isfinite
 from queue import Empty, Full
 from threading import Event
 
-from .perception import LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
+from .observations import LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
 from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRunner
 
 

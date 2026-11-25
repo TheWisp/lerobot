@@ -322,9 +322,13 @@ class LibraryMatcher:
         # for each pose. Standalone point-cloud callers may supply only score().
         if hasattr(fitter, "batch_residuals"):
             fitter.batch_residuals(candidates)
-        valid = [p for p in candidates if admissible(p)] if admissible is not None else []
-        if valid:
-            pose = min(valid, key=fitter.score)
+        # A native solver's last step can worsen the shared objective, including
+        # the valid starting pose. Standalone callers need the same retention
+        # as the shared fitter; an explicit admissibility check still takes
+        # precedence over numerical cost.
+        eligible = [p for p in candidates if admissible(p)] if admissible is not None else candidates
+        if eligible:
+            pose = min(eligible, key=fitter.score)
         detail = {
             "initial_cost": fitter.score(initial),
             "cost": fitter.score(pose),
@@ -339,7 +343,7 @@ class LibraryMatcher:
             "library_attempted_levels": attempted_levels,
             "library_solved_levels": solved_levels,
             "library_failure": failure,
-            "retained_admissible_iterate": bool(valid),
+            "retained_admissible_iterate": admissible is not None and bool(eligible),
         }
         self.calls.append(
             {

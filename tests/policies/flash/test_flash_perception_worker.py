@@ -6,9 +6,9 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.perception import LatestPoseStore, ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.observations import LatestPoseStore, ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.perception_worker import PoseProcess, PoseProcessError
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 
 
 class EchoBackend:

@@ -13,7 +13,7 @@ from lerobot.policies.flash.demo_replay import (
     build_demo_replay,
 )
 from lerobot.policies.flash.matched_rgbd import ObjectPointModel
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
+from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
 

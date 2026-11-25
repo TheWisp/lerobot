@@ -15,8 +15,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .geometry import transform
-from .perception import InstanceMaskPoseBackend, ObjectReference, PoseBackend, RGBDFrame
-from .trajectory import Evidence, PoseEstimate
+from .observations import InstanceMaskPoseBackend, ObjectReference, PoseBackend, RGBDFrame
+from .pose import Evidence, PoseEstimate
 
 
 @dataclass(frozen=True)

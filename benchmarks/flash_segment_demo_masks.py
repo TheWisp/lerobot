@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 
 from lerobot.policies.flash.appearance import Sam3MaskSource
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 
 
 def run(

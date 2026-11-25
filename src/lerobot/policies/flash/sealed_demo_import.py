@@ -36,6 +36,7 @@ from lerobot.policies.flash.perception import (
     ReferenceSnippet,
     RGBDFrame,
 )
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.runtime import AttachmentRuntimeLimits
 from lerobot.policies.flash.scene_evidence_writer import (
@@ -56,7 +57,6 @@ from lerobot.policies.flash.skill import (
 )
 from lerobot.policies.flash.surface_reference import build_registered_surface_model
 from lerobot.policies.flash.symmetry import AxialSymmetry
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig, build_vision_backend
 from lerobot.robots.so107_description.calibrated_kinematics import make_calibrated_so107_kinematics
 

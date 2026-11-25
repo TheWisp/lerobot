@@ -14,7 +14,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 
 
 def path(value: str) -> Path:

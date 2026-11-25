@@ -21,8 +21,8 @@ import cv2
 import numpy as np
 
 from .causal_service import CausalTrackingConfig, build_causal_pose_service
-from .live_surface_io import image_snapshot, new_selection, seed_frame, write_snapshot
-from .perception import LatestPoseStore, LatestRGBDFrameStore, ObjectReference, ReferenceSnippet, RGBDFrame
+from .live_surface_io import image_snapshot, new_selection, seed_frame, tracker_depth_layout, write_snapshot
+from .observations import LatestPoseStore, LatestRGBDFrameStore, ObjectReference, ReferenceSnippet, RGBDFrame
 from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRunner
 from .surface_tracking import load_ufm
 from .vision_pipeline import VisionPipelineConfig, build_vision_backend
@@ -366,7 +366,7 @@ def run(directory: Path, config: dict) -> None:
                     frame = RGBDFrame(
                         frame_id,
                         rgb,
-                        depth,
+                        tracker_depth_layout(rgb, depth),
                         k,
                         depth_scale,
                         np.eye(4),

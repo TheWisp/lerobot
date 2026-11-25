@@ -8,7 +8,7 @@ import pytest
 from lerobot.policies.flash.surface_acceleration import compiled_kernels
 from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFit
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig, check_surface_contradiction
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 from tests.policies.flash.test_scene_depth_constraints import scene
 
 

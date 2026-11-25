@@ -16,7 +16,7 @@ import pytest
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig, GrowingSurfaceSession
 from lerobot.policies.flash.surface_kalman import PoseKalmanFilter
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def checkpoint(gate):

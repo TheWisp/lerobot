@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from .appearance import Sam3MaskSource
-from .perception import RGBDFrame
+from .observations import RGBDFrame
 
 
 def tracker_depth_layout(rgb: np.ndarray, depth: np.ndarray) -> np.ndarray:

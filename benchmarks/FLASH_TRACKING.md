@@ -5,8 +5,9 @@ The [suite](flash_tracking_suite.json) freezes **nine YCBInEOAT clips**,
 **ten Caryx clips**, and **our two rig demonstrations** (dowel insertion and
 gamepad stacking). The rig cases are a diagnostic tier without independent
 visibility, mask, or pose labels. Raw datasets and
-per-frame evidence remain in the local cache; the [baseline report](flash_tracking_baseline.md)
-and [machine-readable baseline](flash_tracking_baseline.json) are saved here.
+per-frame evidence remain in the local cache; the [baseline report](https://github.com/TheWisp/lerobot/blob/09c1cd4cfb10fe20ae77023d26788176920a89f1/benchmarks/flash_tracking_baseline.md)
+and [full baseline result](https://github.com/TheWisp/lerobot/blob/09c1cd4cfb10fe20ae77023d26788176920a89f1/benchmarks/flash_tracking_baseline.json) are archived at a pinned revision.
+The compact [baseline manifest](flash_tracking_baseline_manifest.json) retains the suite identity and scored case IDs checked by the regression suite.
 All existing cases are development cases: they were examined during research.
 Add a genuinely unseen holdout before claiming generalization.
 The dated [failure ledger](../docs/proofs/flash-contact-observation/FAILURE_LEDGER.md)
@@ -207,9 +208,12 @@ points at its evidence; it never overwrites the baseline.
 PYTHONPATH=src:. python benchmarks/flash_tracking_run.py \
   --case ycb-cracker_box_reorient --case caryx-032 \
   --run-root ~/.cache/flash-tracking-candidate-001
+curl --fail --location \
+  https://raw.githubusercontent.com/TheWisp/lerobot/09c1cd4cfb10fe20ae77023d26788176920a89f1/benchmarks/flash_tracking_baseline.json \
+  --output /tmp/flash-tracking-baseline.json
 PYTHONPATH=src:. python benchmarks/flash_tracking_benchmark.py \
   --suite ~/.cache/flash-tracking-candidate-001/resolved_suite.json \
-  --baseline benchmarks/flash_tracking_baseline.json \
+  --baseline /tmp/flash-tracking-baseline.json \
   --require-all --output /tmp/flash-tracking-candidate-001.json
 ```
 

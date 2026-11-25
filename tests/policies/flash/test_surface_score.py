@@ -89,7 +89,7 @@ def test_runtime_and_full_run_score_the_same_actual_surfaces(tmp_path):
     from benchmarks.flash_tracker_experiment import run_case
     from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
     from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
-    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from lerobot.policies.flash.vision_config import VisionPipelineConfig
     from tests.policies.flash.test_tracker_experiment import demo
 
     case = demo(tmp_path)

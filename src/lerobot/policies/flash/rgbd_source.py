@@ -8,7 +8,7 @@ from typing import Literal, Protocol
 
 import numpy as np
 
-from .perception import RGBDFrame
+from .observations import RGBDFrame
 
 
 class AlignedRGBDCamera(Protocol):

@@ -4,9 +4,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .perception import ObjectReference, PoseBackend, RGBDFrame
+from .observations import ObjectReference, PoseBackend, RGBDFrame
+from .pose import PoseEstimate
 from .pose_evidence import PoseProposal, VisibleSurfaceSupport
-from .trajectory import PoseEstimate
 
 
 @dataclass(frozen=True)

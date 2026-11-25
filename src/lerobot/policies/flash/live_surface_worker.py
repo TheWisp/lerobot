@@ -31,11 +31,11 @@ from .live_surface_io import (
     write_snapshot,
 )
 from .live_surface_session import LIVE_METHOD, LiveSurfaceSession
-from .perception import LatestRGBDFrameStore, RGBDFrame
+from .observations import LatestRGBDFrameStore, RGBDFrame
 from .surface_acceleration import SearchPool, compiled_kernels
 from .surface_tracking import load_ufm
 from .tracking_history import RollingHistory
-from .vision_pipeline import VisionPipelineConfig
+from .vision_config import VisionPipelineConfig
 
 
 def _freeze_startup_heap():

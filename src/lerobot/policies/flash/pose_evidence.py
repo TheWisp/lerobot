@@ -8,7 +8,7 @@ from math import isfinite
 import numpy as np
 
 from .geometry import transform
-from .trajectory import PoseEstimate
+from .pose import PoseEstimate
 
 
 @dataclass(frozen=True)

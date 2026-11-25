@@ -17,7 +17,7 @@ import numpy as np
 from .depth_quality import depth_support_mask
 from .geometry import inverse, transform
 from .image_matching import LKMatchConfig, prepare_image_pair
-from .perception import RGBDFrame
+from .observations import RGBDFrame
 from .registration import (
     DegenerateRegistrationError,
     register_object,

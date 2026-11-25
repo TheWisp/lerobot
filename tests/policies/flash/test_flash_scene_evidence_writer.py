@@ -8,8 +8,9 @@ import numpy as np
 import pytest
 
 from lerobot.policies.flash.demo_scene import scene_evidence_frame, scene_evidence_status
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.perception_step import PerceptionResult
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.pose_evidence import (
     ConditionalSurfaceInformation,
     PoseProposal,
@@ -18,7 +19,6 @@ from lerobot.policies.flash.pose_evidence import (
     VisibleSurfaceSupport,
 )
 from lerobot.policies.flash.scene_evidence_writer import SceneEvidenceWriter
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def test_preparation_evidence_crosses_into_demo_replay(tmp_path):

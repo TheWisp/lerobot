@@ -26,7 +26,7 @@ from lerobot.policies.flash.experimental_surface_session import (
 from lerobot.policies.flash.surface_kalman import PoseKalmanFilter
 from lerobot.policies.flash.surface_observation import voxel_sample
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 FIXTURES = Path(__file__).resolve().parents[1] / "tests/policies/flash/fixtures/recorded_recovery"
 

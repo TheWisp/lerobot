@@ -14,13 +14,13 @@ from scipy.spatial import QhullError
 
 from .geometry import inverse
 from .held_pose_diagnostics import _arm_pose_at
+from .pose import Evidence, PoseEstimate
 from .reference_view_candidates import MeasuredReferenceView, review_reference_view_candidates
 from .reference_view_registration import fit_reference_view_candidates
 from .surface_grounding import project
 from .surface_observation import move, observation, spatial_sample
 from .surface_reference import PreparedSurfaceAgreement, RegisteredSurfaceModel, registered_surface_agreement
-from .trajectory import Evidence, PoseEstimate
-from .vision_pipeline import VisionPipelineConfig
+from .vision_config import VisionPipelineConfig
 
 
 def _gripper_motion_prior(

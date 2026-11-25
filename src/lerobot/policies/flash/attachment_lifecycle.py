@@ -12,8 +12,8 @@ import numpy as np
 
 from .execution import MotorTick
 from .perception import HeldAttachmentUpdater, LatestPoseStore, RGBDFrame
+from .pose import AttachmentState, Evidence, PoseEstimate
 from .skill import AttachmentAction, FlashSkill
-from .trajectory import AttachmentState, Evidence, PoseEstimate
 
 
 @dataclass

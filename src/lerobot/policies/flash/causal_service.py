@@ -16,7 +16,8 @@ import numpy as np
 
 from .causal_points import CausalRigidPointTracker, RigidPointMotion
 from .geometry import inverse
-from .perception import LatestPoseStore, RGBDFrame
+from .observations import LatestPoseStore, RGBDFrame
+from .pose import Evidence, PoseEstimate
 from .pose_disagreement import (
     FreeSpaceComparison,
     FreeSpaceVerdict,
@@ -35,7 +36,6 @@ from .scene_groups import (
     seed_environment_relationship,
 )
 from .symmetry import AxialSymmetry
-from .trajectory import Evidence, PoseEstimate
 
 DEFAULT_MAX_POSE_DISAGREEMENT_TRANSLATION_M = 0.01
 DEFAULT_MAX_POSE_DISAGREEMENT_ROTATION_RAD = 0.15
@@ -799,7 +799,7 @@ class CausalPoseService:
                 continue
             if motion.base_motion_from_seed is not None:
                 self.motion_history[role].append(
-                    (frame.frame_id, motion, tracker.current_pixels(frame.depth.shape))
+                    (frame.frame_id, motion, tracker.inlier_pixels(frame.depth.shape))
                 )
                 object_motion_roles.add(role)
                 self._publish(role, anchor, motion, frame.frame_id)
@@ -1655,7 +1655,7 @@ class CausalPoseService:
         pending.last_frame_id = next_frame.frame_id
         if motion.base_motion_from_seed is not None:
             self.motion_history[role].append(
-                (next_frame.frame_id, motion, pending.tracker.current_pixels(next_frame.depth.shape))
+                (next_frame.frame_id, motion, pending.tracker.inlier_pixels(next_frame.depth.shape))
             )
             if (proposal := pending.proposals.pop(next_frame.frame_id, None)) is not None:
                 pending.anchor = replace(
@@ -1750,8 +1750,8 @@ class CausalPoseService:
         """Do not reset a supported point track from a disputed direct fit.
 
         A delayed direct result is compared at its own camera frame. Its
-        point-motion alternative is retained only while enough surviving
-        tracked pixels still lie in that frame's object mask. A missing or
+        point-motion alternative is retained only while enough of its measured
+        fit inliers still lie in that frame's object mask. A missing or
         unsupported point prior never prevents direct reacquisition.
         """
         active = self.active.get(estimate.role)

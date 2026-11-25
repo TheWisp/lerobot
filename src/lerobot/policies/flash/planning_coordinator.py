@@ -10,7 +10,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .grasp_symmetry import GraspSymmetryChoice, _pregrasp_prefix, select_grasp_symmetry
-from .perception import LatestPoseStore
+from .observations import LatestPoseStore
 from .planner import CartesianKinematics
 from .planner_worker import PlanFailureKind, PlannerWorker, PlanRequest
 from .progress import Phase

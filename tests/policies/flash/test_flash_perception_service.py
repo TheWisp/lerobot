@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.perception import (
+from lerobot.policies.flash.observations import (
     LatestPoseStore,
     LatestRGBDFrameStore,
     ObjectReference,
@@ -17,7 +17,7 @@ from lerobot.policies.flash.perception import (
 )
 from lerobot.policies.flash.perception_service import PerceptionService, PerceptionServiceError
 from lerobot.policies.flash.perception_worker import PoseProcess
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 
 
 class EchoBackend:

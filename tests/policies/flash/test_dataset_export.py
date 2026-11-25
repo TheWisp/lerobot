@@ -10,7 +10,7 @@ import pytest
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.flash import dataset_export
 from lerobot.policies.flash.execution import ActionReceipt, TimedAction
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.recording import FlashEpisodeWriter, RecordedTick
 from lerobot.policies.flash.tracking_history import RollingHistory, export_episode
 

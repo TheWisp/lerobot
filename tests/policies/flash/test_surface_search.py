@@ -10,7 +10,7 @@ from lerobot.policies.flash.experimental_surface_session import ImageConditioned
 from lerobot.policies.flash.surface_grounding import ShapeConfig, WholeSurfaceFit
 from lerobot.policies.flash.surface_observation import move
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 from tests.policies.flash.test_surface_publication import frame
 
 

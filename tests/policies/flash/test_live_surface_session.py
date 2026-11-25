@@ -22,11 +22,11 @@ from lerobot.policies.flash.depth_enhancement import (
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
 from lerobot.policies.flash.motion_groups import GroupConfig
-from lerobot.policies.flash.perception import LatestRGBDFrameStore
+from lerobot.policies.flash.observations import LatestRGBDFrameStore
 from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
 from lerobot.policies.flash.surface_session_config import defaults
 from lerobot.policies.flash.tracking_history import RollingHistory, decode_record, read_packet
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 from tests.policies.flash.test_shared_image_tracking import TranslationModel, frame, masks
 
 

@@ -26,7 +26,7 @@ from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_ker
 from lerobot.policies.flash.surface_grounding import SurfaceFitView, WholeSurfaceFit
 from lerobot.policies.flash.surface_observation import move
 from lerobot.policies.flash.surface_session_config import defaults
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def place_measurements(patches, poses):

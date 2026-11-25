@@ -5,8 +5,8 @@ import pytest
 
 from lerobot.policies.flash.kinematics import SelectedJointKinematics
 from lerobot.policies.flash.planner import JointPlanner, PlannerLimits
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.skill import Interval, MotionMode, Relation, SpatialSample
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 class FakeKinematics:

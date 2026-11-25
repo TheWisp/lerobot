@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.pose_disagreement import (
     PoseComparisonVerdict,
     compare_pose_proposals,

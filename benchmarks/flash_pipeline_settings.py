@@ -9,7 +9,7 @@ from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceCo
 from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
 from lerobot.policies.flash.surface_session_config import defaults as defaults, validate as validate
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 OPTION_HELP = {
     "config.shape.registration.backend": "3D surface solver: visible_icp, small_gicp, open3d_plane or open3d_color. Does not change UFM/LK image matching or depth rejection.",

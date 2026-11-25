@@ -8,6 +8,7 @@ import pytest
 
 from lerobot.policies.flash.execution import PlanRejectedError, TimedAction
 from lerobot.policies.flash.planner import JointPlanner, PlannerLimits
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.progress import MilestoneUpdate, Phase, Verdict
 from lerobot.policies.flash.session import FlashSession, PoseChange
 from lerobot.policies.flash.skill import (
@@ -18,7 +19,6 @@ from lerobot.policies.flash.skill import (
     Relation,
     SpatialSample,
 )
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def pose():

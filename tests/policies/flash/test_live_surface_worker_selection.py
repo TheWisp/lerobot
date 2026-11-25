@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from lerobot.policies.flash import live_surface_worker as worker
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 
 
 @pytest.mark.parametrize("clicked_frame", [2, 3, 0], ids=["delayed-display", "current-display", "expired"])

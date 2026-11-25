@@ -8,9 +8,9 @@ from collections.abc import Callable
 from threading import Event, Lock, Thread
 from typing import Protocol
 
-from .perception import LatestPoseStore, LatestRGBDFrameStore, RGBDFrame
+from .observations import LatestPoseStore, LatestRGBDFrameStore, RGBDFrame
 from .perception_worker import PoseProcess
-from .trajectory import Evidence, PoseEstimate
+from .pose import Evidence, PoseEstimate
 
 logger = logging.getLogger(__name__)
 

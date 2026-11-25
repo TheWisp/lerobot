@@ -5,7 +5,7 @@ from dataclasses import asdict
 from .experimental_surface_session import GrowingSurfaceConfig
 from .motion_groups import GroupConfig
 from .shared_image_tracking import SharedMatchingConfig
-from .vision_pipeline import VisionPipelineConfig
+from .vision_config import VisionPipelineConfig
 
 
 def defaults():

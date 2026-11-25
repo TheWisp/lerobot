@@ -3,7 +3,7 @@
 import numpy as np
 
 from lerobot.policies.flash.planning_belief import PlanningBeliefStore
-from lerobot.policies.flash.trajectory import AttachmentState, Evidence, PoseEstimate
+from lerobot.policies.flash.pose import AttachmentState, Evidence, PoseEstimate
 
 
 def _pose(x: float) -> np.ndarray:

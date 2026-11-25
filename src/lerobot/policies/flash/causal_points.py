@@ -14,7 +14,7 @@ import numpy as np
 
 from .depth_quality import depth_support_mask
 from .image_matching import LKMatchConfig, prepare_image_pair
-from .perception import RGBDFrame
+from .observations import RGBDFrame
 from .registration import DegenerateRegistrationError, register_object, transform_points, unproject_pixels
 
 
@@ -199,6 +199,15 @@ class CausalRigidPointTracker:
     def current_pixels(self, depth_shape: tuple[int, int]) -> np.ndarray:
         """Depth-image coordinates for surviving tracked point identities."""
         return self._full_pixels(self._uv[self._valid], depth_shape)
+
+    def inlier_pixels(self, depth_shape: tuple[int, int]) -> np.ndarray:
+        """Pixels whose measured 3D pairs support the latest rigid motion.
+
+        Surviving image tracks may lack depth or have rejected 3D motion.
+        They cannot establish ownership of that motion when a delayed object
+        mask arrives after the fit.
+        """
+        return self._full_pixels(self._uv[self._inlier_samples[0]], depth_shape)
 
     def _gray_image(self, rgb: np.ndarray) -> np.ndarray:
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)

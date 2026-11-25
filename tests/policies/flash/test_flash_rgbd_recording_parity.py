@@ -13,8 +13,8 @@ from lerobot.gui.api.run import _flash_recordings, _flash_scene_on_motor_replay,
 from lerobot.policies.flash import observation_processing
 from lerobot.policies.flash.observation_dataset import episode_camera_samples, register_rgbd_dataset
 from lerobot.policies.flash.observation_replay import load_observation_replay
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.recording_scene_replay import attach_scene_evidence
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def _episode(root, *, with_actions, robot_base_frame=False):

@@ -19,7 +19,7 @@ from lerobot.policies.flash.dino_features import DinoPatchExtractor
 from lerobot.policies.flash.geometry import interpolate, inverse
 from lerobot.policies.flash.kinematics import SelectedJointKinematics
 from lerobot.policies.flash.matched_rgbd import MatchedRGBDPoseBackend
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.prepared import PreparedFlashSkill
 from lerobot.policies.flash.skill import AttachmentAction, MotionMode, Relation
 from lerobot.policies.flash.symmetry import SymmetryCanonicalizingBackend

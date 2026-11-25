@@ -8,14 +8,14 @@ import cv2
 import numpy as np
 import pytest
 
+from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.offline_perception import extract_pose_trace
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.perception_step import PerceptionPipeline, PerceptionResult, PerceptionRunner
 from lerobot.policies.flash.perception_worker import _run_backend
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig, observation
 from lerobot.policies.flash.surface_reference import RegisteredSurfaceModel
 from lerobot.policies.flash.tracking_debug_worker import debug_reference, make_debug_pipeline
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 from lerobot.policies.flash.vision_pipeline import (
     DetectionCorrectionConfig,
     FrameMaskCache,

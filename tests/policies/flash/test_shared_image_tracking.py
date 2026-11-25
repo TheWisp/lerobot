@@ -12,11 +12,11 @@ import torch
 from benchmarks.flash_experiment_groups import GroupConfig
 from benchmarks.flash_tracker_experiment import run_case
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.shared_image_tracking import SharedFrameTracker, SharedMatchingConfig
 from lerobot.policies.flash.surface_observation import SurfaceObservationConfig
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 from tests.policies.flash.test_tracker_experiment import demo
 
 

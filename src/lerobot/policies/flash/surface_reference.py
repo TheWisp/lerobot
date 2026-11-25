@@ -14,7 +14,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from .appearance import ReferenceAppearanceFrame
-from .perception import ObjectReference
+from .observations import ObjectReference
 from .pose_evidence import SurfaceAgreement
 from .registration import transform_points
 from .surface_observation import SurfaceObservationConfig, move, observation, spatial_sample

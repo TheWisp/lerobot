@@ -19,7 +19,7 @@ from .execution import TimedAction
 from .experimental_surface_session import PoseHint
 from .geometry import transform
 from .live_surface_session import LIVE_METHOD, LiveSurfaceSession
-from .perception import RGBDFrame
+from .observations import RGBDFrame
 from .pipeline_version import PIPELINE_VERSION
 from .surface_kalman import PoseKalmanFilter
 

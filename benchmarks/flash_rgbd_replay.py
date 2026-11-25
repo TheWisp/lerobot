@@ -27,9 +27,9 @@ from lerobot.policies.flash.appearance import (
 )
 from lerobot.policies.flash.dino_features import DinoPatchExtractor
 from lerobot.policies.flash.matched_rgbd import MatchedRGBDPoseBackend
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.pose import Evidence
 from lerobot.policies.flash.registration import transform_points, valid_depth_pixels
-from lerobot.policies.flash.trajectory import Evidence
 
 
 def parse_args() -> argparse.Namespace:

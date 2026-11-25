@@ -8,10 +8,10 @@ from dataclasses import replace
 import numpy as np
 
 from .causal_service import CausalTrackingConfig, build_causal_pose_service
-from .perception import LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
+from .observations import LatestPoseStore, ObjectReference, PoseBackend, RGBDFrame
 from .perception_step import PerceptionPipeline, PerceptionResult, PerceptionRunner
+from .pose import Evidence, PoseEstimate
 from .symmetry import AxialSymmetry
-from .trajectory import Evidence, PoseEstimate
 
 # Version 11 includes source-time held-object predictions in the same scene
 # decision as independently measured object motion.

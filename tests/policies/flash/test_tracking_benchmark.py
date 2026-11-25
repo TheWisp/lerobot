@@ -171,7 +171,7 @@ def test_comparison_keeps_availability_separate_from_conditional_error(tmp_path)
 def test_saved_baseline_matches_frozen_case_manifest():
     suite_path = BENCHMARKS / "flash_tracking_suite.json"
     suite = json.loads(suite_path.read_text())
-    baseline = json.loads((BENCHMARKS / "flash_tracking_baseline.json").read_text())
+    baseline = json.loads((BENCHMARKS / "flash_tracking_baseline_manifest.json").read_text())
     assert baseline["suite_sha256"] == hashlib.sha256(suite_path.read_bytes()).hexdigest()
     assert {case["id"] for case in suite["cases"]} == {case["id"] for case in baseline["cases"]}
     assert all(case["status"] == "scored" for case in baseline["cases"])

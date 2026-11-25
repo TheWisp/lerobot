@@ -19,8 +19,8 @@ import numpy as np
 def _run_ycb(case: dict, output: Path, config_path: Path) -> None:
     from lerobot.policies.flash.appearance import Sam3MaskSource
     from lerobot.policies.flash.causal_service import CausalTrackingConfig
+    from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet, RGBDFrame
     from lerobot.policies.flash.offline_perception import extract_pose_trace
-    from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
     from lerobot.policies.flash.scene_evidence_writer import SceneEvidenceWriter
     from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig, build_vision_backend
 

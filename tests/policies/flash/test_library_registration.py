@@ -33,7 +33,7 @@ def test_configured_library_handles_measured_motion_and_preserves_depth_gate(bac
 def test_registration_config_roundtrip_and_validation():
     from dataclasses import asdict
 
-    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
     data = asdict(VisionPipelineConfig())
     data["shape"]["registration"]["backend"] = "open3d_color"

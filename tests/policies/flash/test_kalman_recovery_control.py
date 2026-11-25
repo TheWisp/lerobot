@@ -13,7 +13,7 @@ import pytest
 
 from benchmarks.flash_kalman_recovery_control import HIDDEN, MODES, WARMUP, changed_scene, run_scene, scene
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig, GrowingSurfaceSession
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def test_screen_hides_the_entire_moving_object_without_leaking_its_depth():

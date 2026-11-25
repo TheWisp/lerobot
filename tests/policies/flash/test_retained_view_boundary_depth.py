@@ -17,7 +17,7 @@ import pytest
 
 from lerobot.policies.flash.surface_grounding import ShapeConfig, SurfaceFitView, WholeSurfaceFit
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 FIXTURE = Path(__file__).parent / "fixtures/green_controller_retained_view_20261107.npz"
 

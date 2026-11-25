@@ -8,7 +8,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from lerobot.policies.flash.execution import PlanRejectedError, TimedAction
-from lerobot.policies.flash.perception import LatestPoseStore
+from lerobot.policies.flash.observations import LatestPoseStore
 from lerobot.policies.flash.planner import (
     DemonstratedEntryDiscontinuityError,
     JointPlanner,
@@ -17,6 +17,7 @@ from lerobot.policies.flash.planner import (
 from lerobot.policies.flash.planner_worker import PlanFailureKind, PlanResult
 from lerobot.policies.flash.planning_belief import PlanningBeliefStore
 from lerobot.policies.flash.planning_coordinator import PlanBufferConfig, PlanningCoordinator
+from lerobot.policies.flash.pose import AttachmentState, Evidence, PoseEstimate
 from lerobot.policies.flash.progress import Phase
 from lerobot.policies.flash.session import FlashSession
 from lerobot.policies.flash.skill import (
@@ -29,7 +30,6 @@ from lerobot.policies.flash.skill import (
     TurnAtPoint,
 )
 from lerobot.policies.flash.symmetry import AxialSymmetry
-from lerobot.policies.flash.trajectory import AttachmentState, Evidence, PoseEstimate
 
 
 def pose(x=0.0):

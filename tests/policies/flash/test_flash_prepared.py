@@ -10,11 +10,11 @@ from lerobot.policies.flash.appearance import AppearanceModel, ReferenceAppearan
 from lerobot.policies.flash.causal_service import CausalTrackingConfig
 from lerobot.policies.flash.inspect import inspect_skill
 from lerobot.policies.flash.matched_rgbd import ObjectPointModel
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet, RGBDFrame
 from lerobot.policies.flash.prepared import PreparedFlashSkill, snapshot_prepared_skill
 from lerobot.policies.flash.skill import FlashSkill, Interval, MotionMode, Relation, SpatialSample
 from lerobot.policies.flash.surface_reference import RegisteredSurfaceModel, build_registered_surface_model
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def test_prepared_skill_round_trip_keeps_object_frames_and_multiview_provenance(tmp_path):

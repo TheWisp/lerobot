@@ -13,8 +13,8 @@ from lerobot.policies.flash.appearance import (
     build_appearance_pose_backend,
 )
 from lerobot.policies.flash.matched_rgbd import ObjectPointModel
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
-from lerobot.policies.flash.trajectory import Evidence
+from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.pose import Evidence
 
 POINTS = np.array([[-0.02, -0.02, 0], [0.02, -0.02, 0], [-0.02, 0.02, 0], [0.02, 0.02, 0], [0, 0, 0]])
 

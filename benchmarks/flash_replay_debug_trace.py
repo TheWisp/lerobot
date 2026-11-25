@@ -14,7 +14,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.perception_step import PerceptionPipeline
 from lerobot.policies.flash.surface_tracking import load_ufm
 from lerobot.policies.flash.tracking_debug_worker import debug_reference

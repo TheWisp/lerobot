@@ -20,7 +20,7 @@ from lerobot.policies.flash.surface_correspondence import measured_pairs, robust
 from lerobot.policies.flash.surface_kalman import PoseKalmanFilter
 from lerobot.policies.flash.surface_session_config import defaults
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def controller_checkpoint(noise):

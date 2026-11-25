@@ -18,7 +18,7 @@ from lerobot.policies.flash.surface_grounding import WholeSurfaceFit, pca_candid
 from lerobot.policies.flash.surface_observation import voxel_sample
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig, check_surface_contradiction
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 class OverlapSeekingFit(WholeSurfaceFit):

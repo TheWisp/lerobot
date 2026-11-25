@@ -15,7 +15,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.experimental_surface_session import ImageConditionedFit
+from lerobot.policies.flash.experimental_surface_session import (
+    GrowingSurfaceConfig,
+    GrowingSurfaceSession,
+    ImageConditionedFit,
+)
 from lerobot.policies.flash.surface_correspondence import robust_fit
 from lerobot.policies.flash.surface_grounding import SurfaceFitView, WholeSurfaceFit, project
 from lerobot.policies.flash.surface_kalman import PoseKalmanFilter
@@ -23,7 +27,7 @@ from lerobot.policies.flash.surface_observation import move, spatial_sample
 from lerobot.policies.flash.surface_registration import LibraryConfig, LibraryMatcher
 from lerobot.policies.flash.surface_tracking import SurfaceTrackingSession
 from lerobot.policies.flash.surface_uncertainty import PoseUncertaintyConfig
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 FIXTURE = Path(__file__).parent / "fixtures/cube_visible_match_20261109.npz"
 
@@ -207,8 +211,9 @@ def test_lk_motion_and_gicp_agree_with_consistent_source_alignment(visible_cube)
     assert pixel_error(source_pose) < 5.0
 
 
-def test_visible_cube_fit_recovers_when_old_pose_contradicts_current_depth(visible_cube):
-    """The recorded cube's current RGB-D fit must not be fused into an impossible prior."""
+@pytest.mark.parametrize("reset", [False, True])
+def test_visible_cube_fit_recovers_when_old_pose_contradicts_current_depth(visible_cube, reset):
+    """The session must publish checked geometry after fusion rejects the old pose."""
     pytest.importorskip("small_gicp")
     data, geometry, _, _ = visible_cube
     settings = json.loads(str(data["settings_json"]))
@@ -222,49 +227,71 @@ def test_visible_cube_fit_recovers_when_old_pose_contradicts_current_depth(visib
         appearance_views=geometry.appearance_views,
     )
     surface = settings["surface_experiment"]
-    uncertainty = PoseUncertaintyConfig(**surface["uncertainty"])
+    uncertainty = replace(PoseUncertaintyConfig(**surface["uncertainty"]), reset_on_geometry_conflict=reset)
+    config = replace(GrowingSurfaceConfig(**surface), uncertainty=uncertainty, grow=False)
 
     def check(pose):
         return current.check_pose(
             pose,
             max_outlier_fraction=uncertainty.max_visible_outlier_fraction,
-            agreement_m=surface["agreement_m"],
-            min_overlap=surface["min_overlap"],
+            agreement_m=config.agreement_m,
+            min_overlap=config.min_overlap,
         )
 
-    fitter = ImageConditionedFit(
-        data["surface"],
-        geometry.observation,
-        data["intrinsics"],
-        shape,
+    # Restore the recorded pre-frame state in its original object coordinates.
+    # The saved map accumulated over earlier frames; reseeding from 3004 alone
+    # would test a different surface and lose the recorded contradiction.
+    session = GrowingSurfaceSession(shape, config)
+    session.update(
+        {
+            "status": None,
+            "current": geometry.reference_views[0].observation,
+            "intrinsics": data["intrinsics"],
+            "frame_id": 3004,
+            "diagnostics": {},
+        },
+        0.0,
+    )
+    session.reference = data["surface"].copy()
+    session.store.points = data["surface"].copy()
+    session.pose = data["source_pose"].copy()
+    session.accepted_pose = session.pose.copy()
+    session.initial_appearance_view = geometry.reference_views[0]
+    session.kalman = PoseKalmanFilter(session.pose, session.reference.mean(0), 0.0, uncertainty)
+    session.kalman.covariance = np.eye(6) * 0.0001
+    assert not check(session.pose)["geometry_accepted"]
+
+    result = session.update(
+        {
+            "status": None,
+            "current": geometry.observation,
+            "intrinsics": data["intrinsics"],
+            "frame_id": 3011,
+            "diagnostics": {},
+            "step": data["seed_pose"] @ np.linalg.inv(data["source_pose"]),
+            "match_source_frame": 3004,
+            "point_pairs": (move(data["image_reference"], data["source_pose"]), data["image_current"]),
+        },
+        0.1,
         geometry=current,
-        image_reference=data["image_reference"],
-        image_current=data["image_current"],
-        image_scale_m=surface["agreement_m"],
-        image_weight=1.0,
-        reference_views=current.reference_views,
-        appearance_views=current.appearance_views,
     )
-    candidate, detail = fitter.correct_surface_first(
-        data["seed_pose"], data["source_pose"], uncertainty=uncertainty, check=check
-    )
-    assert candidate is not None
-    assert check(candidate)["accepted"]
-    assert not check(data["source_pose"])["geometry_accepted"]
-
-    information = np.asarray(detail["uncertainty"]["information"])
-    pivot = np.asarray(detail["uncertainty"]["pivot_m"])
-    for reset, expected in ((False, "innovation_conflict"), (True, "reinitialized_after_contradiction")):
-        filter_ = PoseKalmanFilter(
-            data["source_pose"],
-            data["surface"].mean(0),
-            0.0,
-            replace(uncertainty, reset_on_geometry_conflict=reset),
-        )
-        filter_.covariance = np.eye(6) * 0.0001
-        result = filter_.correct(candidate, information, pivot, contradicted=True)
-        assert result["reason"] == expected
-        assert check(filter_.pose)["accepted"] is reset
+    assert result["status"] == "observed_candidate"
+    published = np.asarray(result["camera_from_reference"])
+    assert check(published)["accepted"]
+    np.testing.assert_array_equal(session.store.points, data["surface"])
+    details = result["diagnostics"]
+    if reset:
+        assert details["kalman"]["reason"] == "reinitialized_after_contradiction"
+        assert session.accepted_frame == 3011
+    else:
+        # The filter can propose a fusion; the session must reject it against
+        # current depth and publish the independently checked fit instead.
+        assert details["kalman"]["reason"] == "fused_pose_contradicts_observation"
+        assert not details["kalman"]["accepted"]
+        assert details["pose_fallback"]["source"] == "checked_surface_fit"
+        assert session.accepted_frame == 3004
+        np.testing.assert_array_equal(session.accepted_pose, data["source_pose"])
+        np.testing.assert_array_equal(session.kalman.covariance, details["kalman"]["prior_covariance"])
 
 
 def assert_visible_match(data, candidate):

@@ -27,7 +27,7 @@ from lerobot.policies.flash.observation_dataset import (
     episode_camera_samples,
     scene_from_camera,
 )
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.scene_groups import ScenePointTracker
 
 

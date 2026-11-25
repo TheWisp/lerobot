@@ -16,7 +16,7 @@ from scipy.spatial.transform import Rotation
 
 from .causal_points import CausalRigidPointTracker, RigidPointMotion
 from .geometry import transform
-from .perception import RGBDFrame
+from .observations import RGBDFrame
 from .registration import transform_points
 
 

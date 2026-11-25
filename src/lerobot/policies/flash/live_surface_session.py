@@ -9,7 +9,7 @@ from .motion_groups import GroupConfig
 from .shared_image_tracking import SharedMatchingConfig
 from .surface_frame_session import SurfaceFrameSession
 from .surface_session_config import validate
-from .vision_pipeline import VisionPipelineConfig
+from .vision_config import VisionPipelineConfig
 
 LIVE_METHOD = "group_growing"
 

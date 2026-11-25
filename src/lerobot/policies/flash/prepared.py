@@ -12,11 +12,11 @@ import numpy as np
 from .appearance import AppearanceModel
 from .causal_service import CausalTrackingConfig
 from .matched_rgbd import ObjectPointModel
-from .perception import ObjectReference, ReferenceSnippet
+from .observations import ObjectReference, ReferenceSnippet
 from .skill import FlashSkill
 from .surface_reference import RegisteredSurfaceModel
 from .symmetry import AxialSymmetry
-from .vision_pipeline import VisionPipelineConfig
+from .vision_config import VisionPipelineConfig
 
 
 @dataclass(frozen=True)

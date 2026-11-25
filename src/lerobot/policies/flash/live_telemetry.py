@@ -18,9 +18,9 @@ import numpy as np
 from .causal_service import AnchorDecision
 from .execution import MotorTick
 from .perception import EndEffectorKinematics, RGBDFrame
+from .pose import AttachmentState, Evidence, PoseEstimate
 from .pose_disagreement import FreeSpaceComparison, PoseComparison
 from .pose_evidence import PoseProposal
-from .trajectory import AttachmentState, Evidence, PoseEstimate
 
 HeldMotorSample = tuple[str | None, AttachmentState | None, np.ndarray | None, float, bool, bool]
 

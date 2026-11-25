@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from lerobot.policies.flash.milestones import PoseMilestonePublisher, verify_pose_relation
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.progress import Progress, Verdict
 from lerobot.policies.flash.skill import (
     FlashSkill,
@@ -14,7 +15,6 @@ from lerobot.policies.flash.skill import (
     Relation,
     SpatialSample,
 )
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def pose(x=0.0):

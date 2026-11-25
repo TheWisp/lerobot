@@ -9,12 +9,12 @@ from scipy.spatial.transform import Rotation
 
 from lerobot.policies.flash.causal_points import CausalRigidPointTracker, RigidPointMotion
 from lerobot.policies.flash.causal_service import CausalPoseService, _Anchor
-from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
+from lerobot.policies.flash.observations import LatestPoseStore, RGBDFrame
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.pose_disagreement import PoseComparisonVerdict
 from lerobot.policies.flash.pose_evidence import PoseProposal, VisibleSurfaceSupport
 from lerobot.policies.flash.scene_groups import SceneTracks
 from lerobot.policies.flash.symmetry import AxialSymmetry
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def _recorded_service(role: str):

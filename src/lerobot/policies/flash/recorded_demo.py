@@ -13,10 +13,10 @@ from .compiler import (
     PoseRelationAnnotation,
     compile_skill,
 )
+from .pose import Evidence
 from .prepared import PreparedFlashSkill
 from .recording import load_pose_estimates
 from .skill import AttachmentTransition, MilestoneSpec, Relation
-from .trajectory import Evidence
 
 
 def prepare_recorded_episode(

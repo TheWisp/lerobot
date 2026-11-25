@@ -6,10 +6,10 @@ import numpy as np
 import pytest
 
 from lerobot.policies.flash.matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel, PixelMatches
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet, RGBDFrame
+from lerobot.policies.flash.pose import Evidence
 from lerobot.policies.flash.registration import DegenerateRegistrationError
 from lerobot.policies.flash.shape_registration import register_visible_shape, visible_surface_p90
-from lerobot.policies.flash.trajectory import Evidence
 
 FIXTURE = Path(__file__).parent / "fixtures/dowel_live_visible_shape_20261020.npz"
 DRIFT_FIXTURE = Path(__file__).parent / "fixtures/dowel_static_fit_drift_20261020.npz"

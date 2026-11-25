@@ -18,9 +18,9 @@ from lerobot.utils.feature_utils import build_dataset_frame
 
 from .dataset_export import repack_episode_data
 from .execution import ActionReceipt, MotorTick
-from .perception import LatestPoseStore, LatestRGBDFrameStore
+from .observations import LatestPoseStore, LatestRGBDFrameStore
+from .pose import Evidence, PoseEstimate
 from .pose_disagreement import PoseComparison, PoseComparisonVerdict, SurfaceSupport
-from .trajectory import Evidence, PoseEstimate
 
 
 class DatasetWriter(Protocol):

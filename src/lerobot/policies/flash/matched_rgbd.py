@@ -9,7 +9,8 @@ from typing import Protocol, cast
 
 import numpy as np
 
-from .perception import ObjectReference, ReferenceSnippet, RGBDFrame
+from .observations import ObjectReference, ReferenceSnippet, RGBDFrame
+from .pose import Evidence, PoseEstimate
 from .registration import (
     DegenerateRegistrationError,
     register_object,
@@ -18,7 +19,6 @@ from .registration import (
     valid_depth_pixels,
 )
 from .shape_registration import register_visible_shape, visible_surface_p90
-from .trajectory import Evidence, PoseEstimate
 
 
 @dataclass(frozen=True)

@@ -15,9 +15,9 @@ from lerobot.policies.flash.causal_service import (
     _Anchor,
     _AttachmentEvent,
 )
-from lerobot.policies.flash.perception import LatestPoseStore, RGBDFrame
+from lerobot.policies.flash.observations import LatestPoseStore, RGBDFrame
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.scene_groups import ScenePointTracker, SceneTracks
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def frame(image, frame_id):
@@ -71,6 +71,70 @@ def test_wrong_sized_mask_rejects_only_its_source_pose_and_allows_reacquisition(
     service._anchor(_Anchor(second.frame_id, (pose("bad", second),), {"bad": valid_mask}))
     assert service.anchor_decisions_by_source[(1, "bad")].outcome == "accepted"
     assert service.store.snapshot()[1]["bad"].source_frame_id == second.frame_id
+
+
+@pytest.mark.parametrize("delayed_seed", [False, True])
+def test_motion_outliers_inside_mask_cannot_veto_direct_reacquisition(delayed_seed):
+    """A moving occluder's fitted motion needs its own in-mask measurements."""
+    gray = np.random.default_rng(73).integers(0, 255, (160, 160), dtype=np.uint8)
+    rgb = np.repeat(gray[:, :, None], 3, axis=2)
+    shifted = cv2.warpAffine(rgb, np.float32([[1, 0, 6], [0, 1, 0]]), (160, 160))
+    # The remaining visible object stays still while surrounding texture moves.
+    shifted[40:120, 40:120] = rgb[40:120, 40:120]
+    seed_mask = np.zeros(gray.shape, dtype=bool)
+    seed_mask[16:144, 16:144] = True
+    current_mask = np.zeros(gray.shape, dtype=bool)
+    current_mask[55:105, 55:105] = True
+    intrinsics = np.array([[100.0, 0, 80], [0, 100.0, 80], [0, 0, 1]])
+
+    def observation(image, index):
+        return RGBDFrame(
+            index,
+            image,
+            np.full(gray.shape, 1000, np.uint16),
+            intrinsics,
+            0.001,
+            np.eye(4),
+            index / 30,
+            index / 30,
+            "camera-v1",
+        )
+
+    def direct(index):
+        return PoseEstimate(
+            "object",
+            np.eye(4),
+            index / 30,
+            index / 30,
+            Evidence.OBSERVED,
+            "reference-v1",
+            (True,) * 3,
+            (True,) * 3,
+        )
+
+    points = np.array([[x, y, 1.0] for x in np.linspace(-0.04, 0.04, 6) for y in np.linspace(-0.04, 0.04, 6)])
+    service = CausalPoseService(LatestPoseStore(), object_points_by_role={"object": points})
+    first, second = observation(rgb, 0), observation(shifted, 1)
+    if delayed_seed:
+        service.set_attached_role("object", source_time_s=0)
+        service._frame(first)
+        service._frame(second)
+        service._anchor(_Anchor(0, (direct(0),), {"object": seed_mask}))
+        service._drain_pending()
+        tracker = service.active["object"][0]
+        service._anchor(_Anchor(1, (direct(1),), {"object": current_mask}))
+    else:
+        service.process_offline(first, (direct(0),), {"object": seed_mask}, attached_role="object")
+        tracker = service.active["object"][0]
+        service.process_offline(second, (direct(1),), {"object": current_mask}, attached_role="object")
+    raw = tracker.current_pixels(gray.shape)
+    inliers = np.rint(tracker.inlier_samples()[1]).astype(int)
+    assert current_mask[raw[:, 1], raw[:, 0]].sum() >= tracker.min_inliers
+    assert not current_mask[inliers[:, 1], inliers[:, 0]].any()
+    assert service.anchor_decisions_by_source[(1, "object")].outcome == "accepted"
+    published = service.store.snapshot()[1]["object"]
+    assert published.evidence == Evidence.OBSERVED
+    np.testing.assert_allclose(published.pose, np.eye(4), atol=1e-12)
 
 
 def test_slow_camera_processing_records_stage_and_source_frame(monkeypatch):

@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from .geometry import inverse, transform
-from .perception import RGBDFrame
+from .observations import RGBDFrame
 from .registration import transform_points
 
 

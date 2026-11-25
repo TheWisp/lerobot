@@ -21,7 +21,7 @@ import numpy as np
 from lerobot.policies.flash.experimental_surface_session import ImageConditionedFit
 from lerobot.policies.flash.image_matching import prepare_image_pair
 from lerobot.policies.flash.live_surface_session import LiveSurfaceSession
-from lerobot.policies.flash.perception import RGBDFrame
+from lerobot.policies.flash.observations import RGBDFrame
 from lerobot.policies.flash.shared_image_tracking import SharedFrameTracker, depth_support_mask, pixels_inside
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
 from lerobot.policies.flash.surface_correspondence import measured_pairs

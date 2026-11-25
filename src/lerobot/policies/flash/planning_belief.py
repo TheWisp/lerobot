@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from threading import Lock
 
-from .trajectory import AttachmentState, PoseEstimate
+from .pose import AttachmentState, PoseEstimate
 
 
 class PlanningBeliefStore:

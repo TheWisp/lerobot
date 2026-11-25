@@ -27,7 +27,7 @@ from benchmarks.flash_library_registration import LibraryConfig
 from lerobot.policies.flash.surface_grounding import SurfaceFitView, WholeSurfaceFit, project
 from lerobot.policies.flash.surface_observation import move, observation
 from lerobot.policies.flash.surface_uncertainty import check_surface_contradiction
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 FIXTURE = Path(__file__).resolve().parents[1] / "tests/policies/flash/fixtures/gamepad_placement"
 METHODS = ("baseline", "small_gicp", "open3d_plane", "open3d_color")

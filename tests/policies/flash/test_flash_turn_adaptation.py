@@ -10,7 +10,7 @@ from scipy.spatial.transform import Rotation
 from lerobot.policies.flash.appearance import AppearanceModel
 from lerobot.policies.flash.demo_replay import build_demo_replay
 from lerobot.policies.flash.matched_rgbd import ObjectPointModel
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
+from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet
 from lerobot.policies.flash.planner import InfeasibleTrajectoryError, JointPlanner, PlannerLimits
 from lerobot.policies.flash.planner_worker import PlannerWorker, PlanRequest
 from lerobot.policies.flash.prepared import PreparedFlashSkill

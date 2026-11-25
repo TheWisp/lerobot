@@ -9,9 +9,9 @@ from pathlib import Path
 
 import numpy as np
 
-from .perception import RGBDFrame
+from .observations import RGBDFrame
 from .perception_step import PerceptionResult
-from .trajectory import PoseEstimate
+from .pose import PoseEstimate
 
 SCENE_EVIDENCE_CAPTURE_VERSION = 8
 

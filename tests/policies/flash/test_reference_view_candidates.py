@@ -8,7 +8,8 @@ import cv2
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.perception import ObjectReference, ReferenceSnippet
+from lerobot.policies.flash.observations import ObjectReference, ReferenceSnippet
+from lerobot.policies.flash.pose import Evidence, PoseEstimate
 from lerobot.policies.flash.reference_view_candidates import (
     MeasuredReferenceView,
     review_reference_view_candidates,
@@ -24,7 +25,6 @@ from lerobot.policies.flash.surface_reference import (
     RegisteredSurfaceModel,
     registered_surface_agreement,
 )
-from lerobot.policies.flash.trajectory import Evidence, PoseEstimate
 
 
 def test_gripper_motion_prior_uses_only_grasp_seed_and_motor_motion(tmp_path):

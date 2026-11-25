@@ -34,8 +34,8 @@ from .observation_dataset import (
     robot_actions_available,
     scene_from_camera,
 )
+from .observations import ObjectReference, ReferenceSnippet, RGBDFrame
 from .offline_perception import POSE_TRACE_SELECTION_VERSION, extract_pose_trace
-from .perception import ObjectReference, ReferenceSnippet, RGBDFrame
 from .scene_evidence_writer import SCENE_EVIDENCE_CAPTURE_VERSION, SceneEvidenceWriter
 from .vision_pipeline import VisionPipelineConfig, build_vision_backend
 
