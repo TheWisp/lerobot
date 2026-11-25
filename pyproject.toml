@@ -317,6 +317,10 @@ gui = [
     # sender path takes packets the GUI's own encoder produced, so aiortc
     # never encodes or decodes here.
     "aiortc>=1.13.0,<2.0.0",
+    # Lets the FLASH experiment browser confirm a PID is its own rebuild
+    # worker before stopping it. Import-guarded; without it, cancel is only a
+    # request the worker notices at its next frame.
+    "psutil>=7.2.2,<8.0.0",
 ]
 # MCP (fork-only). Exposes datasets to AI agents via the Model Context
 # Protocol. Server lives under src/lerobot/mcp/ and runs over stdio; install
