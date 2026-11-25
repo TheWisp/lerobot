@@ -76,20 +76,25 @@ def tracking_frame_with_depth_source(frame, source, stereo_geometry=None):
 
     The source camera frame is retained separately by recording; this returns
     only the frame to pass to the shared tracker. Missing predictions stay zero.
+    ``depth_before_filters`` keeps the sensor's unfiltered depth: the frame's own
+    copy when filters ran, else the sensor depth the model replaced. The filter
+    labels still describe the camera's settings for this capture, which the GUI
+    uses to confirm a settings change took effect.
     """
     if source is None:
         return frame
     stereo = (
         StereoInput(frame.infrared_left, frame.infrared_right, *stereo_geometry)
-        if stereo_geometry is not None
+        if stereo_geometry is not None and frame.infrared_left is not None
         else None
     )
     selected = source.predict(DepthInput(frame.rgb, frame.metric_depth(), frame.intrinsics, stereo))
     if np.issubdtype(frame.depth.dtype, np.integer):
         depth = np.rint(selected.depth_m / frame.depth_m_per_unit).clip(0, 65535).astype(np.uint16)
     else:
-        depth = selected.depth_m.astype(np.float32)
-    return replace(frame, depth=depth, depth_before_filters=frame.depth)
+        depth = (selected.depth_m / frame.depth_m_per_unit).astype(np.float32)
+    before = frame.depth_before_filters if frame.depth_before_filters is not None else frame.depth
+    return replace(frame, depth=depth, depth_before_filters=before)
 
 
 class LiveDepthStream:
@@ -540,7 +545,7 @@ class LiteAnyStereoV2Depth(FoundationStereoDepth):
     @staticmethod
     def _image(image: np.ndarray) -> np.ndarray:
         if image.shape != (480, 848):
-            raise ValueError("LAS2-H ONNX export requires a 848x480 infrared pair")
+            raise ValueError("LAS2 ONNX exports require a 848x480 infrared pair")
         padded = np.pad(image, ((0, 0), (8, 8)), mode="edge")
         return np.ascontiguousarray(np.repeat(padded[None, None], 3, axis=1), dtype=np.float32)
 

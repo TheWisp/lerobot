@@ -68,9 +68,13 @@ def turn_about_reference_point(
 
     if not np.isfinite(angle_rad):
         raise ValueError("turn angle must be finite")
+    axis_reference = np.asarray(axis_reference, dtype=float)
+    # The rotation vector is angle × axis, so any other length scales the turn.
+    if axis_reference.shape != (3,) or not np.isclose(np.linalg.norm(axis_reference), 1.0, atol=1e-5):
+        raise ValueError("turn direction must be a unit vector")
     reference = transform(reference)
     pivot = reference[:3, :3] @ np.asarray(pivot_reference_m) + reference[:3, 3]
-    axis = reference[:3, :3] @ np.asarray(axis_reference)
+    axis = reference[:3, :3] @ axis_reference
     rotation = Rotation.from_rotvec(float(angle_rad) * axis).as_matrix()
     result = np.eye(4)
     result[:3, :3] = rotation

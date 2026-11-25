@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from lerobot.policies.flash.geometry import held_object_goal
+from lerobot.policies.flash.geometry import held_object_goal, turn_about_reference_point
 from lerobot.policies.flash.observations import LatestPoseStore, RGBDFrame
 from lerobot.policies.flash.pose import Evidence, PoseEstimate
 
@@ -63,3 +63,19 @@ def test_rgbd_alignment_and_pose_handoff_preserve_source_time():
     assert store.publish((fresh,)) == 1
     assert store.publish((stale,)) == 1
     assert store.snapshot()[1]["target"].source_time_s == 1.0
+
+
+def test_turn_angle_is_not_scaled_by_the_direction_length():
+    goal = pose(0.3)
+    turned = turn_about_reference_point(goal, pose(), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 0.5)
+    np.testing.assert_allclose(turned[:3, 3], [0.3 * np.cos(0.5), 0.3 * np.sin(0.5), 0.0], atol=1e-12)
+    for axis in ((0.0, 0.0, 2.0), (0.0, 0.0, 0.0)):
+        with pytest.raises(ValueError, match="unit vector"):
+            turn_about_reference_point(goal, pose(), (0.0, 0.0, 0.0), axis, 0.5)
+
+
+def test_lost_estimate_cannot_carry_a_pose():
+    lost = PoseEstimate("held", None, 0, 0, Evidence.LOST, "v1", (False,) * 3, (False,) * 3)
+    assert lost.pose is None
+    with pytest.raises(ValueError, match="lost evidence cannot carry a pose"):
+        PoseEstimate("held", pose(), 0, 0, Evidence.LOST, "v1", (False,) * 3, (False,) * 3)

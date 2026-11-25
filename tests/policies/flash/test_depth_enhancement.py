@@ -6,6 +6,7 @@ import pytest
 from lerobot.policies.flash import depth_enhancement
 from lerobot.policies.flash.depth_enhancement import (
     DepthInput,
+    DepthOutput,
     FoundationStereoDepth,
     LiteAnyStereoV2Depth,
     StereoInput,
@@ -13,7 +14,9 @@ from lerobot.policies.flash.depth_enhancement import (
     fill_projection_gaps,
     make_depth_source,
     needs_stereo_pair,
+    tracking_frame_with_depth_source,
 )
+from lerobot.policies.flash.observations import RGBDFrame
 
 
 def _reference_color_projection(left_depth, left_k, color_k, color_from_left, color_shape):
@@ -269,3 +272,50 @@ def test_las2_sizes_use_distinct_models_and_shared_stereo_input(tmp_path, monkey
         assert make_depth_source(source) == {"model_size": size}
     else:
         assert make_depth_source(source) == {}
+
+
+class _ConstantDepth:
+    """A depth model that predicts one metric value everywhere."""
+
+    source = "constant"
+
+    def __init__(self, depth_m):
+        self.depth_m = depth_m
+
+    def predict(self, frame):
+        depth = np.full(frame.sensor_depth_m.shape, self.depth_m, np.float32)
+        return DepthOutput(depth, self.source, frame.sensor_depth_m > 0)
+
+
+def _frame(depth, scale, **extra):
+    return RGBDFrame(
+        1, np.zeros((*depth.shape, 3), np.uint8), depth, np.eye(3), scale, np.eye(4), 1.0, 1.0, "cal", **extra
+    )
+
+
+@pytest.mark.parametrize("dtype", [np.uint16, np.float32])
+def test_model_depth_keeps_the_frame_depth_scale(dtype):
+    """Millimetre-scaled frames of either storage type read back the model's metres."""
+    frame = _frame(np.full((2, 3), 1000, dtype), 0.001)
+    selected = tracking_frame_with_depth_source(frame, _ConstantDepth(0.5))
+    np.testing.assert_allclose(selected.metric_depth(), 0.5)
+
+
+def test_model_depth_keeps_the_sensor_depth_from_before_filters():
+    """Filtered depth must not replace the sensor's unfiltered depth as the pre-filter image."""
+    raw = np.full((2, 3), 900, np.uint16)
+    filtered = np.full((2, 3), 1000, np.uint16)
+    processing = {"spatial": False, "temporal": False, "hole_filling": True}
+    frame = _frame(filtered, 0.001, depth_processing=processing, depth_before_filters=raw)
+    selected = tracking_frame_with_depth_source(frame, _ConstantDepth(0.5))
+    np.testing.assert_array_equal(selected.depth_before_filters, raw)
+    # Without filters, the sensor depth the model replaced is the unfiltered image.
+    unfiltered = tracking_frame_with_depth_source(_frame(filtered, 0.001), _ConstantDepth(0.5))
+    np.testing.assert_array_equal(unfiltered.depth_before_filters, filtered)
+
+
+def test_stereo_model_on_a_frame_without_infrared_reports_the_missing_pair():
+    model = FoundationStereoDepth.__new__(FoundationStereoDepth)
+    geometry = (np.eye(3), np.eye(4), 0.05)
+    with pytest.raises(ValueError, match="requires synchronized"):
+        tracking_frame_with_depth_source(_frame(np.full((2, 3), 1000, np.uint16), 0.001), model, geometry)

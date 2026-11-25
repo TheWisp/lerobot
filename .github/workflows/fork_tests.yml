@@ -11,8 +11,9 @@
 #      checkouts. LFS objects are therefore cached in the Actions cache and
 #      quota is only spent when the fixture set actually changes.
 #
-# Scope: base + test + gui extras, plus playwright (overlaid, since it is not
-# a declared dependency yet). This runs the fork's guardrail suites — CLI
+# Scope: base + test + gui + flash extras, the RealSense SDK and the device
+# extras installed below, plus playwright (overlaid, since it is not a
+# declared dependency yet). This runs the fork's guardrail suites — CLI
 # contract, e2e Run-tab flows on the virtual robot, operator sequences,
 # import-integrity/merge guards — that otherwise only run on developer
 # machines. Runner is CPU-only: CUDA-gated tests skip here and remain covered
@@ -55,12 +56,13 @@ jobs:
     name: Fork Pytest (cpu, test+gui extras, ${{ matrix.pass.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 75
-    # Two passes, each on a runner of its own. Tests marked `timing` assert on
+    # Three passes, each on a runner of its own. Tests marked `timing` assert on
     # the wall clock, so they run alone: with three test workers beside them
-    # they measure the neighbours. Everything else runs in parallel. xdist
+    # they measure the neighbours. Everything else outside tests/policies runs
+    # in parallel, and tests/policies/flash runs in the third pass. xdist
     # cannot make some tests exclusive within one run -- an xdist_group only
     # keeps a group on one worker while the others carry on -- so the split is
-    # two invocations, and two runners rather than two steps so that the
+    # separate invocations, and separate runners rather than steps so that the
     # timing pass does not add its length to the parallel one's.
     strategy:
       fail-fast: false

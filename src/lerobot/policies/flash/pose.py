@@ -46,6 +46,8 @@ class PoseEstimate:
             object.__setattr__(self, "pose", transform(self.pose))
         if self.evidence != Evidence.LOST and self.pose is None:
             raise ValueError("observed or predicted evidence needs a pose")
+        if self.evidence == Evidence.LOST and self.pose is not None:
+            raise ValueError("lost evidence cannot carry a pose")
         if self.available_time_s < self.source_time_s:
             raise ValueError("availability cannot precede source time")
         if len(self.translation_supported) != 3 or len(self.rotation_supported) != 3:

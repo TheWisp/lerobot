@@ -194,9 +194,12 @@ fraction of projected pixels that land on measured depth inside the mask. A near
 surface outside the mask is an occluder and does not count against a proposal. A projected
 point hidden behind the measured surface inside the mask cannot support it.
 
-When the proposals differ by more than the caller's task tolerance and neither is at least as
-good on both numbers, the verdict is `ambiguous`: neither proposal is chosen silently. These
-numbers are diagnostics, not calibrated pose likelihoods.
+The verdict is decided in this order. If either proposal has too few measured depth pixels inside
+the mask, it is `insufficient_evidence`, even when the two poses are close. If they are within
+the caller's task tolerance of each other, they `agree`. Otherwise one proposal is favoured only
+if it is at least as good on both numbers and strictly better on one. When neither is, including
+when the numbers are equal, the verdict is `ambiguous` and neither proposal is chosen silently.
+These numbers are diagnostics, not calibrated pose likelihoods.
 
 Code: [`surface_support`](../pose_disagreement.py#L135) and
 [`compare_pose_proposals`](../pose_disagreement.py#L202).
