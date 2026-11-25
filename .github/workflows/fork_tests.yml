@@ -11,8 +11,9 @@
 #      checkouts. LFS objects are therefore cached in the Actions cache and
 #      quota is only spent when the fixture set actually changes.
 #
-# Scope: base + test + gui extras, plus playwright (overlaid, since it is not
-# a declared dependency yet). This runs the fork's guardrail suites — CLI
+# Scope: base + test + gui + flash extras, the RealSense SDK and the device
+# extras installed below, plus playwright (overlaid, since it is not a
+# declared dependency yet). This runs the fork's guardrail suites — CLI
 # contract, e2e Run-tab flows on the virtual robot, operator sequences,
 # import-integrity/merge guards — that otherwise only run on developer
 # machines. Runner is CPU-only: CUDA-gated tests skip here and remain covered
@@ -55,12 +56,13 @@ jobs:
     name: Fork Pytest (cpu, test+gui extras, ${{ matrix.pass.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 75
-    # Two passes, each on a runner of its own. Tests marked `timing` assert on
+    # Three passes, each on a runner of its own. Tests marked `timing` assert on
     # the wall clock, so they run alone: with three test workers beside them
-    # they measure the neighbours. Everything else runs in parallel. xdist
+    # they measure the neighbours. Everything else outside tests/policies runs
+    # in parallel, and tests/policies/flash runs in the third pass. xdist
     # cannot make some tests exclusive within one run -- an xdist_group only
     # keeps a group on one worker while the others carry on -- so the split is
-    # two invocations, and two runners rather than two steps so that the
+    # separate invocations, and separate runners rather than steps so that the
     # timing pass does not add its length to the parallel one's.
     strategy:
       fail-fast: false
@@ -69,9 +71,18 @@ jobs:
           - name: parallel
             select: "not hub_live and not timing"
             workers: "-n auto --dist loadfile --max-worker-restart=0"
+            test_path: tests
+            exclusions: "--ignore=tests/policies"
           - name: timing
             select: "timing and not hub_live"
             workers: ""
+            test_path: tests
+            exclusions: "--ignore=tests/policies"
+          - name: flash
+            select: "not hub_live"
+            workers: ""
+            test_path: tests/policies/flash
+            exclusions: ""
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -115,17 +126,19 @@ jobs:
       # so the CAN driver went entirely unchecked in CI). Chosen so the tests
       # RUN here rather than skip — skipping would un-cover exactly the paths
       # this workflow exists to cover.
-      - name: Install (test+gui+feetech+quest-vr+pink+scipy+can, playwright overlay)
+      - name: Install test and feature dependencies
         run: |
-          uv sync --locked --extra test --extra gui --extra feetech --extra quest-vr --extra pink-dep --extra scipy-dep --extra can-dep
-          uv run python -c 'import pinocchio'
+          uv sync --locked --extra test --extra gui --extra flash --extra intelrealsense --extra feetech --extra quest-vr --extra pink-dep --extra scipy-dep --extra can-dep
+          uv run python -c 'import pinocchio, pyrealsense2, small_gicp'
           uv run --with playwright python -m playwright install chromium --with-deps
 
-      # tests/policies is excluded: the policy suites accumulate loaded VLA
+      # The general passes exclude tests/policies: model suites accumulate loaded VLA
       # models in one pytest process (~39 GB RSS measured locally — it OOM-kills
       # a workstation, and the 7 GB GitHub runner has no chance). Those suites
       # are upstream's to run on their infrastructure; this workflow covers the
       # fork's surfaces: gui, datasets, robots, scripts, utils, mcp, hvla.
+      # FLASH has its own pass: recorded/synthetic tracking guards need no VLA
+      # weights and must run even though their directory is under policies.
       # The parallel pass's workers:
       # --dist loadfile keeps a file's tests on one worker, which preserves
       # module- and class-scoped fixture semantics.
@@ -142,7 +155,9 @@ jobs:
           HUGGING_FACE_HUB_TOKEN: ""
           SELECT: ${{ matrix.pass.select }}
           WORKERS: ${{ matrix.pass.workers }}
+          TEST_PATH: ${{ matrix.pass.test_path }}
+          EXCLUSIONS: ${{ matrix.pass.exclusions }}
         run: |
-          # shellcheck disable=SC2086  # WORKERS is a list of flags, split on purpose
-          uv run --with playwright python -m pytest tests --ignore=tests/policies \
+          # shellcheck disable=SC2086  # WORKERS and EXCLUSIONS are lists of flags
+          uv run --with playwright python -m pytest "$TEST_PATH" $EXCLUSIONS \
             -q -m "$SELECT" $WORKERS --durations=15 -p no:cacheprovider

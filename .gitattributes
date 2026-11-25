@@ -20,6 +20,14 @@
 *.arrow filter=lfs diff=lfs merge=lfs -text
 *.json !text !filter !merge !diff
 tests/artifacts/cameras/*.png filter=lfs diff=lfs merge=lfs -text
+# Recorded RGB-D and network outputs for matching-adapter equivalence tests.
+tests/policies/flash/fixtures/image_matching_*.npz filter=lfs diff=lfs merge=lfs -text
+# Recorded scene-group failure with real RGB-D and masks.
+tests/policies/flash/fixtures/ring_group_rejection_*.npz filter=lfs diff=lfs merge=lfs -text
+# Recorded recovery checkpoints keep RGB-D evidence available to integration tests.
+tests/policies/flash/fixtures/recorded_recovery/**/*.npz filter=lfs diff=lfs merge=lfs -text
+# Recorded clear-placement checkpoints for native surface matcher regressions.
+tests/policies/flash/fixtures/gamepad_placement/*.npz filter=lfs diff=lfs merge=lfs -text
 # Proof media are small and exist to be LOOKED AT. GitHub serves an LFS
 # object as application/octet-stream with nosniff, so a browser refuses to
 # render it -- an embedded proof video is a blank box in a PR, and the
@@ -27,3 +35,9 @@ tests/artifacts/cameras/*.png filter=lfs diff=lfs merge=lfs -text
 docs/proofs/**/*.mp4 !filter !diff !merge
 docs/proofs/**/*.gif !filter !diff !merge
 *.bag filter=lfs diff=lfs merge=lfs -text
+tests/policies/flash/fixtures/green_toy_motion_*.npz filter=lfs diff=lfs merge=lfs -text
+tests/policies/flash/fixtures/green_toy_kalman_recovery_*.npz filter=lfs diff=lfs merge=lfs -text
+# Full-frame recorded checkpoint for initial-pose visibility recovery.
+tests/policies/flash/fixtures/controller_visibility_recovery_*.npz filter=lfs diff=lfs merge=lfs -text
+# Compact lossless camera observations for sparse-motion/reacquisition regression.
+tests/policies/flash/fixtures/motion_recovery_20261117/*.npz filter=lfs diff=lfs merge=lfs -text
