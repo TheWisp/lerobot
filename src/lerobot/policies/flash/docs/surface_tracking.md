@@ -451,7 +451,7 @@ compute time rose from 231 ms with one object to 407 ms with two and 557 ms
 with three, or about 4.3, 2.5 and 1.8 processed updates/s. SAM mask time grew
 only from 24 to 34 ms; at that time each object's RGB matching and surface fit
 ran in sequence. [After sharing depth work, caching reference geometry and
-overlapping independent fits](../../../../../docs/proofs/flash-rgbd-registration/multi_object_optimized_timing.json),
+overlapping independent fits](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-rgbd-registration/multi_object_optimized_timing.json),
 24 distinct processed frames in the same stationary tray scene took a median
 277 ms, or 3.6 processed updates/s. The old and new samples were taken in
 different sessions, so this is an observed throughput change, not a paired
