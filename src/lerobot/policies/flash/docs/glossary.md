@@ -34,9 +34,8 @@ lost results. Predictions supply no new object surface. See the
 
 **One camera capture held in memory: a colour image, a depth image aligned pixel-for-pixel to
 it, and what is needed to turn its pixels into metric 3D points.** This is FLASH's `RGBDFrame`.
-It is not a row of a LeRobot dataset and is never written to one as such: the live path builds a
-frame from each camera read, and replay builds one from a recorded episode's colour and depth
-columns at one timestamp.
+It is not a row of a LeRobot dataset and is never written to one as such. A frame is built from
+one live camera read, or from a recorded episode's colour and depth columns at one timestamp.
 
 A frame carries the colour image (H×W×3, 8-bit) and depth image (H×W) on the same pixel grid;
 the camera intrinsics and the depth scale (`depth_m_per_unit`), which together convert a pixel
@@ -52,9 +51,7 @@ depth filters and a synchronized infrared pair for learned stereo depth.
 
 Code: [`RGBDFrame`](../observations.py#L16);
 [`LatestRGBDFrameStore`](../observations.py#L65) rejects a frame whose ID or capture time does
-not increase. The live surface worker builds frames at
-[`live_surface_worker.py`](../live_surface_worker.py#L258) and recorded-demo tracking at
-[`demo_tracking.py`](../demo_tracking.py#L100).
+not increase.
 
 ## Depth support
 
@@ -168,8 +165,9 @@ Design: [persistent coordinates](tracking_pipeline.md#what-persists-between-fram
 it was obtained, and which [RGB-D frame](#rgb-d-frame) it describes.** This is FLASH's
 `PoseEstimate`, the handoff from tracking to action execution.
 
-`evidence` is `observed`, `predicted` or `lost`, as defined under
-[Tracking loss and recovery](#tracking-loss-and-recovery); a lost estimate carries no pose.
+`evidence` is `observed` (measured in that frame), `predicted` (carried forward without a new
+measurement) or `lost` (no pose; the record refuses one); see
+[Tracking loss and recovery](#tracking-loss-and-recovery) for how the tracker decides.
 `source_time_s` and `source_frame_id` name the frame the pose describes, and `available_time_s`
 is when it was published, which can never be earlier. `translation_supported` and
 `rotation_supported` mark which position axes (robot-base X, Y, Z) and which rotation axes (the
