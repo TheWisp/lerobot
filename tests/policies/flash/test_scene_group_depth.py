@@ -67,8 +67,12 @@ def test_depth_rejects_only_contradicted_carried_members(observed, removed, meas
         current = scene(2, xyz[1:], np.arange(1, 40))
     else:
         xyz[0, 0] += 0.05
-        current = scene(2, xyz)
-    result = tracker.update(current, depth=evidence(frame(2, observed)))
+        # A stray measurement keeps its place for its split window; one point cannot split.
+        for index in (2, 3):
+            waiting = tracker.update(scene(index, xyz), depth=evidence(frame(index, observed)))
+            assert 0 in next(iter(waiting.groups.values())).ids and not waiting.depth_rejected_ids
+        current = scene(4, xyz)
+    result = tracker.update(current, depth=evidence(frame(current.frame_id, observed)))
     group = next(iter(result.groups.values()))
     assert (0 not in group.ids) == removed
     assert (0 in result.depth_rejected_ids) == removed
@@ -78,8 +82,24 @@ def test_depth_rejects_only_contradicted_carried_members(observed, removed, meas
     if measurement == "outlier":
         assert 0 in current.ids  # Rejection does not kill the current image track.
     # Unknown depth next frame must not resurrect a rejected prediction.
-    again = tracker.update(scene(3, points()[1:], np.arange(1, 40)), depth=evidence(frame(3)))
+    later = current.frame_id + 1
+    again = tracker.update(scene(later, points()[1:], np.arange(1, 40)), depth=evidence(frame(later)))
     assert (0 not in next(iter(again.groups.values())).ids) == removed
+
+
+def test_depth_check_keeps_a_departing_cohort_until_it_splits():
+    """Points leaving together are not erased at their old spot while their split is pending."""
+    tracker = established()
+    xyz = points()
+    cohort = np.argsort(xyz[:, 0])[:16]
+    xyz[cohort, 0] += 0.05
+    # The camera sees past every carried position, including the cohort's old spot.
+    for index in range(2, 5):
+        result = tracker.update(scene(index, xyz), depth=evidence(frame(index, 1.1)))
+        assert not result.depth_rejected_ids
+    assert len(result.groups) == 2
+    branch = next(g for g in result.groups.values() if set(g.ids.tolist()) & set(cohort.tolist()))
+    assert set(branch.ids.tolist()) == set(cohort.tolist()) and branch.confirmed
 
 
 def test_compare_current_carried_pixel_and_camera_z_after_group_and_camera_motion():

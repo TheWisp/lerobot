@@ -74,9 +74,9 @@ def benchmark(recording, repeats, *, interleave=False):
     original = SceneMotionGroups._reject_depth
     check_ms = []
 
-    def timed(self, *args):
+    def timed(self, *args, **kwargs):
         begin = time.perf_counter()
-        result = original(self, *args)
+        result = original(self, *args, **kwargs)
         check_ms.append((time.perf_counter() - begin) * 1000)
         return result
 

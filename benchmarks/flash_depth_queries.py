@@ -34,14 +34,14 @@ def benchmark(recording, repeats=101):
     reject_depth = SceneMotionGroups._reject_depth
     captured = []
 
-    def capture(tracker, depth, current):
+    def capture(tracker, depth, current, waiting=frozenset()):
         # Preserve group boundaries even when production submits a single batch.
         for group in tracker._groups.values():
-            ids = sorted(group.anchors.keys() - group.inliers)
+            ids = sorted(group.anchors.keys() - group.inliers - waiting)
             if ids:
                 points = move(np.array([group.anchors[i] for i in ids]), group.pose)
                 queries.append((depth, points))
-        return reject_depth(tracker, depth, current)
+        return reject_depth(tracker, depth, current, waiting)
 
     with (
         SearchPool(settings["config"]["shape"]["batch_query_workers"]) as pool,

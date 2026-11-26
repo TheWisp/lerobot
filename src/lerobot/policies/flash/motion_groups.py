@@ -492,6 +492,19 @@ class SceneMotionGroups:
                 self._absorb_rigid_parent_members(parent, branch, earliest, current)
                 ready = [i for i in ready if i in parent.anchors]
 
+    def _waiting(self, time):
+        """Measured departures still inside their split window.
+
+        Their split decision is pending, so the depth check must not erase
+        them at the spot they are leaving; a cohort must reach the split whole.
+        The re-vote may still hand them to a branch they are leaving with.
+        """
+        return {
+            i
+            for i, since in self._departing.items()
+            if time - since + 1e-9 < self.config.split_confirmation_s
+        }
+
     def _carry_uncertain(self):
         """Uncertain members follow their nearest measured pre-split neighbor.
 
@@ -541,11 +554,11 @@ class SceneMotionGroups:
                 parent.departed_ids.add(i)
                 self._departed_from[i] = (parent_id, anchor)
 
-    def _reject_depth(self, depth, current):
+    def _reject_depth(self, depth, current, waiting=frozenset()):
         """Retire contradicted predictions after this frame's group motion is known."""
         pending, predictions = [], []
         for group in self._groups.values():
-            ids = sorted(group.anchors.keys() - group.inliers)
+            ids = sorted(group.anchors.keys() - group.inliers - waiting)
             if not ids:
                 continue
             pending.append((group, ids))
@@ -714,7 +727,9 @@ class SceneMotionGroups:
             if i in self._seen and origin[0] in self._groups and i not in self._groups[origin[0]].anchors
         }
         stages.append(clock.perf_counter())
-        rejected = self._reject_depth(depth, current) if depth is not None else frozenset()
+        rejected = (
+            self._reject_depth(depth, current, self._waiting(time)) if depth is not None else frozenset()
+        )
         stages.append(clock.perf_counter())
         views = {}
         for gid, group in self._groups.items():
