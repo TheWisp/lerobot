@@ -414,28 +414,9 @@ class SceneMotionGroups:
                 if i in self._departing
                 and time - self._departing[i] + 1e-9 >= self.config.split_confirmation_s
             )
-            # A point can miss a global rigid fit because of depth noise or
-            # rotation while still moving with its nearby group members.
-            # Only locally unsupported outliers can seed another body.
-            core = sorted(parent.inliers & current.keys())
-            if core and ready:
-                neighbors = cKDTree(np.array([parent.anchors[i] for i in core])).query(
-                    np.array([parent.anchors[i] for i in ready]), k=min(8, len(core))
-                )[1]
-                neighbor_rows = np.atleast_2d(neighbors)
-                if len(core) == 1:
-                    neighbor_rows = neighbor_rows.T
-                local_error = []
-                for i, row in zip(ready, neighbor_rows, strict=True):
-                    nearby = [core[int(j)] for j in np.atleast_1d(row)]
-                    displacement = current[i] - parent.anchors[i]
-                    nearby_displacement = np.array([current[j] - parent.anchors[j] for j in nearby])
-                    local_error.append(np.median(np.linalg.norm(nearby_displacement - displacement, axis=1)))
-                ready = [
-                    i
-                    for i, error in zip(ready, local_error, strict=True)
-                    if error > self.config.split_tolerance_m
-                ]
+            # Departures that only miss the parent's fit slightly cannot split
+            # it: the cohort below must share its own motion and differ from
+            # the parent's by more than the fit admits.
             while len(ready) >= self.config.min_inliers:
                 source = np.array([parent.anchors[i] for i in ready])
                 target = np.array([current[i] for i in ready])
