@@ -50,6 +50,27 @@ def test_causal_points_recover_metric_motion_and_abstain_without_depth(image_sca
     assert recovered.inliers >= 12
 
 
+def test_tracks_drifting_off_the_far_image_edge_are_dropped_not_fatal():
+    """A track within half a pixel of the right edge has no depth pixel.
+
+    With no depth-support margin it used to pass the depth check on a
+    clipped pixel, then fail unprojection, ending the object's tracking.
+    """
+    gray = np.random.default_rng(5).integers(0, 256, (96, 128), dtype=np.uint8)
+    rgb = np.repeat(gray[:, :, None], 3, axis=2)
+    tracker = CausalRigidPointTracker(max_points=400, min_inliers=12, depth_support_radius_px=0)
+    tracker.seed(frame(rgb, 0), np.ones(gray.shape, dtype=bool))
+    for i in range(1, 40):
+        shift = 0.37 * i
+        moved = cv2.warpAffine(
+            rgb, np.float32([[1, 0, shift], [0, 1, 0]]), (128, 96), borderMode=cv2.BORDER_REFLECT
+        )
+        motion = tracker.update(frame(moved, i / 30))
+        assert motion.base_motion_from_seed is not None
+        center = motion.base_motion_from_seed @ np.array([0.0, 0.0, 1.0, 1.0])
+        np.testing.assert_allclose(center[:3], [shift / 100, 0.0, 1.0], atol=0.002)
+
+
 def test_causal_points_reject_unobserved_frame_gap():
     gray = np.random.default_rng(2).integers(0, 255, (96, 96), dtype=np.uint8)
     rgb = np.repeat(gray[:, :, None], 3, axis=2)

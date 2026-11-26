@@ -16,6 +16,7 @@ from .depth_quality import depth_support_mask
 from .image_matching import LKMatchConfig, prepare_image_pair
 from .observations import RGBDFrame
 from .registration import DegenerateRegistrationError, register_object, transform_points, unproject_pixels
+from .shared_image_tracking import pixels_inside
 
 
 @dataclass(frozen=True)
@@ -136,7 +137,10 @@ class CausalRigidPointTracker:
         self._last_source_time_s = frame.source_time_s
         live = np.flatnonzero(self._valid)
         if len(live):
-            px = self._full_pixels(self._uv[live], frame.depth.shape)
+            # A track within half a pixel of the far edge rounds outside the
+            # depth image, so it has no depth sample this frame.
+            px, inside = pixels_inside(self._uv[live] / self.image_scale, frame.depth.shape)
+            live, px = live[inside], px[inside]
             depth_supported = depth_support_mask(frame.depth, radius_px=self.depth_support_radius_px)
             depth_ok = depth_supported[px[:, 1], px[:, 0]]
             if mask is not None:
