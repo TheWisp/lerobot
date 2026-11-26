@@ -1,6 +1,6 @@
 # FLASH scene motion groups — evidence
 
-Rendered on 2026-11-25 from three recorded fixtures that the scene motion
+Rendered on 2026-11-26 from three recorded fixtures that the scene motion
 groups PR ships, using that PR's own functions. Only the image-matching
 fixture stores colour images; the group replay stores point positions only,
 and the depth fixture stores one depth image. These record one run at one
@@ -24,11 +24,11 @@ Measured on these inputs:
   points moved a median 5.4 mm while the rest of the table moved 0.0 mm. With
   the ring's measurements withheld for eight updates from frames 233, 530 and
   806, the group predicts 1,020 recorded ring positions with a 1.1 mm median
-  and 7.0 mm 95th-percentile error.
-- Frame 5381: 805 points measured; 640 group members carried. Depth removes
-  66 of them, including all 15 the fixture names; at those 66 pixels the
-  camera measures a surface a median 30 mm (at least 7 mm) farther than the
-  predicted point. The other 574 are kept.
+  and 8.0 mm 95th-percentile error.
+- Frame 5381: 805 points measured; 631 group members carried. Depth removes
+  63 of them, including all 15 the fixture names; at those 63 pixels the
+  camera measures a surface a median 32 mm (at least 8 mm) farther than the
+  predicted point. The other 568 are kept.
 
 Re-render with `render_286.py` from the landing-build tooling:
 `python render_286.py <tree with src/> tests/policies/flash/fixtures <out>`.
