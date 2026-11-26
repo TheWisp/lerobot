@@ -356,6 +356,93 @@ def test_group_motion_support_cannot_exceed_group_birth_quorum():
         GroupConfig(min_inliers=3, min_motion_points=4)
 
 
+def table_grid(step, hole):
+    g = np.arange(-0.15, 0.1501, step)
+    x, y = np.meshgrid(g, g)
+    table = np.column_stack((x.ravel(), y.ravel(), np.full(x.size, 1.0)))
+    return table[~((np.abs(table[:, 0]) <= hole[0]) & (np.abs(table[:, 1]) <= hole[1]))]
+
+
+def test_points_recorded_after_a_split_enter_groups_where_they_are():
+    """A split's coordinates describe only the points present at that split.
+
+    The ring is pushed and splits from the table. While the ring's own
+    points are covered, new points seen on the resting ring join the table.
+    They are then covered during a second push. A later hand-over must not
+    convert them the split's way (that applied the first push twice); once
+    they are seen again and the ring moves, they go with it.
+    """
+    table = table_grid(0.02, (0.09, 0.045))  # no texture where the ring travels
+    angles = np.linspace(0, 2 * np.pi, 17)[:-1]
+    ring = np.column_stack((np.cos(angles) * 0.02 - 0.03, np.sin(angles) * 0.02, np.full(16, 0.99)))
+    late = np.column_stack(
+        (np.cos(angles[::2] + 0.2) * 0.012 - 0.03, np.sin(angles[::2] + 0.2) * 0.012, np.full(8, 0.99))
+    )
+    table_ids, ring_ids = np.arange(len(table)), len(table) + np.arange(16)
+    late_ids = ring_ids[-1] + 1 + np.arange(8)
+    tracker = SceneMotionGroups(GroupConfig())
+    owners, entries = {}, []
+    for i in range(int(4.8 * 30) + 1):
+        t = i / 30
+        shift = np.array([0.025 * sum(min(max((t - s) / 0.3, 0), 1) for s in (1.0, 3.0, 4.5)), 0, 0])
+        ids, xyz = [table_ids], [table]
+        if not 1.6 <= t < 3.0:
+            ids.append(ring_ids)
+            xyz.append(ring + shift)
+        if 1.6 <= t < 3.0 or t >= 3.5:
+            ids.append(late_ids)
+            xyz.append(late + shift)
+        ids = np.concatenate(ids)
+        result = tracker.update(SceneTracks(i, t, ids, np.zeros((len(ids), 2), int), np.vstack(xyz)))
+        for group in result.groups.values():
+            for point_id, position in zip(map(int, group.ids), group.base_xyz, strict=True):
+                if point_id in late_ids:
+                    if owners.get(point_id, group.id) != group.id:
+                        entries.append(np.linalg.norm(position - (late[point_id - late_ids[0]] + shift)))
+                    owners[point_id] = group.id
+    assert entries
+    assert max(entries) <= tracker.config.merge_tolerance_m
+    mapping = memberships(result)
+    assert all(mapping[int(i)] == mapping[int(ring_ids[0])] != mapping[0] for i in late_ids)
+
+
+@pytest.mark.parametrize("hidden", ["beside the object's old spot", "the whole still scene"])
+def test_still_points_hidden_after_an_object_left_stay_still(hidden):
+    """Being near where a departed point was at the split is no evidence later.
+
+    Neither is having no measured member left: a fully covered still scene
+    is not handed to the object that left it.
+    """
+    table = table_grid(0.01, (0.025, 0.025))
+    o = np.arange(-0.02, 0.0201, 0.01)
+    ox, oy = np.meshgrid(o, o)
+    obj = np.column_stack((ox.ravel(), oy.ravel(), np.full(ox.size, 0.99)))
+    if hidden == "the whole still scene":
+        covered = np.arange(len(table))
+    else:
+        covered = np.flatnonzero(
+            (table[:, 0] < -0.025) & (table[:, 0] > -0.045) & (np.abs(table[:, 1]) <= 0.03)
+        )
+    ids = np.arange(len(table) + len(obj))
+    tracker = SceneMotionGroups(GroupConfig())
+    for i in range(int(3.5 * 30) + 1):
+        t = i / 30
+        xyz = np.vstack((table, obj))
+        xyz[len(table) :, 0] += min(max(0.0, t - 1.0) * 0.2, 0.10)
+        xyz[len(table) :, 1] += max(0.0, t - 1.5) * 0.03  # keeps moving, so it never rejoins
+        visible = np.ones(len(xyz), bool)
+        visible[covered] = t < 3.0
+        result = tracker.update(
+            SceneTracks(i, t, ids[visible], np.zeros((visible.sum(), 2), int), xyz[visible])
+        )
+    mapping = memberships(result)
+    moving = mapping[len(table)]
+    assert all(mapping[int(i)] != moving for i in covered)
+    for group in result.groups.values():
+        rows = np.isin(group.ids, covered)
+        np.testing.assert_allclose(group.base_xyz[rows], table[group.ids[rows]], atol=1e-9)
+
+
 def test_new_measured_motion_keeps_hidden_groups():
     """A hidden object's group is not traded for a new one; point memory bounds both."""
     points = cloud(48)

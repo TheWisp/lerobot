@@ -193,10 +193,15 @@ class SceneMotionGroups:
         self._merge_since = {}
         self._departing = {}
         self._joining = {}
+        # Leaving members being re-placed: [own id, position in own frame,
+        # other group id, position in its frame, since, with own, with other].
+        self._replacing = {}
         self._free_since = {}
         # Last group coordinates of measured departures. This is scene-only
         # lineage: it lets a measured split carry nearby hidden point IDs.
         self._departed_from = {}
+        # Groups founded during the current update.
+        self._founded = set()
         self._history = deque()
         self._next_id = 0
         self._time = None
@@ -211,24 +216,41 @@ class SceneMotionGroups:
             confirmed or self.config.support_confirmation_s == 0,
         )
         self._next_id += 1
+        self._founded.add(group.id)
         group.supported = True
         group.last_supported = time
         group.inliers = set(anchors)
         self._groups[group.id] = group
         return group
 
-    def _join_candidates(self, free, current, previous_poses, time):
-        """Only measured, persistent co-motion may attach a new point to a group."""
-        if not free or not self._groups:
-            return set()
-        eligible = set()
-        group_points = {}
+    def _visible_trees(self, current, previous_poses):
+        trees = {}
         for group in self._groups.values():
             if not group.supported or group.id not in previous_poses:
                 continue
             visible = [current[i] for i in group.inliers if i in current]
             if visible:
-                group_points[group.id] = cKDTree(np.asarray(visible))
+                trees[group.id] = cKDTree(np.asarray(visible))
+        return trees
+
+    def _moving_with(self, i, current, previous_poses, trees, exclude=None):
+        """Nearest group whose last frame-to-frame motion carries the point."""
+        choices = []
+        for gid, tree in trees.items():
+            if gid == exclude:
+                continue
+            delta = self._groups[gid].pose @ np.linalg.inv(previous_poses[gid])
+            predicted = move(self._previous[i][None], delta)[0]
+            if np.linalg.norm(predicted - current[i]) <= self.config.merge_tolerance_m:
+                choices.append((float(tree.query(current[i])[0]), gid))
+        return min(choices)[1] if choices else None
+
+    def _join_candidates(self, free, current, previous_poses, time):
+        """Only measured, persistent co-motion may attach a new point to a group."""
+        if not free or not self._groups:
+            return set()
+        eligible = set()
+        trees = self._visible_trees(current, previous_poses)
         for i in free:
             pending = self._joining.get(i)
             if pending is not None:
@@ -247,22 +269,67 @@ class SceneMotionGroups:
                 del self._joining[i]
             if i not in self._previous:
                 continue
-            choices = []
-            for gid, tree in group_points.items():
-                group = self._groups[gid]
-                delta = group.pose @ np.linalg.inv(previous_poses[gid])
-                predicted = move(self._previous[i][None], delta)[0]
-                error = np.linalg.norm(predicted - current[i])
-                if error <= self.config.merge_tolerance_m:
-                    choices.append((float(tree.query(current[i])[0]), gid))
-            if choices:
-                _, gid = min(choices)
+            gid = self._moving_with(i, current, previous_poses, trees)
+            if gid is not None:
                 group = self._groups[gid]
                 anchor = move(current[i][None], np.linalg.inv(group.pose))[0]
                 self._joining[i] = (gid, anchor, time)
                 self._free_since.pop(i, None)
                 eligible.add(i)
         return eligible
+
+    def _replace_leaving(self, leaving, owner, current, previous_poses, time):
+        """Re-place measured members that no longer fit their group's map.
+
+        ``leaving`` are members no split took that have missed their group's
+        fit for the split window. Over the join window each must keep moving
+        with one group: its own (its remembered position was stale) or
+        another one (it is on that body now). It is then anchored where it is
+        measured, in that group. Two still groups explain a still point
+        equally, so its own group is preferred. A point that follows neither
+        stays an unmeasured prediction: isolated noise never relocates it.
+        """
+        tolerance = self.config.merge_tolerance_m
+        self._replacing = {i: p for i, p in self._replacing.items() if i in leaving and p[0] == owner[i]}
+        trees = None
+        for i in leaving:
+            own = self._groups[owner[i]]
+            pending = self._replacing.get(i)
+            if pending is None:
+                if i not in self._previous or own.id not in previous_poses:
+                    continue
+                if trees is None:
+                    trees = self._visible_trees(current, previous_poses)
+                gid = self._moving_with(i, current, previous_poses, trees, exclude=own.id)
+                to_own = move(current[i][None], np.linalg.inv(own.pose))[0]
+                to_other = (
+                    None if gid is None else move(current[i][None], np.linalg.inv(self._groups[gid].pose))[0]
+                )
+                self._replacing[i] = [own.id, to_own, gid, to_other, time, True, gid is not None]
+                continue
+            _, to_own, gid, to_other, since, with_own, with_other = pending
+            with_own &= np.linalg.norm(move(to_own[None], own.pose)[0] - current[i]) <= tolerance
+            other = self._groups.get(gid)
+            with_other &= (
+                other is not None
+                and other.supported
+                and np.linalg.norm(move(to_other[None], other.pose)[0] - current[i]) <= tolerance
+            )
+            pending[5:] = [with_own, with_other]
+            if not (with_own or with_other):
+                del self._replacing[i]
+            elif time - since + 1e-9 >= self.config.merge_confirmation_s:
+                del self._replacing[i]
+                self._departing.pop(i, None)
+                if with_own:
+                    own.anchors[i] = move(current[i][None], np.linalg.inv(own.pose))[0]
+                    own.inliers.add(i)
+                    continue
+                own.departed_ids.add(i)
+                self._departed_from[i] = (own.id, own.anchors.pop(i))
+                own.inliers.discard(i)
+                other.anchors[i] = to_other
+                other.inliers.add(i)
 
     def _birth_from_history(self, free, current, time):
         """Found a body only from the same measured IDs moving rigidly over the split window."""
@@ -489,6 +556,12 @@ class SceneMotionGroups:
     def _carry_uncertain(self):
         """Uncertain members follow their nearest measured pre-split neighbor.
 
+        Decided once, in the frame a branch is founded: only then do the
+        parent's coordinates and the departures' recorded coordinates describe
+        the same moment. A point recorded in the parent later has no pre-split
+        position, so converting it the split's way would apply the branch's
+        motion twice; later membership changes need a measurement.
+
         Only measured departures that now belong to another measured body can
         establish a branch. Distances are in the former shared group frame,
         never between already separated bodies or between predicted points.
@@ -496,6 +569,8 @@ class SceneMotionGroups:
         """
         branches = {}
         for target in self._groups.values():
+            if target.id not in self._founded:
+                continue
             for i in sorted(target.inliers):
                 origin = self._departed_from.get(i)
                 if origin is not None and origin[0] != target.id and origin[0] in self._groups:
@@ -575,6 +650,7 @@ class SceneMotionGroups:
         if len(np.unique(ids)) != len(ids) or not np.isfinite(xyz).all():
             raise ValueError("group input requires unique IDs and finite measured points")
         stages = [clock.perf_counter()]
+        self._founded = set()
         # Bound the whole state, including current measurements and hidden IDs.
         order = np.argsort(ids, kind="stable")[: self.config.max_points]
         current = {int(ids[i]): xyz[i].copy() for i in order}
@@ -631,9 +707,6 @@ class SceneMotionGroups:
                     self._departing.setdefault(i, time)
 
         stages.append(clock.perf_counter())
-        # Existing measured branches get first claim on uncertain neighbors;
-        # otherwise the same body can be rediscovered as another new group.
-        self._carry_uncertain()
         self._split_confirmed(current, time)
         stages.append(clock.perf_counter())
 
@@ -644,9 +717,17 @@ class SceneMotionGroups:
         }
         # New IDs first get a chance to join a nearby, measured group. A point
         # found free for one frame does not immediately found a new body.
-        owned = {i for group in self._groups.values() for i in group.anchors}
-        free = sorted((current.keys() & self._previous.keys()) - owned)
+        owner = {i: gid for gid, group in self._groups.items() for i in group.anchors}
+        free = sorted((current.keys() & self._previous.keys()) - owner.keys())
         joining = self._join_candidates(free, current, previous_poses, time)
+        # Measured members no split took, still missing their group's fit
+        # after the split window, are re-placed where they are measured.
+        leaving = sorted(
+            i
+            for i, since in self._departing.items()
+            if i in owner and i in current and time - since + 1e-9 >= self.config.split_confirmation_s
+        )
+        self._replace_leaving(leaving, owner, current, previous_poses, time)
         unexplained = [i for i in free if i not in joining]
         for i in unexplained:
             self._free_since.setdefault(i, time)
