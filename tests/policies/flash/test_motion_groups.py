@@ -277,11 +277,13 @@ def test_new_ids_join_but_do_not_reuse_a_disappeared_points_identity():
 
 
 def test_memory_is_bounded_by_capacity():
-    tracker = SceneMotionGroups(GroupConfig(max_points=100, max_groups=4, support_confirmation_s=0))
+    config = GroupConfig(max_points=100, support_confirmation_s=0)
+    tracker = SceneMotionGroups(config)
     points = cloud(40)
     for i in range(24):
         result = tracker.update(scene(i, points, np.arange(40) + 40 * (i // 3)))
-        assert result.point_count <= 100 and len(result.groups) <= 4
+        # Every group keeps min_motion_points remembered IDs, so point memory bounds groups.
+        assert result.point_count <= 100 and len(result.groups) <= 100 // config.min_motion_points
     assert all(i >= 240 for i in memberships(result))
 
 
@@ -332,7 +334,6 @@ def test_departure_snapshot_is_immutable_and_history_clears(ending):
         ("min_inliers", 2),
         ("min_motion_points", 2),
         ("max_points", 0),
-        ("max_groups", 0),
         ("motion_hypotheses", 0),
         ("support_confirmation_s", -1),
         ("split_confirmation_s", -1),
@@ -346,8 +347,8 @@ def test_bad_config_rejected(key, value):
         GroupConfig(**{key: value})
 
 
-def test_old_hidden_expiry_setting_is_ignored_when_loading_recorded_settings():
-    assert GroupConfig.from_dict({"max_hidden_s": 0.01}) == GroupConfig()
+def test_retired_group_settings_are_ignored_when_loading_recorded_settings():
+    assert GroupConfig.from_dict({"max_hidden_s": 0.01, "max_groups": 32}) == GroupConfig()
 
 
 def test_group_motion_support_cannot_exceed_group_birth_quorum():
@@ -355,19 +356,42 @@ def test_group_motion_support_cannot_exceed_group_birth_quorum():
         GroupConfig(min_inliers=3, min_motion_points=4)
 
 
-def test_dormant_groups_cannot_starve_new_measured_motion_at_capacity():
+def test_new_measured_motion_keeps_hidden_groups():
+    """A hidden object's group is not traded for a new one; point memory bounds both."""
     points = cloud(48)
-    tracker = SceneMotionGroups(GroupConfig(max_groups=1, support_confirmation_s=0))
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
     tracker.update(scene(0, points))
     tracker.update(scene(1, points))
     old = next(iter(tracker.frame.groups))
     tracker.update(scene(2, points, np.arange(100, 148)))
     for i in range(3, 6):
         result = tracker.update(scene(i, points + 0.03, np.arange(100, 148)))
-    assert len(result.groups) == 1
-    group = next(iter(result.groups.values()))
-    assert group.id != old and group.supported
-    assert set(group.ids) == set(range(100, 148))
+    assert len(result.groups) == 2
+    hidden = result.groups[old]
+    assert not hidden.supported and set(hidden.ids) == set(range(48))
+    (new,) = (g for g in result.groups.values() if g.id != old)
+    assert new.supported and set(new.ids) == set(range(100, 148))
+    # Only measured groups are compared for merging.
+    assert result.diagnostics["merge_pairs"] == 0
+
+
+def test_update_reports_stage_times_and_measured_pair_count():
+    points = cloud(80)
+    tracker = SceneMotionGroups(GroupConfig(support_confirmation_s=0))
+    for i in range(8):
+        moved = points.copy()
+        moved[:40, 0] += 0.01 * max(0, i - 1)
+        result = tracker.update(scene(i, moved))
+    assert len(result.groups) == 2 and all(g.supported for g in result.groups.values())
+    stages = {k: v for k, v in result.diagnostics.items() if k != "merge_pairs"}
+    assert set(stages) == {"fit_ms", "split_ms", "new_groups_ms", "merge_ms", "depth_check_ms", "output_ms"}
+    assert all(v >= 0 for v in stages.values())
+    assert result.diagnostics["merge_pairs"] == 1
+    # Hide the second group: only measured groups are compared for merging.
+    moved[:40, 0] += 0.01
+    result = tracker.update(scene(8, moved[:40], np.arange(40)))
+    assert len(result.groups) == 2 and sum(g.supported for g in result.groups.values()) == 1
+    assert result.diagnostics["merge_pairs"] == 0
 
 
 def test_recorded_controller_and_tray_do_not_create_runaway_groups():

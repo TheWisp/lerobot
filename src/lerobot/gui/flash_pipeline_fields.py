@@ -189,13 +189,6 @@ def pipeline_fields():
                     {"min": 3, "step": 1},
                 ),
                 (
-                    "group_experiment.max_groups",
-                    "Scene group limit",
-                    "int",
-                    "Maximum motion groups retained across the scene.",
-                    {"min": 1, "step": 1},
-                ),
-                (
                     "surface_experiment.group_association_min_points",
                     "New object-to-group relation points",
                     "int",

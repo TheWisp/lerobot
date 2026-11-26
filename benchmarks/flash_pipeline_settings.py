@@ -98,7 +98,6 @@ OPTION_HELP = {
     "grow": "Enable measured surface additions. Benchmark fixed/growing methods override this per variant.",
     "retain_unobserved_pose": "Keep last world pose when all observations/predictions disappear. Group benchmark variants set this true.",
     "group_experiment.max_points": "Maximum measured and hidden point identities retained across the whole scene.",
-    "max_groups": "Maximum scene motion groups; actively measured groups take precedence over dormant groups.",
     "motion_hypotheses": "Maximum batched rigid-motion hypotheses per group solve.",
     "max_hidden_s": "Maximum time to retain a point identity without another measurement, seconds.",
     "min_inliers": "Minimum measured point pairs that can form a new scene group.",

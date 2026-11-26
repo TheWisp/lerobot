@@ -668,9 +668,6 @@ def test_typed_pipeline_form_submits_to_real_start_schema(gui_page):
     scene_points = dialog.get_by_label("Tracked scene point limit", exact=True)
     assert scene_points.input_value() == "4096"
     scene_points.fill("2048")
-    scene_groups = dialog.get_by_label("Scene group limit", exact=True)
-    assert scene_groups.input_value() == "32"
-    scene_groups.fill("24")
     supports = dialog.get_by_label("Separate protrusion patches", exact=True)
     assert supports.input_value() == "3"
     supports.fill("4")
@@ -699,7 +696,6 @@ def test_typed_pipeline_form_submits_to_real_start_schema(gui_page):
 
     assert VisionPipelineConfig.from_dict(settings["config"]).shape.free_space_min_supports == 4
     assert settings["group_experiment"]["max_points"] == 2048
-    assert settings["group_experiment"]["max_groups"] == 24
     assert settings["surface_experiment"]["uncertainty"]["enabled"] is False
     assert settings["surface_experiment"]["uncertainty"]["unmeasured_rotation_std_deg_sqrt_s"] == 12
     page.wait_for_function(

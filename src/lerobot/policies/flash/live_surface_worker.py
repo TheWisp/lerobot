@@ -522,6 +522,8 @@ def run(
                         "mask_ms": row["mask_ms"],
                         "depth_ms": depth_ms,
                         "image_matching_ms": row.get("scene_point_tracking_ms", 0.0),
+                        "scene_groups_ms": row.get("group_update_ms", 0.0),
+                        "scene_group_stages": row.get("scene_groups", {}).get("stages", {}),
                         "display_ms": (time.perf_counter() - render_started) * 1000,
                         "skipped_camera_frames": max(0, frame.frame_id - last_id - 1) if last_id >= 0 else 0,
                         "age_ms": (time.perf_counter() - frame.source_time_s) * 1000,

@@ -389,6 +389,7 @@ class SurfaceFrameSession:
                 "points": group_frame.point_count,
                 "supported": sum(g.supported for g in group_frame.groups.values()),
                 "confirmed": sum(g.confirmed for g in group_frame.groups.values()),
+                "stages": dict(group_frame.diagnostics),
             }
             row["scene_group_tracks"] = scene_group_record(group_frame, scene, frame)
         match_row = {"frame": frame.frame_id, "objects": {}}

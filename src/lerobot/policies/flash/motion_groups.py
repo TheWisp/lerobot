@@ -4,6 +4,7 @@ Each frame: fit visible members, confirm coherent splits, discover new groups,
 merge sustained co-movement, then expose measured/predicted points.
 """
 
+import time as clock
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -28,7 +29,6 @@ class GroupConfig:
     merge_tolerance_m: float = 0.003
     merge_confirmation_s: float = 0.8
     max_points: int = 4096
-    max_groups: int = 32
     motion_hypotheses: int = 48
 
     def __post_init__(self):
@@ -36,7 +36,6 @@ class GroupConfig:
             ("min_inliers", 3),
             ("min_motion_points", 3),
             ("max_points", 3),
-            ("max_groups", 1),
             ("motion_hypotheses", 1),
         ):
             value = getattr(self, name)
@@ -59,10 +58,12 @@ class GroupConfig:
 
     @classmethod
     def from_dict(cls, values):
-        # Old recordings may carry this retired setting. It no longer changes
-        # retention: a hidden member remains until a split, depth contradiction or capacity eviction.
+        # Old recordings may carry these retired settings. A hidden member
+        # remains until a split, depth contradiction or point-memory eviction;
+        # groups need min_motion_points remembered IDs, so max_points bounds them.
         values = dict(values)
         values.pop("max_hidden_s", None)
+        values.pop("max_groups", None)
         return cls(**values)
 
 
@@ -103,6 +104,9 @@ class GroupFrame:
     merges: Mapping[int, tuple[int, np.ndarray]] = field(default_factory=lambda: MappingProxyType({}))
     # Memberships rejected at their carried positions in this frame, not lost LK IDs.
     depth_rejected_ids: frozenset[int] = frozenset()
+    # Wall time per update stage (ms) and measured group pairs the merge check
+    # compared. The pair count grows with the square of measured groups.
+    diagnostics: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass
@@ -276,12 +280,6 @@ class SceneMotionGroups:
             )
         )
         while len(ready) >= self.config.min_inliers:
-            if len(self._groups) >= self.config.max_groups:
-                dormant = [g for g in self._groups.values() if not g.supported]
-                if not dormant:
-                    break
-                expired = min(dormant, key=lambda g: (g.confirmed, g.last_supported, g.id))
-                del self._groups[expired.id]
             source = np.array([earliest[i] for i in ready])
             target = np.array([current[i] for i in ready])
             fitted = fit_point_motion(source, target, self.config)
@@ -481,8 +479,6 @@ class SceneMotionGroups:
                         np.array([parent.anchors[int(i)] for i in selected]),
                         np.array([current[int(i)] for i in selected]),
                     )
-                if len(self._groups) >= self.config.max_groups:
-                    break
                 anchors = {int(i): parent.anchors.pop(int(i)) for i in selected}
                 branch = self._new(anchors, pose, time, confirmed=parent.confirmed)
                 branch.residual = float(np.sqrt(np.mean(residual[keep] ** 2)))
@@ -584,6 +580,7 @@ class SceneMotionGroups:
         xyz = np.asarray(scene.base_xyz, float)
         if len(np.unique(ids)) != len(ids) or not np.isfinite(xyz).all():
             raise ValueError("group input requires unique IDs and finite measured points")
+        stages = [clock.perf_counter()]
         # Bound the whole state, including current measurements and hidden IDs.
         order = np.argsort(ids, kind="stable")[: self.config.max_points]
         current = {int(ids[i]): xyz[i].copy() for i in order}
@@ -639,10 +636,12 @@ class SceneMotionGroups:
                 else:
                     self._departing.setdefault(i, time)
 
+        stages.append(clock.perf_counter())
         # Existing measured branches get first claim on uncertain neighbors;
         # otherwise the same body can be rediscovered as another new group.
         self._carry_uncertain()
         self._split_confirmed(current, time)
+        stages.append(clock.perf_counter())
 
         # Existing groups need enough members to measure motion; only birth
         # requires the larger new-group consensus above.
@@ -662,11 +661,13 @@ class SceneMotionGroups:
         self._joining = {i: candidate for i, candidate in self._joining.items() if i in current}
         self._free_since = {i: since for i, since in self._free_since.items() if i in current}
         self._departing = {i: since for i, since in self._departing.items() if i in self._seen}
+        stages.append(clock.perf_counter())
 
         # Compare relative motion at the joining body's actual points. Testing
         # its noisy rotation across the entire distant scene invents motion.
         merge_next = {}
         merges = {}
+        merge_pairs = 0
         keys = sorted(self._groups)
         for ai, aid in enumerate(keys):
             if aid not in self._groups:
@@ -680,6 +681,7 @@ class SceneMotionGroups:
                 b = self._groups[bid]
                 if not b.supported:
                     continue
+                merge_pairs += 1
                 relative = np.linalg.inv(a.pose) @ b.pose
                 baseline, last, since = self._merge_since.get(
                     (aid, bid), (relative.copy(), relative.copy(), time)
@@ -711,7 +713,9 @@ class SceneMotionGroups:
             for i, origin in self._departed_from.items()
             if i in self._seen and origin[0] in self._groups and i not in self._groups[origin[0]].anchors
         }
+        stages.append(clock.perf_counter())
         rejected = self._reject_depth(depth, current) if depth is not None else frozenset()
+        stages.append(clock.perf_counter())
         views = {}
         for gid, group in self._groups.items():
             # Diagnostic provenance only: it never participates in fitting,
@@ -743,7 +747,20 @@ class SceneMotionGroups:
                 frozenset(group.departed_ids),
             )
         self._previous, self._time = current, time
+        stages.append(clock.perf_counter())
+        names = ("fit_ms", "split_ms", "new_groups_ms", "merge_ms", "depth_check_ms", "output_ms")
+        diagnostics = {
+            name: 1000 * (end - start)
+            for name, start, end in zip(names, stages[:-1], stages[1:], strict=True)
+        }
+        diagnostics["merge_pairs"] = merge_pairs
         self.frame = GroupFrame(
-            scene.frame_id, time, MappingProxyType(views), len(self._seen), MappingProxyType(merges), rejected
+            scene.frame_id,
+            time,
+            MappingProxyType(views),
+            len(self._seen),
+            MappingProxyType(merges),
+            rejected,
+            MappingProxyType(diagnostics),
         )
         return self.frame

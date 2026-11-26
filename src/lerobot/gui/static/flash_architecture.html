@@ -1265,12 +1265,12 @@
             <p><b>Gate:</b> four visible members can update an existing group's motion; forming a new group needs twelve agreeing measured point pairs. These are current default settings, not fixed mathematical requirements.
               A split needs a coherently moving set of measured points that disagree for the split duration;
               a confirmed split also transfers measured parent points whose pairwise distances are better preserved by the branch. Hidden points follow nearby measured departures. Independent points or groups join only after the longer co-motion duration.
-              Missing points retain predicted positions until capacity eviction, but do not measure motion.</p>
+              Missing points retain predicted positions until point-memory eviction, but do not measure motion.</p>
             <p><b>Tune:</b> <code>fit_threshold_m</code>, <code>min_inliers</code>, <code>min_motion_points</code>,
               <code>split_tolerance_m</code>, <code>split_confirmation_s</code>,
               <code>merge_tolerance_m</code>, <code>merge_confirmation_s</code>,
               <code>support_confirmation_s</code>,
-              <code>max_points</code>, <code>max_groups</code>, <code>motion_hypotheses</code>.</p>
+              <code>max_points</code>, <code>motion_hypotheses</code>.</p>
           </article>
           <article id="metric-fit">
             <h3>Surface fit · quality within the budget</h3>
