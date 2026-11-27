@@ -303,7 +303,12 @@ distinction is why it stays within VRAM on an indefinite stream:
 
 - **Tier 1 — detect → seed.** The image detector turns each text concept into one mask: the **largest
   instance** of that concept on the current frame (`max(masks, key=area)`). This seeds Tier 2, and re-seeds
-  to recover an object the tracker has lost.
+  to recover an object the tracker has lost. An object is lost when its tracker mask has no pixels or its
+  score falls under the lost threshold — the score alone is not trusted, because the tracker kept scoring a
+  cube hidden under a gamepad as present while drawing nothing. On recovery, a detector instance that is the
+  region another concept already holds is skipped before the size rule (the detector offered the tracked
+  gamepad for "green cube"), so a name never moves onto a tracked neighbour; a part of a held object (a
+  gripper on its arm) shares too little of it to be skipped, so nested concepts still recover.
 - **Tier 2 — track → propagate.** A geometric video tracker carries each seeded object frame-to-frame
   (cheap — no per-frame text). Every `FLUSH_EVERY` (150) frames the session is **rebuilt** from the current
   masks; rebuilding (never editing the memory bank in place) is what keeps GPU memory **flat** instead of
