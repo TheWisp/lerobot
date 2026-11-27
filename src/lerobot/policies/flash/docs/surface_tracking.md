@@ -1,5 +1,7 @@
 # RGB-D surface tracking in FLASH
 
+Status: the pose publication, inference workers, camera debugger and live launch described here were removed on 2026-11-27; [b2a7399ff](https://github.com/TheWisp/lerobot/tree/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash) is the last commit that has them. `SurfaceTrackingSession` itself remains: `SurfaceFrameSession` runs it as one of its surface methods.
+
 This describes the retained implementation. The proposed replacement is the
 [growing-surface tracking pipeline](tracking_pipeline.md); the fixed-reference
 behavior documented below has not silently become a growing model.
@@ -230,7 +232,7 @@ contain this evidence; older recordings cannot reconstruct it from a pose alone.
 
 ## Acceptance, loss and occlusion fallback
 
-[SurfacePoseBackend](../vision_pipeline.py) makes one shared publication decision:
+[SurfacePoseBackend](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/vision_pipeline.py) makes one shared publication decision:
 
 | Situation                                                                                                                                                           | Consumer result                                                                             |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -301,15 +303,15 @@ make all demo/live attachment handling identical.
 
 ## Shared implementation and scheduling
 
-| Layer                          | Code and responsibility                                                                                                                                                |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Construction and acceptance    | [`vision_pipeline.py`](../vision_pipeline.py): `VisionPipelineConfig`, shared backend factory, mask cache, registered frame transport and publication.                 |
-| One frame's contract           | [`perception_step.py`](../perception_step.py): `PerceptionPipeline`; validates object roles, reference versions, mask alignment and source time.                       |
-| Temporal surface state         | [`surface_tracking.py`](../surface_tracking.py): fixed reference, motion proposal, correction and diagnostics.                                                         |
-| Measurement, matching, fitting | [`surface_observation.py`](../surface_observation.py), [`surface_correspondence.py`](../surface_correspondence.py), [`surface_grounding.py`](../surface_grounding.py). |
-| Recorded extraction            | [`offline_perception.py`](../offline_perception.py): synchronous steps over recorded frames, with optional causal scene tracking.                                      |
-| Live vision                    | [`perception_worker.py`](../perception_worker.py): separate inference process and latest-frame exchange.                                                               |
-| Camera debugging               | [`tracking_debug_worker.py`](../tracking_debug_worker.py): same backend in local-reference mode, independent capture and aligned snapshots, no robot control.          |
+| Layer                          | Code and responsibility                                                                                                                                                                                                                                                |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Construction and acceptance    | [`vision_pipeline.py`](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/vision_pipeline.py): `VisionPipelineConfig`, shared backend factory, mask cache, registered frame transport and publication.        |
+| One frame's contract           | [`perception_step.py`](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/perception_step.py): `PerceptionPipeline`; validates object roles, reference versions, mask alignment and source time.              |
+| Temporal surface state         | [`surface_tracking.py`](../surface_tracking.py): fixed reference, motion proposal, correction and diagnostics.                                                                                                                                                         |
+| Measurement, matching, fitting | [`surface_observation.py`](../surface_observation.py), [`surface_correspondence.py`](../surface_correspondence.py), [`surface_grounding.py`](../surface_grounding.py).                                                                                                 |
+| Recorded extraction            | [`offline_perception.py`](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/offline_perception.py): synchronous steps over recorded frames, with optional causal scene tracking.                             |
+| Live vision                    | [`perception_worker.py`](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/perception_worker.py): separate inference process and latest-frame exchange.                                                      |
+| Camera debugging               | [`tracking_debug_worker.py`](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/tracking_debug_worker.py): same backend in local-reference mode, independent capture and aligned snapshots, no robot control. |
 
 Prepared bundles save their `vision_pipeline` configuration. Live launch reuses
 it and rejects a conflicting explicit pipeline configuration. Existing bundles
@@ -353,7 +355,7 @@ the camera debugger; the robot's fixed-rate motor loop is independent.
 ## Configuration and inspection
 
 The authoritative defaults and validation are in
-[`VisionPipelineConfig`](../vision_pipeline.py). The main controls are:
+[`VisionPipelineConfig`](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/vision_pipeline.py). The main controls are:
 
 | Setting                                                  | Documented default | Purpose and tradeoff                                                                                                                          |
 | -------------------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |

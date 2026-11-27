@@ -1,5 +1,7 @@
 # Offline demo tracker review
 
+Status: historical. The **Demos → Trackers** view was removed from the GUI on 2026-11-06, and its backend on 2026-11-27; [b2a7399ff](https://github.com/TheWisp/lerobot/tree/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash) is the last commit that has it.
+
 Open **Run → FLASH → Demos**, play a prepared demo, then choose **Edit demo → Trackers**.
 Select a tracker (all annotated objects by default) and choose **Process demo and preview**. Processing uses the
 selected version's per-object reference masks and the recorded RGB-D frames. It does not connect to

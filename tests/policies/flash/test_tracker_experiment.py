@@ -210,26 +210,6 @@ def test_two_object_parallel_replay_preserves_serial_tracker_results(tmp_path, m
     assert compare_runs(tmp_path / "serial", tmp_path / "parallel", "group_growing")["identical"]
 
 
-@pytest.mark.parametrize("pipelined", [False, True])
-def test_debugger_benchmark_scores_published_pose_not_rejected_candidate(tmp_path, monkeypatch, pipelined):
-    from benchmarks.flash_runtime_benchmark import run_debugger
-    from lerobot.policies.flash import surface_tracking
-
-    points = np.random.default_rng(7).uniform(-0.05, 0.05, (24, 3)) + [0, 0, 1]
-    monkeypatch.setattr(surface_tracking, "ufm_pairs", lambda *_: (points, points.copy()))
-    config = VisionPipelineConfig(
-        pipeline_surface_frames=pipelined,
-        registration_min_inliers=999,  # A real rejection at the public backend boundary.
-    )
-    result = run_debugger(demo(tmp_path), tmp_path / "result", object(), config)
-    rows = [json.loads(line) for line in (tmp_path / "result/frames.jsonl").read_text().splitlines()]
-    assert [r["frame"] for r in rows] == [0, 1]
-    assert rows[0]["objects"]["item"]["surface_corrected"] is not None
-    assert rows[1]["objects"]["item"]["candidate"] is not None
-    assert rows[1]["objects"]["item"]["surface_corrected"] is None
-    assert result["roles"]["item"]["methods"]["surface_corrected"]["available_after_initialization"] == 0
-
-
 def test_runtime_profiling_keeps_real_fits_and_counts_nested_work(tmp_path):
     from benchmarks.flash_runtime_benchmark import FitProfile, compare_runs
     from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig

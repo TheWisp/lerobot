@@ -487,7 +487,7 @@ def test_rebuild_recomputes_then_publishes_without_erasing_failed_or_old_results
     from benchmarks import flash_experiment_cache
     from benchmarks.flash_rebuild_examples import rebuild, write_json
     from lerobot.policies.flash import surface_tracking
-    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
     root = tmp_path / "browser"
     monkeypatch.setenv("LEROBOT_FLASH_EXPERIMENT_DIR", str(root))
@@ -1575,7 +1575,7 @@ def test_rerun_preserves_shared_matching_backend_and_cache_separates_it(tmp_path
     from benchmarks.flash_rebuild_examples import rebuild, write_json
     from lerobot.policies.flash import surface_tracking
     from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
-    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from lerobot.policies.flash.vision_config import VisionPipelineConfig
     from tests.policies.flash.test_shared_image_tracking import TranslationModel
 
     root = tmp_path / "browser"

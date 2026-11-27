@@ -52,6 +52,6 @@ Rerunning an old SciPy configuration selects the maintained fitter and records
 that change; the previous result is unchanged.
 
 The [sealed handover](docs/SEALED_20261031.md) describes the previous demo compiler,
-robot engine and editor design. Those research APIs and stored recordings remain;
-the current GUI focuses on perception. The [old implementation map](https://github.com/TheWisp/lerobot/blob/18fa9d9f40d230ca2fa8d8bead75d24b573a8316/src/lerobot/policies/flash/README.md)
+robot engine and editor design. That code, and the pose service it ran on, were removed
+on 2026-11-27; [b2a7399ff](https://github.com/TheWisp/lerobot/tree/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash) is the last commit that has it. The [old implementation map](https://github.com/TheWisp/lerobot/blob/18fa9d9f40d230ca2fa8d8bead75d24b573a8316/src/lerobot/policies/flash/README.md)
 is historical, not the current UI specification.

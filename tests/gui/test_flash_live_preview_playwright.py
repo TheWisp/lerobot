@@ -87,7 +87,7 @@ def test_rejected_fit_is_opt_in_for_live_and_recording_replay(gui_page):
 
 
 def test_unselected_camera_recording_displays_raw_rgb_and_depth(gui_page):
-    from lerobot.policies.flash.perception import RGBDFrame
+    from lerobot.policies.flash.observations import RGBDFrame
     from lerobot.policies.flash.tracking_history import capture_packet
 
     rgb = np.full((4, 4, 3), [21, 92, 173], np.uint8)
@@ -113,7 +113,7 @@ def test_unselected_model_preview_exposes_sensor_and_model_depth(gui_page):
     from dataclasses import replace
 
     from lerobot.gui.flash_live_scene import encode_rgbd_scene
-    from lerobot.policies.flash.perception import RGBDFrame
+    from lerobot.policies.flash.observations import RGBDFrame
 
     sensor = RGBDFrame(
         9,
@@ -182,7 +182,7 @@ def test_unselected_model_preview_exposes_sensor_and_model_depth(gui_page):
 
 def test_live_processed_image_arrives_before_the_pose_result(gui_page):
     from lerobot.gui.flash_live_scene import encode_rgbd_scene
-    from lerobot.policies.flash.perception import RGBDFrame
+    from lerobot.policies.flash.observations import RGBDFrame
 
     measured = RGBDFrame(
         4,
@@ -257,7 +257,7 @@ def test_live_processed_image_arrives_before_the_pose_result(gui_page):
 
 
 def test_filter_created_depth_toggle_marks_only_new_values(gui_page):
-    from lerobot.policies.flash.perception import RGBDFrame
+    from lerobot.policies.flash.observations import RGBDFrame
     from lerobot.policies.flash.tracking_history import capture_packet
 
     rgb = np.full((8, 8, 3), 80, np.uint8)
@@ -318,7 +318,7 @@ def test_filter_created_depth_toggle_marks_only_new_values(gui_page):
 
 def test_depth_and_3d_preview_keep_a_matched_frame_and_fixed_color_scale(gui_page):
     from lerobot.gui.flash_live_scene import encode_rgbd_scene
-    from lerobot.policies.flash.perception import RGBDFrame
+    from lerobot.policies.flash.observations import RGBDFrame
     from lerobot.policies.flash.surface_session_config import defaults
 
     rgb = np.full((16, 16, 3), (20, 90, 170), dtype=np.uint8)
@@ -463,7 +463,7 @@ def test_depth_and_3d_preview_keep_a_matched_frame_and_fixed_color_scale(gui_pag
 
 def test_replay_holds_last_processed_overlay_and_recordings_can_be_renamed(gui_page):
     from lerobot.gui.flash_live_scene import encode_rgbd_scene
-    from lerobot.policies.flash.perception import RGBDFrame
+    from lerobot.policies.flash.observations import RGBDFrame
     from lerobot.policies.flash.tracking_history import capture_packet
 
     rgb = np.full((24, 24, 3), 40, np.uint8)

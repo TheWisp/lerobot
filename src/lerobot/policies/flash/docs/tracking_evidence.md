@@ -10,8 +10,8 @@ SAM3/UFM/depth backend used by the camera debugger and available to demo
 extraction and live inference. Prepared bundles select it or the appearance
 backend through their saved `vision_pipeline` configuration. This supersedes
 [the earlier description of live inference as appearance-only](https://github.com/TheWisp/lerobot/blob/68db02b2d/src/lerobot/policies/flash/docs/tracking_evidence.md).
-[`sealed_demo_import.py`](../sealed_demo_import.py) prepares the existing SO-107
-recording; [`causal_service.py`](../causal_service.py) adds point and
+[`sealed_demo_import.py`](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/sealed_demo_import.py) prepares the existing SO-107
+recording; [`causal_service.py`](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/causal_service.py) adds point and
 verified environment-group predictions when configured. The same causal
 service can now process recorded frames during demo extraction when its
 annotation supplies `causal_tracking`. Previously prepared bundles have not
@@ -21,7 +21,7 @@ settings are now saved in the prepared bundle and checked against live trial
 settings before robot connection, so a new demo cannot silently use a different
 scene estimator from its rollout. This does not make a group prediction a
 direct measurement.
-The offline review in [`demo_tracker_candidates.py`](../demo_tracker_candidates.py) creates
+The offline review in [`demo_tracker_candidates.py`](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/demo_tracker_candidates.py) creates
 versioned pose candidates for a demo. Applying one changes selected demo pose
 samples, not the live backend or its appearance reference bank.
 

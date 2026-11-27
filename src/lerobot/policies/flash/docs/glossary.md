@@ -19,8 +19,6 @@ lost results. Predictions supply no new object surface. See the
 - [Usable and validated 3D pairs](#usable-and-validated-3d-pairs)
 - [Segmentation mask](#segmentation-mask)
 - [Object coordinates and pose](#object-coordinates-and-pose)
-- [Published pose estimate](#published-pose-estimate)
-- [Pose disagreement](#pose-disagreement)
 - [Stored surface / surface map](#stored-surface--surface-map)
 - [Local surface fitting](#local-surface-fitting)
 - [Object point anchor](#object-point-anchor)
@@ -45,12 +43,11 @@ transform is the identity and robot-base coordinates are camera coordinates.
 
 It also records `frame_id`, which increases for each camera, and two times: `source_time_s`,
 when the image was captured, and `available_time_s`, when FLASH received it, which can never be
-earlier. A pose computed from the frame refers back to it by these values (see
-[Published pose estimate](#published-pose-estimate)). Optional fields hold the depth image before
+earlier. Optional fields hold the depth image before
 depth filters and a synchronized infrared pair for learned stereo depth.
 
-Code: [`RGBDFrame`](../observations.py#L16);
-[`LatestRGBDFrameStore`](../observations.py#L65) rejects a frame whose ID or capture time does
+Code: [`RGBDFrame`](../observations.py#L14);
+[`LatestRGBDFrameStore`](../observations.py#L63) rejects a frame whose ID or capture time does
 not increase.
 
 ## Depth support
@@ -65,7 +62,7 @@ not filled. Support establishes that readings exist, not that they are accurate.
 object's surface additionally withholds depth discontinuities inside the mask.
 
 Code: [`depth_support_mask`](../depth_quality.py#L9);
-[`depth_quality_mask`](../surface_observation.py#L73) withholds discontinuities.
+[`prepare_surface_frame`](../surface_observation.py#L73) withholds discontinuities.
 
 ## Point track ID
 
@@ -158,49 +155,6 @@ object point. [`GrowingSurfaceSession.update`](../experimental_surface_session.p
 initializes the fixed coordinates; [`ObjectGroupAssociation.record_observation`](../object_group_association.py#L174)
 composes the camera-to-base transform.
 Design: [persistent coordinates](tracking_pipeline.md#what-persists-between-frames).
-
-## Published pose estimate
-
-**The record a tracker publishes for one object role: a 4×4 pose in robot-base coordinates, how
-it was obtained, and which [RGB-D frame](#rgb-d-frame) it describes.** This is FLASH's
-`PoseEstimate`, the handoff from tracking to action execution.
-
-`evidence` is `observed` (measured in that frame), `predicted` (carried forward without a new
-measurement) or `lost` (no pose; the record refuses one); see
-[Tracking loss and recovery](#tracking-loss-and-recovery) for how the tracker decides.
-`source_time_s` and `source_frame_id` name the frame the pose describes, and `available_time_s`
-is when it was published, which can never be earlier. `translation_supported` and
-`rotation_supported` mark which position axes (robot-base X, Y, Z) and which rotation axes (the
-object's own X, Y, Z) the evidence constrains. A partial pose can serve a task that does not
-depend on its unsupported axes.
-
-A consumer uses an estimate only if it is not lost, was already published, is no older than the
-consumer's age limit, is allowed to be a prediction, and supports every axis the task needs.
-
-Code: [`PoseEstimate`](../pose.py#L20) and [`usable`](../pose.py#L84).
-
-## Pose disagreement
-
-**A comparison of two pose proposals for the same object in the same RGB-D frame, using only
-measured depth and the [segmentation mask](#segmentation-mask).** Each proposal places the
-object's stored 3D points in the camera and projects them into the image; on each pixel only the
-nearest projected point counts.
-
-Two numbers come out for each proposal: how closely measured depth matches the projected surface
-where both exist inside the mask (the 90th-percentile depth difference, in metres), and the
-fraction of projected pixels that land on measured depth inside the mask. A nearer measured
-surface outside the mask is an occluder and does not count against a proposal. A projected
-point hidden behind the measured surface inside the mask cannot support it.
-
-The verdict is decided in this order. If either proposal has too few measured depth pixels inside
-the mask, it is `insufficient_evidence`, even when the two poses are close. If they are within
-the caller's task tolerance of each other, they `agree`. Otherwise one proposal is favoured only
-if it is at least as good on both numbers and strictly better on one. When neither is, including
-when the numbers are equal, the verdict is `ambiguous` and neither proposal is chosen silently.
-These numbers are diagnostics, not calibrated pose likelihoods.
-
-Code: [`surface_support`](../pose_disagreement.py#L135) and
-[`compare_pose_proposals`](../pose_disagreement.py#L202).
 
 ## Stored surface / surface map
 

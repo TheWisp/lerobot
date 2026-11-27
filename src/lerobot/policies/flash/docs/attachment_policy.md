@@ -1,5 +1,7 @@
 # Held-object attachment policy
 
+Status: removed on 2026-11-27 with the live trial it configured; [b2a7399ff](https://github.com/TheWisp/lerobot/tree/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash) is the last commit that has it.
+
 The live trial reads all grasp-assumption and held-pose correction thresholds from one `attachment` object in its rig JSON. `AttachmentRuntimeLimits.from_config` validates that object once; the planner and pose updater receive the same resulting policy. These are trial parameters, not properties of the dowel or ring.
 
 | Parameter                  | Meaning                                                                                                                                                                                                             |
@@ -13,7 +15,7 @@ The live trial reads all grasp-assumption and held-pose correction thresholds fr
 
 The current SO-107 trial sets `max_unverified_age_s` to `null`. The old 20 s setting stopped the 2026-10-20 19:12:46 local trial during its ring approach, before the insertion contact interval. Elapsed time alone supplied no evidence that the object had slipped. The 15 mm and 15° limits no longer categorically reject a larger correction: a later independent image can confirm a visual proposal that explains more of the aligned mask and depth than the gripper prediction. If both poses remain plausible and the gripper prediction itself fits aligned depth within the configured fit tolerance, that prediction stays available and the replay marks the visual ambiguity. A contradicted or unsupported gripper prediction still withdraws the attachment for control. These limits remain provisional trial parameters, not calibrated confidence or object properties. See [pose flow](pose_flow.md).
 
-The [example trial JSON](trial_config.example.json) also exposes the planner's IK sample and retiming budgets, evidence wait, and every causal group-tracking limit. The live launcher requires these values in its rig JSON so a trial cannot silently inherit a different internal default.
+The [example trial JSON](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash/docs/trial_config.example.json) also exposes the planner's IK sample and retiming budgets, evidence wait, and every causal group-tracking limit. The live launcher requires these values in its rig JSON so a trial cannot silently inherit a different internal default.
 
 In Run → FLASH, **Inspect trial parameters** reads the selected rig JSON without moving the robot. The panel highlights the held-pose correction gate, held-prediction expiry, first-pose wait, and direct/group disagreement limits, then shows the full configuration. Each live attempt saves the effective values in its regular dataset at `flash/v1/trial_config.json`. The highlighted 20 s `first_pose_timeout_s` is only a startup wait; it is unrelated to the disabled `max_unverified_age_s` held-prediction expiry.
 

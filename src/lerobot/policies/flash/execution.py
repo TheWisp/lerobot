@@ -104,17 +104,6 @@ class ActionQueueSnapshot:
     pending: tuple[TimedAction, ...]
     issued_events: frozenset[str] = frozenset()
 
-    def boundary_before(self, tick: int) -> dict[str, float] | None:
-        """Action a new chunk must continue from immediately before ``tick``."""
-        if tick <= self.last_tick:
-            raise ValueError("planning boundary must be in the future")
-        if tick == self.last_tick + 1:
-            return None if self.last_issued is None else dict(self.last_issued)
-        for action in self.pending:
-            if action.tick == tick - 1:
-                return dict(action.action)
-        return None
-
 
 class ActionQueue:
     """Short-lock replacement of the unissued suffix of a command sequence."""
@@ -291,24 +280,6 @@ class ActionQueue:
             if self._actions and self._actions[0][1].tick <= tick:
                 raise PlanRejectedError("cannot idle across a queued action or event")
             self._last_tick = tick
-
-    def has_tick(self, tick: int) -> bool:
-        with self._lock:
-            return bool(self._actions and self._actions[0][1].tick == tick)
-
-    def has_due(self, tick: int) -> bool:
-        with self._lock:
-            return bool(self._actions and self._actions[0][1].tick <= tick)
-
-    def cancel_unissued(self, reason: str) -> tuple[str, ...]:
-        """Explicitly invalidate the suffix; return canceled semantic events."""
-        if not reason:
-            raise ValueError("plan cancellation needs a reason")
-        with self._lock:
-            events = tuple(command.event_id for _, command in self._actions if command.event_id)
-            self._actions.clear()
-            self._revision += 1
-            return events
 
 
 @dataclass

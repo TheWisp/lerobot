@@ -2,25 +2,11 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Protocol
 
 import numpy as np
 
-from .matched_rgbd import MatchedRGBDPoseBackend, ObjectPointModel, PixelMatches
-from .observations import ObjectReference, PoseBackend, ReferenceSnippet, RGBDFrame
-from .registration import transform_points, unproject_pixels, valid_depth_pixels
-from .symmetry import AxialSymmetry
-
-
-class PatchExtractor(Protocol):
-    def extract(self, rgb: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]: ...
-
-
-class MaskSource(Protocol):
-    def masks(self, frame: RGBDFrame) -> dict[str, np.ndarray]: ...
+from .observations import RGBDFrame
 
 
 class Sam3MaskSource:
@@ -89,51 +75,6 @@ class Sam3MaskSource:
         self._cached_frame = None
         self._cached_masks = {}
 
-    def add_clicked_role(
-        self, role: str, prompt: str, point: tuple[float, float], frame: RGBDFrame
-    ) -> tuple[bool, float]:
-        """Condition one more object on a newer frame without dropping existing masks.
-
-        The returned masks are cached for the pipeline's update of this same frame:
-        SAM must not advance twice for one RGB-D observation.
-        """
-        if self._adapter is None or self._last_frame_id is None:
-            raise RuntimeError("track an initial object before adding another")
-        if (
-            not role
-            or not prompt.strip()
-            or "." in prompt
-            or role in self.prompts
-            or prompt in self.prompts.values()
-        ):
-            raise ValueError("the new object needs a unique role and label without periods")
-        x, y = point
-        if not 0 <= x < frame.depth.shape[1] or not 0 <= y < frame.depth.shape[0]:
-            raise ValueError("object click lies outside the aligned frame")
-        if frame.frame_id <= self._last_frame_id:
-            raise ValueError("freeze a newer frame before adding an object")
-        self._adapter.set_control(
-            {
-                "click_seq": self._next_click_seq,
-                "click_name": {self.camera_id: prompt},
-                "clicks": {self.camera_id: [[x, y, 1]]},
-            }
-        )
-        self._next_click_seq += 1
-        self.prompts[role] = prompt
-        self._cached_frame = None
-        begin = time.perf_counter()
-        try:
-            masks = self.masks(frame)
-        except Exception:
-            self.prompts.pop(role)
-            raise
-        elapsed_ms = (time.perf_counter() - begin) * 1000
-        if role not in masks:
-            self.prompts.pop(role)
-            return False, elapsed_ms
-        return True, elapsed_ms
-
     def masks(self, frame: RGBDFrame) -> dict[str, np.ndarray]:
         if frame is self._cached_frame:
             return self._cached_masks
@@ -185,25 +126,6 @@ class Sam3MaskSource:
         return masks
 
 
-@dataclass(frozen=True)
-class ReferenceAppearanceFrame:
-    snippet: ReferenceSnippet
-    frame: RGBDFrame
-    mask: np.ndarray
-
-
-@dataclass(frozen=True)
-class AppearanceModel:
-    points: ObjectPointModel
-    descriptors: np.ndarray
-
-    def __post_init__(self) -> None:
-        descriptors = _normalize(self.descriptors)
-        if len(descriptors) != len(self.points.points_object_m):
-            raise ValueError("one descriptor is required per object point")
-        object.__setattr__(self, "descriptors", descriptors)
-
-
 def _normalize(descriptors: np.ndarray) -> np.ndarray:
     values = np.asarray(descriptors, dtype=np.float32)
     if values.ndim != 2 or values.shape[1] < 1 or not np.isfinite(values).all():
@@ -212,186 +134,3 @@ def _normalize(descriptors: np.ndarray) -> np.ndarray:
     if np.any(norms <= 0):
         raise ValueError("zero appearance descriptor")
     return values / norms
-
-
-def build_appearance_model(
-    reference: ObjectReference,
-    views: tuple[ReferenceAppearanceFrame, ...],
-    extractor: PatchExtractor,
-) -> AppearanceModel:
-    """Combine masked feature/depth samples from several registered demo views."""
-    allowed = {(s.repo_id, s.episode, s.frame_index) for s in reference.snippets}
-    point_groups, feature_groups = [], []
-    for view in views:
-        snippet, frame = view.snippet, view.frame
-        if (snippet.repo_id, snippet.episode, snippet.frame_index) not in allowed:
-            raise ValueError("appearance view is not part of the object reference")
-        if snippet.calibration_version != frame.calibration_version or snippet.frame_index != frame.frame_id:
-            raise ValueError("appearance view frame or calibration differs from its snippet")
-        if view.mask.shape != frame.depth.shape or view.mask.dtype != bool or not view.mask.any():
-            raise ValueError("appearance view needs a nonempty aligned mask")
-        xy, descriptors = extractor.extract(frame.rgb, view.mask)
-        xy = np.asarray(xy, dtype=float)
-        descriptors = _normalize(descriptors)
-        if xy.shape != (len(descriptors), 2):
-            raise ValueError("feature pixels and descriptors differ in length")
-        valid = valid_depth_pixels(frame.depth, xy)
-        if not valid.any():
-            continue
-        camera_points = unproject_pixels(frame.depth, frame.intrinsics, xy[valid], frame.depth_m_per_unit)
-        point_groups.append(transform_points(snippet.object_from_camera, camera_points))
-        feature_groups.append(descriptors[valid])
-    if not point_groups:
-        raise ValueError("no reference features have aligned depth")
-    return AppearanceModel(
-        ObjectPointModel(reference.role, reference.version, np.concatenate(point_groups)),
-        np.concatenate(feature_groups),
-    )
-
-
-class AppearancePixelMatcher:
-    """One masked live patch per demo point, leaving geometric rejection to RGB-D fit."""
-
-    def __init__(
-        self,
-        models: tuple[AppearanceModel, ...],
-        extractor: PatchExtractor,
-        mask_source: MaskSource,
-        *,
-        min_similarity: float,
-    ) -> None:
-        if not -1 <= min_similarity <= 1:
-            raise ValueError("similarity floor must be a cosine score")
-        self.models = {model.points.role: model for model in models}
-        if not models or len(self.models) != len(models):
-            raise ValueError("appearance models need unique object roles")
-        self.extractor = extractor
-        self.mask_source = mask_source
-        self.min_similarity = min_similarity
-        self.last_masks: dict[str, np.ndarray] = {}
-
-    def matches(self, frame: RGBDFrame) -> tuple[PixelMatches, ...]:
-        masks = self.mask_source.masks(frame)
-        self.last_masks = masks
-        out = []
-        for role, model in self.models.items():
-            mask = masks.get(role)
-            if mask is None or not mask.any():
-                continue
-            if mask.shape != frame.depth.shape or mask.dtype != bool:
-                raise ValueError(f"{role}: live mask must align with RGB-D")
-            xy, features = self.extractor.extract(frame.rgb, mask)
-            xy = np.asarray(xy, dtype=float)
-            features = _normalize(features)
-            if xy.shape != (len(features), 2) or features.shape[1] != model.descriptors.shape[1]:
-                raise ValueError(f"{role}: live features differ from the reference model")
-            if not len(features):
-                continue
-            similarity = features @ model.descriptors.T
-            nearest = np.argmax(similarity, axis=1)
-            scores = similarity[np.arange(len(features)), nearest]
-            chosen_model, chosen_live = [], []
-            seen: set[int] = set()
-            for live_index in np.argsort(-scores):
-                model_index = int(nearest[live_index])
-                if scores[live_index] < self.min_similarity:
-                    break
-                if model_index not in seen:
-                    chosen_model.append(model_index)
-                    chosen_live.append(int(live_index))
-                    seen.add(model_index)
-            out.append(
-                PixelMatches(
-                    role,
-                    model.points.reference_version,
-                    np.asarray(chosen_model, dtype=int),
-                    xy[chosen_live],
-                )
-            )
-        return tuple(out)
-
-
-def build_appearance_pose_backend(
-    models: tuple[AppearanceModel, ...],
-    extractor: PatchExtractor,
-    mask_source: MaskSource,
-    *,
-    min_similarity: float,
-    threshold_m: float,
-    min_inliers: int,
-    trials: int,
-    axial_symmetries: tuple[AxialSymmetry, ...] = (),
-    visible_shape_fallback: bool = False,
-    clock: Callable[[], float] = time.monotonic,
-) -> PoseBackend:
-    """Build the direct RGB-D estimator shared by demo extraction and live trials.
-
-    The caller owns model loading and explicitly chooses whether a failed
-    appearance match may try a local visible-shape fit. This keeps that policy
-    difference visible without duplicating the estimator's wiring.
-    """
-    matcher = AppearancePixelMatcher(models, extractor, mask_source, min_similarity=min_similarity)
-    backend: PoseBackend = MatchedRGBDPoseBackend(
-        tuple(model.points for model in models),
-        matcher,
-        threshold_m=threshold_m,
-        min_inliers=min_inliers,
-        trials=trials,
-        visible_shape_fallback=visible_shape_fallback,
-        clock=clock,
-    )
-    if axial_symmetries:
-        from .symmetry import SymmetryCanonicalizingBackend
-
-        backend = SymmetryCanonicalizingBackend(backend, axial_symmetries)
-    return backend
-
-
-@dataclass(frozen=True)
-class AppearanceBackendFactory:
-    """Spawn-safe construction of the first live RGB-D pose backend.
-
-    Keep only reference data and configuration in the parent. SAM3 and DINO
-    weights load when this factory runs inside :class:`PoseProcess`.
-    """
-
-    models: tuple[AppearanceModel, ...]
-    prompts_by_role: dict[str, str]
-    camera_id: str
-    min_similarity: float
-    threshold_m: float
-    min_inliers: int
-    trials: int
-    device: str = "cuda"
-    sam_resolution: int | None = None
-    dino_model_id: str = "facebook/dinov2-small"
-    axial_symmetries: tuple[AxialSymmetry, ...] = ()
-    seed_points_by_role: dict[str, tuple[float, float]] | None = None
-
-    def __post_init__(self) -> None:
-        if set(self.prompts_by_role) != {model.points.role for model in self.models}:
-            raise ValueError("one text prompt is needed for each appearance model role")
-
-    def __call__(self) -> PoseBackend:
-        # Compatibility for callers holding the original factory. All new
-        # consumers choose their estimator through the common composition point.
-        from .vision_pipeline import VisionBackendFactory, VisionPipelineConfig
-
-        return VisionBackendFactory(
-            self.models,
-            self.prompts_by_role,
-            self.camera_id,
-            VisionPipelineConfig(
-                backend="appearance",
-                sam_resolution=self.sam_resolution,
-                min_similarity=self.min_similarity,
-                registration_threshold_m=self.threshold_m,
-                registration_min_inliers=self.min_inliers,
-                registration_trials=self.trials,
-                visible_shape_fallback=True,
-            ),
-            dino_model_id=self.dino_model_id,
-            axial_symmetries=self.axial_symmetries,
-            seed_points_by_role=self.seed_points_by_role,
-            device=self.device,
-        )()

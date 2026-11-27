@@ -77,7 +77,7 @@ each of the two approach connections and then followed the 25 demonstrated
 grasp samples, seeding each IK solve from the preceding joint solution. It used
 the trial's 3 mm and 3° goal tolerances and 10 IK refinements. The 57 poses
 were geometric checks only; they were not executed on the robot.
-The [gripper-path audit](../../../benchmarks/flash_cross_run_gripper_path.py)
+The [gripper-path audit](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/benchmarks/flash_cross_run_gripper_path.py)
 and its [results for all 28 saved matches](https://github.com/TheWisp/lerobot/blob/4190305f512ca83114ac2d34c4c87f645635af54/docs/proofs/flash-geometry-sequence/gripper-path-all-203310.json)
 preserve the inputs, settings and per-candidate failures. Fifteen matches
 solved all 57 sampled goals; that says nothing yet about collision safety or
@@ -111,7 +111,7 @@ Exact-pixel mask-and-depth support was 87.5% for `fpfh_ransac` and 84.5% for
 
 ## Can the arm guide registration without a candidate list?
 
-On 2026-10-26 I tested a [single-seed offline optimizer](../../../benchmarks/flash_embodiment_registration.py)
+On 2026-10-26 I tested a [single-seed offline optimizer](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/benchmarks/flash_embodiment_registration.py)
 on the same four starts. It receives the demo's measured dowel surface at
 frame 100, the selected live RGB-D frame and mask, the demo's gripper pose at
 first grasp contact (frame 204), and the live arm's observed joints. It **does

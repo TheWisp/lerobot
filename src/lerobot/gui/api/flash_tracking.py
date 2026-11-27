@@ -29,7 +29,7 @@ from lerobot.policies.flash.tracking_history import (
     read_processed_frame,
     save_window,
 )
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 router = APIRouter(prefix="/api/run/flash/tracking", tags=["flash-tracking"])
 _io = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flash-debug-state")

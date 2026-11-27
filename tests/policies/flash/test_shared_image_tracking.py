@@ -167,10 +167,9 @@ def test_lk_does_not_load_or_invoke_neural_model():
 def test_benchmark_and_fitter_use_shared_points_without_second_tracker(
     tmp_path, monkeypatch, cpu_neural_boundary, backend
 ):
-    from lerobot.policies.flash import causal_points, surface_frame_session as experiment, surface_tracking
+    from lerobot.policies.flash import surface_frame_session as experiment, surface_tracking
 
     monkeypatch.setattr(experiment, "ScenePointTracker", forbidden)
-    monkeypatch.setattr(causal_points.CausalRigidPointTracker, "seed", forbidden)
     monkeypatch.setattr(surface_tracking, "ufm_pairs", forbidden)
     monkeypatch.setattr(experiment, "ufm_pairs", forbidden)
     if backend == "ufm":

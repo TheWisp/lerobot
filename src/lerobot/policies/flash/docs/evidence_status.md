@@ -32,7 +32,7 @@ pose during insertion in this prepared skill. Extraction has produced a
 replayable spatial skill, but has not established that its contact geometry is
 accurate enough for a live insertion.
 
-The repeatable [prepared-skill audit](../../../../../benchmarks/flash_audit_legacy_skill.py)
+The repeatable [prepared-skill audit](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/benchmarks/flash_audit_legacy_skill.py)
 now checks every retained arm sample against the sealed demo's time, calibrated
 fingertip pose and gripper command. The local
 `insertion-migrated-v10-preferred-hover` bundle has eleven contiguous intervals,
@@ -344,7 +344,7 @@ after that stop, the robot bus found arm motors 1–6 but not gripper motor 7 on
 two connection attempts, so the return path did not move and the dowel remains
 in the gripper.
 
-The [offline IK preview](../../../../../benchmarks/flash_preview_ik.py) of the
+The [offline IK preview](https://github.com/TheWisp/lerobot/blob/b2a7399ffa0cefee408f741b1d45ad3118954c63/benchmarks/flash_preview_ik.py) of the
 revised bundle completes all eleven intervals from the demonstration's initial
 joint state. Beginning at the last trial's measured lift pose, it also
 completes the remaining carry, dense insertion, release and retreat: 75 ticks

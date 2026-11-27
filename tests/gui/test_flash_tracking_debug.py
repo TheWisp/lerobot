@@ -232,7 +232,7 @@ def test_shared_live_view_picks_displayed_frame_without_freeze_and_keeps_process
 
     from lerobot.gui.flash_live_scene import encode_rgbd_scene
     from lerobot.policies.flash.live_surface_io import new_selection
-    from lerobot.policies.flash.perception import RGBDFrame
+    from lerobot.policies.flash.observations import RGBDFrame
     from lerobot.policies.flash.surface_registration import MATCHERS
     from lerobot.policies.flash.surface_session_config import defaults
 
@@ -692,7 +692,7 @@ def test_typed_pipeline_form_submits_to_real_start_schema(gui_page):
     assert settings["config"]["shape"]["registration"]["backend"] == "small_gicp"
     assert settings["config"]["shape"]["max_evaluations"] == 7
     assert settings["config"]["shape"]["depth_tolerance_m"] == 0.004
-    from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig
+    from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
     assert VisionPipelineConfig.from_dict(settings["config"]).shape.free_space_min_supports == 4
     assert settings["group_experiment"]["max_points"] == 2048

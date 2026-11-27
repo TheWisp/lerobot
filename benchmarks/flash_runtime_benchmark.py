@@ -1,4 +1,4 @@
-"""Replay one tracker or the camera-debugger backend on identical recorded inputs.
+"""Replay one tracker on identical recorded inputs.
 
 Saved masks isolate fitting changes. --sam-prompts runs the shared live SAM3
 source instead; it changes the input masks and is a separate end-to-end trial.
@@ -12,10 +12,9 @@ import hashlib
 import json
 import time
 from contextlib import ExitStack
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from functools import wraps
 from inspect import isgeneratorfunction
-from itertools import islice
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,15 +22,14 @@ import cv2
 import numpy as np
 
 from benchmarks.flash_experiment_groups import GroupConfig
-from benchmarks.flash_experiment_inputs import samples
 from benchmarks.flash_pipeline_settings import from_recording, validate
-from benchmarks.flash_tracker_experiment import code_snapshot, quantiles, run_case, score_case
+from benchmarks.flash_tracker_experiment import code_snapshot, run_case
 from lerobot.policies.flash.appearance import Sam3MaskSource
 from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
 from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
 from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
 from lerobot.policies.flash.surface_tracking import load_ufm
-from lerobot.policies.flash.vision_pipeline import VisionPipelineConfig, build_vision_backend
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 
 def latency_distribution(values: list[float]) -> dict:
@@ -145,109 +143,6 @@ class FitProfile(ExitStack):
         return self
 
 
-def run_debugger(case, output, model, config, *, max_frames=None):
-    """Replay the real debugger backend/runner; score only its published estimates.
-
-    All recorded frames are delivered in order, including with frame overlap.
-    Camera capture, optional asynchronous group fallback and SAM are excluded.
-    """
-    from lerobot.policies.flash.perception_step import PerceptionPipeline, PerceptionRunner
-    from lerobot.policies.flash.tracking_debug_worker import debug_reference
-
-    output.mkdir(parents=True, exist_ok=False)
-    sequence = list(islice(samples(case), max_frames))
-    masks = {frame.frame_id: values for frame, values in sequence}
-    digest = hashlib.sha256()
-    for frame, values in sequence:
-        for value in (
-            frame.rgb,
-            frame.depth,
-            frame.intrinsics,
-            np.asarray(frame.source_time_s),
-            *values.values(),
-        ):
-            a = np.asarray(value)
-            digest.update(str((a.shape, a.dtype)).encode() + a.tobytes())
-
-    class Masks:
-        def masks(self, frame):
-            return masks[frame.frame_id]
-
-    backend = build_vision_backend(config, Masks(), matcher=model, local_reference=True)
-    references = tuple(debug_reference(role, sequence[0][0]) for role in case["roles"])
-    pipeline = PerceptionPipeline(backend, references, require_masks=True)
-    source, acquired = iter(sequence), {}
-
-    def take_frame():
-        item = next(source, None)
-        if item is None:
-            return None
-        frame = item[0]
-        acquired[frame.frame_id] = time.perf_counter()
-        return frame
-
-    rows, reference_frames, reference_points = [], {}, {}
-    previous_end, started = None, time.perf_counter()
-    with PerceptionRunner(pipeline) as runner:
-        while (item := runner.process_next(take_frame)) is not None:
-            frame, result = item
-            ended = time.perf_counter()
-            row = {
-                "frame": frame.frame_id,
-                "time_s": frame.source_time_s,
-                "latency_ms": 1000 * (ended - acquired[frame.frame_id]),
-                "completion_interval_ms": 1000 * (ended - previous_end) if previous_end is not None else None,
-                "objects": {},
-            }
-            previous_end = ended
-            for estimate in result.estimates:
-                role = estimate.role
-                session = backend.sessions[role]
-                if role not in reference_points and session.reference is not None:
-                    reference_points[role] = session.reference.copy()
-                    reference_frames[role] = len(rows)
-                pose = None
-                if estimate.pose is not None:
-                    pose = (
-                        np.linalg.inv(frame.base_from_camera)
-                        @ estimate.pose
-                        @ np.linalg.inv(backend.reference_camera_from_object[role])
-                    ).tolist()
-                detail = result.details[role]
-                row["objects"][role] = {
-                    "surface_corrected": pose,
-                    "surface_corrected_status": estimate.evidence.value,
-                    "candidate": detail.get("camera_from_reference"),
-                    "accepted": detail["accepted"],
-                    "failure": result.failures.get(role),
-                    "diagnostics": detail["diagnostics"],
-                }
-            rows.append(row)
-            if len(rows) % 100 == 0:
-                print(f"debugger {case['id']}: {len(rows)}/{len(sequence)}", flush=True)
-    elapsed = time.perf_counter() - started
-    report = score_case(case, rows, reference_points, reference_frames)
-    intervals = [r["completion_interval_ms"] for r in rows[1:]]
-    report.update(
-        input_sha256=digest.hexdigest(),
-        config=config.to_dict(),
-        scope="Real debugger backend, published poses only; saved masks, every frame, no async group fallback",
-        processing={
-            "completion_interval_ms": quantiles(intervals),
-            "mean_completion_interval_ms": float(np.mean(intervals)) if intervals else None,
-            "latency_ms": quantiles([r["latency_ms"] for r in rows[1:]]),
-            "max_latency_ms": max(r["latency_ms"] for r in rows[1:]) if intervals else None,
-            "elapsed_s": elapsed,
-        },
-    )
-    (output / "case.json").write_text(json.dumps(case, indent=2) + "\n")
-    (output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
-    with (output / "frames.jsonl").open("w") as stream:
-        for row in rows:
-            stream.write(json.dumps(row, allow_nan=False) + "\n")
-    return report
-
-
 def compare_runs(before: Path, after: Path, method: str) -> dict:
     """Exact-output regression check; it does not establish absolute pose accuracy."""
     old_summary = json.loads((before / "summary.json").read_text())
@@ -301,16 +196,10 @@ def main():
     parser.add_argument("--ufm-revision", help="Pin the UFM checkpoint for repeatable comparisons")
     parser.add_argument("--compare-to", type=Path, help="Previous single-method benchmark output")
     parser.add_argument("--frames", type=int, help="Profile only the first N consecutive frames")
-    parser.add_argument("--engine", choices=("experiment", "debugger"), default="experiment")
-    parser.add_argument(
-        "--debugger-defaults",
-        action="store_true",
-        help="Use debugger defaults instead of recorded fit settings",
-    )
     parser.add_argument(
         "--serial",
         action="store_true",
-        help="Disable object concurrency (and debugger frame overlap), preserving the estimator",
+        help="Disable object concurrency, preserving the estimator",
     )
     parser.add_argument(
         "--profile",
@@ -330,10 +219,6 @@ def main():
     args = parser.parse_args()
     if args.frames is not None and args.frames < 1:
         parser.error("--frames must be positive")
-    if args.engine == "debugger" and (args.profile or args.sam_prompts):
-        parser.error("Debugger replay uses saved masks without profiling")
-    if args.engine == "experiment" and args.debugger_defaults:
-        parser.error("--debugger-defaults applies only to debugger replay")
     args.output.mkdir(parents=True, exist_ok=False)
     fixed_settings = validate(json.loads(args.settings.read_text())) if args.settings else None
     prompts = json.loads(args.sam_prompts.read_text()) if args.sam_prompts else None
@@ -362,22 +247,14 @@ def main():
                 },
             }
         config = VisionPipelineConfig.from_dict(settings["config"])
-        if args.debugger_defaults:
-            config = VisionPipelineConfig()
-        if args.serial and args.engine == "debugger":
-            config = replace(config, parallel_surface_objects=False, pipeline_surface_frames=False)
-        if args.engine == "experiment" and settings["surface_experiment"] is None:
+        if settings["surface_experiment"] is None:
             parser.error(f"{source} has no surface experiment")
         started = time.perf_counter()
         shared = settings["shared_matching"]
-        if model is None and (args.engine == "debugger" or shared is None or shared["backend"] == "ufm"):
+        if model is None and (shared is None or shared["backend"] == "ufm"):
             model = load_ufm(revision=args.ufm_revision)
         kernels = compiled_kernels() if config.compiled_surface_fit else None
-        pool = (
-            SearchPool(config.shape.batch_query_workers)
-            if args.engine == "experiment" and config.reuse_surface_search
-            else None
-        )
+        pool = SearchPool(config.shape.batch_query_workers) if config.reuse_surface_search else None
         source_masks = None
         if prompts is not None:
             spec = prompts[case["id"]]
@@ -401,7 +278,6 @@ def main():
                     **settings,
                     "source_run": str(source),
                     "sam_prompts": prompts,
-                    "engine": args.engine,
                     "ufm_revision": args.ufm_revision,
                     "effective_vision_config": config.to_dict(),
                     "compute_thread_pools": threadpool_info(),
@@ -411,33 +287,30 @@ def main():
             + "\n"
         )
         try:
-            if args.engine == "debugger":
-                result = run_debugger(case, destination / case["id"], model, config, max_frames=args.frames)
-            else:
-                with FitProfile() if args.profile else ExitStack() as profile:
-                    result = run_case(
-                        case,
-                        destination / case["id"],
-                        model,
-                        config,
-                        kernels,
-                        pool,
-                        surface_experiment=GrowingSurfaceConfig(**settings["surface_experiment"]),
-                        group_experiment=GroupConfig.from_dict(settings["group_experiment"])
-                        if args.method.startswith("group_")
-                        else None,
-                        shared_matching_config=SharedMatchingConfig.from_dict(shared) if shared else None,
-                        single_method=args.method,
-                        record_surfaces=False,
-                        mask_source=source_masks,
-                        max_frames=args.frames,
-                        parallel_objects=not args.serial and not args.profile,
+            with FitProfile() if args.profile else ExitStack() as profile:
+                result = run_case(
+                    case,
+                    destination / case["id"],
+                    model,
+                    config,
+                    kernels,
+                    pool,
+                    surface_experiment=GrowingSurfaceConfig(**settings["surface_experiment"]),
+                    group_experiment=GroupConfig.from_dict(settings["group_experiment"])
+                    if args.method.startswith("group_")
+                    else None,
+                    shared_matching_config=SharedMatchingConfig.from_dict(shared) if shared else None,
+                    single_method=args.method,
+                    record_surfaces=False,
+                    mask_source=source_masks,
+                    max_frames=args.frames,
+                    parallel_objects=not args.serial and not args.profile,
+                )
+                if args.profile:
+                    result["fit_profile"] = profile.stats
+                    (destination / case["id"] / "profile.json").write_text(
+                        json.dumps(profile.stats, indent=2) + "\n"
                     )
-                    if args.profile:
-                        result["fit_profile"] = profile.stats
-                        (destination / case["id"] / "profile.json").write_text(
-                            json.dumps(profile.stats, indent=2) + "\n"
-                        )
         finally:
             if pool is not None:
                 pool.close()
@@ -455,7 +328,7 @@ def main():
             comparison = compare_runs(
                 args.compare_to / f"{index:03d}" / case["id"],
                 destination / case["id"],
-                "surface_corrected" if args.engine == "debugger" else args.method,
+                args.method,
             )
             result["comparison"] = comparison
         results.append(result)
