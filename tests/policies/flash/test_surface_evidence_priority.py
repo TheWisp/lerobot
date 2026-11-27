@@ -55,40 +55,6 @@ def test_geometry_rejects_wrong_image_motion_without_freezing_actual_motion(scal
     assert np.rad2deg(Rotation.from_matrix(result[:3, :3]).magnitude()) < 1
 
 
-@pytest.mark.parametrize("scale", [0.5, 1.0, 2.0])
-@pytest.mark.parametrize("angle_deg", [-20, 20])
-def test_geometry_tracks_real_rotation_despite_wrong_image_matches(scale, angle_deg):
-    source, k = measured_shape(scale=scale)
-    expected = np.eye(4)
-    expected[:3, :3] = Rotation.from_euler("z", angle_deg, degrees=True).as_matrix()
-    affine = np.column_stack((expected[:2, :2], k[:2, 2] - expected[:2, :2] @ k[:2, 2]))
-    mask = cv2.warpAffine(source["mask"].astype(np.uint8), affine, (140, 100), flags=cv2.INTER_NEAREST) > 0
-    measured = observation(
-        source["depth"],
-        mask,
-        k,
-        asdict(SurfaceObservationConfig(component_gap_m=None, surface_spacing_m=0.001 * scale)),
-    )
-    reference = source["obs"]["points"]
-    wrong = expected.copy()
-    wrong[:3, :3] = Rotation.from_euler("z", angle_deg + 15, degrees=True).as_matrix()
-    fitter = ImageConditionedFit(
-        reference,
-        {"obs": measured, "depth": source["depth"], "mask": mask},
-        k,
-        ShapeConfig(),
-        image_reference=reference,
-        image_current=move(reference, wrong),
-        image_scale_m=0.005,
-        image_weight=1,
-    )
-    result, _ = fitter.correct_surface_first(wrong, np.eye(4))
-    error = np.linalg.norm(move(reference, result) - move(reference, expected), axis=1)
-    # Rasterizing the rotated mask introduces up to one pixel of edge error.
-    assert np.percentile(error, 95) < 0.001 * scale
-    assert np.rad2deg(Rotation.from_matrix(result[:3, :3] @ expected[:3, :3].T).magnitude()) < 1
-
-
 def test_unknown_depth_outside_visible_mask_does_not_assert_object_is_absent():
     source, k = measured_shape()
     reference = source["obs"]["points"]

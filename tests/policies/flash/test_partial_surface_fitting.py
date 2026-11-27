@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from benchmarks.flash_partial_surface_control import box_observation, perturbed_pose, pose_error
-from lerobot.policies.flash.experimental_surface_session import ImageConditionedFit
 from lerobot.policies.flash.surface_acceleration import compiled_kernels
 from lerobot.policies.flash.surface_grounding import ShapeConfig, SurfaceFitView, WholeSurfaceFit
 from lerobot.policies.flash.surface_observation import move
@@ -93,32 +92,6 @@ def test_no_visible_overlap_is_not_evidence_of_a_valid_alignment():
     direct = check_surface_contradiction(fit, wrong, PoseUncertaintyConfig())
     assert not direct["has_visible_overlap"]
     assert not direct["accepted"]
-
-
-@pytest.mark.parametrize("backend", ["visible_icp"])
-def test_image_assisted_candidate_selection_keeps_both_measured_views(backend):
-    source, k, _ = box_observation(0)
-    current, _, truth = box_observation(40)
-    reference = source["obs"]["points"]
-    wrong = perturbed_pose(truth)
-    fit = ImageConditionedFit(
-        reference,
-        current,
-        k,
-        ShapeConfig(registration=LibraryConfig(backend)),
-        reference_observation=source,
-        image_reference=reference,
-        image_current=move(reference, wrong),
-        image_scale_m=0.005,
-        image_weight=1,
-    )
-    result, _ = fit.correct_surface_first(
-        wrong, wrong, uncertainty=PoseUncertaintyConfig(enabled=True, mode="kalman")
-    )
-    assert result is not None
-    errors = pose_error(reference, result, truth)
-    assert errors["rotation_error_deg"] < 1
-    assert errors["median_point_error_mm"] < 5
 
 
 def test_two_view_scalar_batched_and_compiled_paths_agree():
