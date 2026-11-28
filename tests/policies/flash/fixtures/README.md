@@ -6,6 +6,18 @@ The source array is in the frame-100 camera/object coordinate system; target
 is in frame-101 camera coordinates. No raw RGB or depth is included. It
 captures a real false rejection caused by an extra post-consensus refit.
 
+`dowel_visible_growth_20261021.npz` contains the dowel's saved TrackEverything
+3D query tracks and SAM3/depth support from insertion demo frames 100–489,
+plus a sampled depth surface from frame 400 and the frame-489 mask/depth.
+The original fixed-reference pose displacement is retained as a negative
+control. It demonstrates that the old pose fit (computed before point growth)
+projects the frame-400 surface mostly outside the frame-489 object mask,
+whereas a causal rigid fit using newly visible point IDs remains on the
+measured object. It stores no RGB, robot commands, or full episode.
+It also includes a separately rerun 90-frame query set's frame-400/489 point
+correspondences and initial pose, so the masked RGB-D surface correction has
+an independent recorded acceptance case.
+
 `ring_visible_motion_20261016.npz` stores 75 depth-supported TrackEverything
 point frames for a visible ring moving with the tray in the 2026-10-16
 11:21:49 real rollout, plus the initial measured surface and final aligned
@@ -55,6 +67,29 @@ SHA256 hashes of the original source files. They test refactor equivalence,
 including rejected matches, not the accuracy of these estimates. No network,
 checkpoint download or hardware is needed to run their tests.
 These two recorded fixtures use Git LFS; run `git lfs pull` after checkout.
+
+`gamepad_stationary.json` identifies the **real recorded integration test**, not
+a saved tracker answer. It pins the RGB-D/mask input hash and UFM checkpoint.
+Visual evidence covers stillness through frame 164 (7.24 s). The demonstrator
+reports grasp around 9 s (±0.5 s), so the stationary check now extends through
+frame 192 (8.47 s), before the earliest reported grasp. That occluded extension
+uses a human annotation; it has no independent 6D pose labels. The earlier claim
+of pickup in frames 165–170 was unsupported. The test runs
+through frame 280 and requires subsequent movement, so freezing cannot pass.
+The 5 mm / 5° stationary budgets were fixed before the fix and are never inputs
+to inference. This does not certify absolute pose or post-grasp accuracy.
+
+With the recording and checkpoint cached locally, run from the repository:
+
+```bash
+FLASH_RUN_RECORDED_TESTS=1 HF_HUB_OFFLINE=1 PYTHONPATH=src:. \
+  uv run python -m pytest -q -s tests/policies/flash/test_gamepad_stationary_integration.py
+```
+
+Use the experiment's virtual environment if the project environment lacks UFM.
+The test writes diagnostics to pytest's temporary directory, never to the demo.
+It skips explicitly if the data/model/CUDA prerequisite is missing. It uses the
+saved masks; segmentation generation is outside this test.
 
 `green_controller_retained_view_20261107.npz` stores two cropped RGB-D frames
 (430 and 436) with their SAM masks from the saved live clip

@@ -1,0 +1,342 @@
+"""Replay one tracker on identical recorded inputs.
+
+Saved masks isolate fitting changes. --sam-prompts runs the shared live SAM3
+source instead; it changes the input masks and is a separate end-to-end trial.
+Neither mode measures camera capture, controller latency, or GUI rendering.
+--settings pins one existing pipeline recipe across scenes; --profile attributes
+experimental fit costs separately from uninstrumented performance comparisons.
+"""
+
+import argparse
+import hashlib
+import json
+import time
+from contextlib import ExitStack
+from dataclasses import asdict
+from functools import wraps
+from inspect import isgeneratorfunction
+from pathlib import Path
+from unittest.mock import patch
+
+import cv2
+import numpy as np
+
+from benchmarks.flash_experiment_groups import GroupConfig
+from benchmarks.flash_pipeline_settings import from_recording, validate
+from benchmarks.flash_tracker_experiment import code_snapshot, run_case
+from lerobot.policies.flash.appearance import Sam3MaskSource
+from lerobot.policies.flash.experimental_surface_session import GrowingSurfaceConfig
+from lerobot.policies.flash.shared_image_tracking import SharedMatchingConfig
+from lerobot.policies.flash.surface_acceleration import SearchPool, compiled_kernels
+from lerobot.policies.flash.surface_tracking import load_ufm
+from lerobot.policies.flash.vision_config import VisionPipelineConfig
+
+
+def latency_distribution(values: list[float]) -> dict:
+    """Wall-time tails and variance; first frame is excluded by the caller."""
+    values = np.asarray(values, dtype=float)
+    if not len(values) or not np.isfinite(values).all():
+        raise ValueError("latency distribution requires finite frame times")
+    return {
+        "median": float(np.median(values)),
+        "p90": float(np.quantile(values, 0.9)),
+        "p99": float(np.quantile(values, 0.99)),
+        "max": float(values.max()),
+        "stddev": float(values.std()),
+        "over_100ms": int(np.count_nonzero(values > 100)),
+        "frames": int(len(values)),
+    }
+
+
+class FitProfile(ExitStack):
+    """Opt-in wall-time attribution for the serial experiment, without changing results.
+
+    Exclusive times subtract instrumented children and can be summed. Timed
+    production comparisons must run separately with this instrumentation off.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.stack, self.stats = [], {}
+
+    def instrument(self, owner, name, label):
+        original = getattr(owner, name)
+
+        def measure(call, *args, **kwargs):
+            active = [time.perf_counter(), 0.0]
+            self.stack.append(active)
+            try:
+                return call(*args, **kwargs)
+            finally:
+                elapsed = time.perf_counter() - active[0]
+                self.stack.pop()
+                if self.stack:
+                    self.stack[-1][1] += elapsed
+                row = self.stats.setdefault(label, {"calls": 0, "inclusive_ms": 0.0, "exclusive_ms": 0.0})
+                row["calls"] += 1
+                row["inclusive_ms"] += 1000 * elapsed
+                row["exclusive_ms"] += 1000 * (elapsed - active[1])
+
+        @wraps(original)
+        def measured(*args, **kwargs):
+            return measure(original, *args, **kwargs)
+
+        @wraps(original)
+        def measured_generator(*args, **kwargs):
+            generator = original(*args, **kwargs)
+            while True:
+                try:
+                    value = measure(next, generator)
+                except StopIteration:
+                    return
+                # Time computation between yields, not the consumer's work.
+                yield value
+
+        self.enter_context(
+            patch.object(owner, name, measured_generator if isgeneratorfunction(original) else measured)
+        )
+
+    def __enter__(self):
+        from lerobot.policies.flash import (
+            experimental_surface_session as session,
+            surface_uncertainty as uncertainty,
+        )
+        from lerobot.policies.flash.motion_groups import SceneMotionGroups
+        from lerobot.policies.flash.object_group_association import ObjectGroupAssociation
+        from lerobot.policies.flash.surface_grounding import WholeSurfaceFit
+        from lerobot.policies.flash.surface_kalman import PoseKalmanFilter
+
+        super().__enter__()
+        for name in (
+            "__init__",
+            "fit_once",
+            "refine",
+            "_solve",
+            "residual",
+            "batch_residuals",
+            "score",
+            "check_pose",
+            "partial_surface_check",
+            "scene_depth_check",
+            "uncovered_mask",
+            "_legacy_view_residual",
+            "_projection_evidence",
+            "_scene_depth_evidence",
+        ):
+            self.instrument(WholeSurfaceFit, name, "fitter." + name)
+        for owner in (session, uncertainty):
+            self.instrument(owner, "check_surface_contradiction", "geometry_check")
+        self.instrument(uncertainty.SurfacePoseUncertainty, "__init__", "covariance")
+        self.instrument(PoseKalmanFilter, "correct", "kalman_update")
+        self.instrument(session.SurfaceStore, "extend", "surface_growth")
+        from lerobot.policies.flash import surface_tracking
+        from lerobot.policies.flash.shared_image_tracking import SharedFrameTracker
+        from lerobot.policies.flash.surface_registration import LibraryMatcher
+
+        self.instrument(surface_tracking, "observation", "observation")
+        self.instrument(LibraryMatcher, "prepare", "library.prepare")
+        self.instrument(LibraryMatcher, "refine", "library.refine")
+        self.instrument(SharedFrameTracker, "update", "image_matching")
+        self.instrument(SceneMotionGroups, "update", "group.update")
+        for name in ("query", "record_observation"):
+            self.instrument(ObjectGroupAssociation, name, "group." + name)
+        return self
+
+
+def compare_runs(before: Path, after: Path, method: str) -> dict:
+    """Exact-output regression check; it does not establish absolute pose accuracy."""
+    old_summary = json.loads((before / "summary.json").read_text())
+    new_summary = json.loads((after / "summary.json").read_text())
+    old_quality = old_summary.get("quality", old_summary)
+    new_quality = new_summary.get("quality", new_summary)
+    if (old_summary["input_sha256"], old_summary["frames"]) != (
+        new_summary["input_sha256"],
+        new_summary["frames"],
+    ):
+        raise ValueError("Correctness comparison needs identical frames, depth and masks")
+    changes = {"pose": [], "status": [], "surface_events": []}
+    with (before / "frames.jsonl").open() as old, (after / "frames.jsonl").open() as new:
+        for a, b in zip(old, new, strict=True):
+            a, b = json.loads(a), json.loads(b)
+            if a["frame"] != b["frame"] or set(a["objects"]) != set(b["objects"]):
+                raise ValueError("Comparison frame IDs or object roles differ")
+            for role in a["objects"]:
+                x, y = a["objects"][role], b["objects"][role]
+                for label, key in (("pose", method), ("status", method + "_status")):
+                    if x[key] != y[key]:
+                        changes[label].append([a["frame"], role])
+                fields = ("map_events", "map_points", "map_version_used", "map_version_after")
+                dx, dy = x.get(method + "_details", {}), y.get(method + "_details", {})
+                if any(dx.get(k) != dy.get(k) for k in fields):
+                    changes["surface_events"].append([a["frame"], role])
+    return {
+        "identical": not any(changes.values()),
+        "changed_frame_objects": {key: len(values) for key, values in changes.items()},
+        "first_changes": {key: values[:10] for key, values in changes.items()},
+        "before_processing": old_summary.get("processing", old_summary.get("steady")),
+        "after_processing": new_summary.get("processing", new_summary.get("steady")),
+        # Exact equality detects numerical changes, not whether geometry is
+        # worse. Keep primary pose, secondary surface and availability together.
+        "quality": {
+            role: {
+                "before": old_quality["roles"][role]["methods"].get(method),
+                "after": new_quality["roles"][role]["methods"].get(method),
+            }
+            for role in old_quality["roles"]
+        },
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-run", type=Path, action="append", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--settings", type=Path, help="One complete pipeline-settings JSON for every scene")
+    parser.add_argument("--registration-config", type=Path, help="Optional 3D surface matcher configuration")
+    parser.add_argument("--ufm-revision", help="Pin the UFM checkpoint for repeatable comparisons")
+    parser.add_argument("--compare-to", type=Path, help="Previous single-method benchmark output")
+    parser.add_argument("--frames", type=int, help="Profile only the first N consecutive frames")
+    parser.add_argument(
+        "--serial",
+        action="store_true",
+        help="Disable object concurrency, preserving the estimator",
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Attribute experimental fitting time; separate from uninstrumented timing",
+    )
+    parser.add_argument(
+        "--method",
+        choices=("conditioned_fixed", "conditioned_growing", "group_fixed", "group_growing"),
+        default="group_growing",
+    )
+    parser.add_argument(
+        "--sam-prompts",
+        type=Path,
+        help="JSON keyed by case ID: prompts_by_role and optional seed_points_by_role",
+    )
+    args = parser.parse_args()
+    if args.frames is not None and args.frames < 1:
+        parser.error("--frames must be positive")
+    args.output.mkdir(parents=True, exist_ok=False)
+    fixed_settings = validate(json.loads(args.settings.read_text())) if args.settings else None
+    prompts = json.loads(args.sam_prompts.read_text()) if args.sam_prompts else None
+    snapshot = code_snapshot(args.output)
+    script = Path(__file__)
+    relative = Path("benchmarks") / script.name
+    (args.output / "code" / relative).write_bytes(script.read_bytes())
+    snapshot["source_sha256"][str(relative)] = hashlib.sha256(script.read_bytes()).hexdigest()
+    (args.output / "provenance.json").write_text(json.dumps(snapshot, indent=2) + "\n")
+    cv2.setNumThreads(1)
+    model, results = None, []
+    for index, source in enumerate(args.source_run):
+        case = json.loads((source / "case.json").read_text())
+        settings = fixed_settings or from_recording(
+            json.loads((source.parent / "provenance.json").read_text()), [args.method]
+        )
+        if args.registration_config:
+            from lerobot.policies.flash.surface_registration import LibraryConfig
+
+            registration = LibraryConfig(**json.loads(args.registration_config.read_text()))
+            settings = {
+                **settings,
+                "config": {
+                    **settings["config"],
+                    "shape": {**settings["config"]["shape"], "registration": asdict(registration)},
+                },
+            }
+        config = VisionPipelineConfig.from_dict(settings["config"])
+        if settings["surface_experiment"] is None:
+            parser.error(f"{source} has no surface experiment")
+        started = time.perf_counter()
+        shared = settings["shared_matching"]
+        if model is None and (shared is None or shared["backend"] == "ufm"):
+            model = load_ufm(revision=args.ufm_revision)
+        kernels = compiled_kernels() if config.compiled_surface_fit else None
+        pool = SearchPool(config.shape.batch_query_workers) if config.reuse_surface_search else None
+        source_masks = None
+        if prompts is not None:
+            spec = prompts[case["id"]]
+            if set(spec["prompts_by_role"]) != set(case["roles"]):
+                parser.error("SAM prompts must cover exactly the scene's roles")
+            source_masks = Sam3MaskSource(
+                spec["prompts_by_role"],
+                camera_id="recorded-rgbd",
+                resolution=config.sam_resolution,
+                seed_points_by_role=spec.get("seed_points_by_role"),
+                detection_correction=config.detection_correction.control(offline=False),
+            )
+        startup_s = time.perf_counter() - started
+        from threadpoolctl import threadpool_info
+
+        destination = args.output / f"{index:03d}"
+        destination.mkdir()
+        (destination / "provenance.json").write_text(
+            json.dumps(
+                {
+                    **settings,
+                    "source_run": str(source),
+                    "sam_prompts": prompts,
+                    "ufm_revision": args.ufm_revision,
+                    "effective_vision_config": config.to_dict(),
+                    "compute_thread_pools": threadpool_info(),
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        try:
+            with FitProfile() if args.profile else ExitStack() as profile:
+                result = run_case(
+                    case,
+                    destination / case["id"],
+                    model,
+                    config,
+                    kernels,
+                    pool,
+                    surface_experiment=GrowingSurfaceConfig(**settings["surface_experiment"]),
+                    group_experiment=GroupConfig.from_dict(settings["group_experiment"])
+                    if args.method.startswith("group_")
+                    else None,
+                    shared_matching_config=SharedMatchingConfig.from_dict(shared) if shared else None,
+                    single_method=args.method,
+                    record_surfaces=False,
+                    mask_source=source_masks,
+                    max_frames=args.frames,
+                    parallel_objects=not args.serial and not args.profile,
+                )
+                if args.profile:
+                    result["fit_profile"] = profile.stats
+                    (destination / case["id"] / "profile.json").write_text(
+                        json.dumps(profile.stats, indent=2) + "\n"
+                    )
+        finally:
+            if pool is not None:
+                pool.close()
+        result["startup_s"] = startup_s
+        frame_file = destination / case["id"] / "frames.jsonl"
+        with frame_file.open() as stream:
+            next(stream)
+            result["processing"]["steady_ms"] = latency_distribution(
+                [json.loads(line)["processing_ms"] for line in stream]
+            )
+        (destination / case["id"] / "summary.json").write_text(
+            json.dumps(result, indent=2, allow_nan=False) + "\n"
+        )
+        if args.compare_to is not None:
+            comparison = compare_runs(
+                args.compare_to / f"{index:03d}" / case["id"],
+                destination / case["id"],
+                args.method,
+            )
+            result["comparison"] = comparison
+        results.append(result)
+        (args.output / "summary.json").write_text(json.dumps(results, indent=2) + "\n")
+        print(json.dumps({"case": case["id"], "processing": result["processing"]}), flush=True)
+    if any(not result.get("comparison", {}).get("identical", True) for result in results):
+        raise SystemExit("Correctness regression: inspect summary.json before accepting the speedup")
+
+
+if __name__ == "__main__":
+    main()
