@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="880" viewBox="0 0 1080 880" role="img" aria-labelledby="title desc">
+  <title id="title">FLASH: shared evidence, extraction and execution</title>
+  <desc id="desc">RGB-D and robot state feed surface fitting, group tracking and gripper prediction. Accepted snapshots feed demo extraction and test planning, and the shared viewer. Prepared demonstrations guide test planning. The asynchronous planner supplies a queue consumed at 30 Hz. Replay displays recorded snapshots.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="#8ca6bf"/></marker>
+    <style>
+      text{font-family:DejaVu Sans,Arial,sans-serif;fill:#e5edf5}
+      .title{font-size:28px;font-weight:700}.name{font-size:23px;font-weight:600}.sub{font-size:18px;fill:#b6c6d9}.small{font-size:16px;fill:#b6c6d9}
+      .box{fill:#192b40;stroke:#4b6681;stroke-width:1.5}.accent{fill:#173b43;stroke:#66bdca;stroke-width:1.5}
+      .flow{fill:none;stroke:#8ca6bf;stroke-width:2;marker-end:url(#arrow)}.display{fill:none;stroke:#8ca6bf;stroke-width:2;stroke-dasharray:6 5;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1080" height="880" rx="14" fill="#101c2c"/>
+  <text x="40" y="48" class="title">One perception pipeline. One scene viewer.</text>
+  <text x="40" y="79" class="sub">Proposed design · timeline and keyframes drive the task</text>
+
+  <rect x="205" y="110" width="670" height="72" rx="10" class="box"/>
+  <text x="540" y="141" text-anchor="middle" class="name">RGB-D observations + measured robot state</text>
+  <text x="540" y="167" text-anchor="middle" class="sub">From a demo recording or a running test</text>
+  <path d="M540 182 V213" class="flow"/>
+
+  <rect x="85" y="215" width="910" height="85" rx="10" class="box"/>
+  <text x="245" y="249" text-anchor="middle" class="name">Surface fitting</text>
+  <text x="245" y="276" text-anchor="middle" class="small">Mask + depth checks</text>
+  <path d="M398 232 V282 M683 232 V282" stroke="#4b6681"/>
+  <text x="540" y="249" text-anchor="middle" class="name">Group tracking</text>
+  <text x="540" y="276" text-anchor="middle" class="small">Shared motion + support</text>
+  <text x="838" y="249" text-anchor="middle" class="name">Gripper prediction</text>
+  <text x="838" y="276" text-anchor="middle" class="small">Supported attachment only</text>
+  <path d="M540 300 V332" class="flow"/>
+
+  <rect x="85" y="334" width="910" height="78" rx="10" class="accent"/>
+  <text x="540" y="366" text-anchor="middle" class="name">Accepted scene snapshot + source proposals</text>
+  <text x="540" y="394" text-anchor="middle" class="sub">Surfaces · poses · observed / predicted / lost · source times · reasons</text>
+  <path d="M280 412 V469" class="flow"/>
+  <path d="M800 412 V469" class="flow"/>
+
+  <rect x="85" y="472" width="390" height="98" rx="10" class="box"/>
+  <text x="280" y="507" text-anchor="middle" class="name">Demo extraction</text>
+  <text x="280" y="535" text-anchor="middle" class="sub">+ timeline and relationship edits</text>
+  <text x="280" y="558" text-anchor="middle" class="small">Review and apply a prepared version</text>
+  <path d="M475 520 H602" class="flow"/>
+  <text x="540" y="493" text-anchor="middle" class="small">Prepared</text>
+  <text x="540" y="512" text-anchor="middle" class="small">demo</text>
+  <rect x="605" y="472" width="390" height="98" rx="10" class="box"/>
+  <text x="800" y="508" text-anchor="middle" class="name">Test: match + plan</text>
+  <text x="800" y="538" text-anchor="middle" class="sub">Current keyframes + allowed changes</text>
+  <text x="800" y="560" text-anchor="middle" class="small">Async; publishes a ready action queue</text>
+  <path d="M800 570 V647" class="flow"/>
+  <text x="816" y="614" class="small">Queued actions</text>
+
+  <rect x="605" y="650" width="390" height="96" rx="10" class="box"/>
+  <text x="800" y="688" text-anchor="middle" class="name">30 Hz LeRobot control</text>
+  <text x="800" y="719" text-anchor="middle" class="sub">Runs independently of perception</text>
+
+  <path d="M85 372 H40 V703 H83" class="display"/>
+  <path d="M280 570 V627" class="display"/>
+  <path d="M605 550 H545 V703 H477" class="display"/>
+  <rect x="85" y="630" width="390" height="150" rx="10" class="accent"/>
+  <text x="280" y="667" text-anchor="middle" class="name">Shared 3D scene viewer</text>
+  <text x="280" y="701" text-anchor="middle" class="sub">Demo / Edit · Test · Replay</text>
+  <text x="280" y="732" text-anchor="middle" class="small">Measured mesh + accepted estimate</text>
+  <text x="280" y="757" text-anchor="middle" class="small">Inspect sources, rules and planned motion</text>
+
+  <text x="85" y="825" class="sub">Replay reads recorded snapshots. It does not silently run new estimation.</text>
+  <text x="85" y="853" class="small">Solid arrows: processing / control. Dashed arrows: display and recording.</text>
+</svg>

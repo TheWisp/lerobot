@@ -1,0 +1,436 @@
+{
+  "date": "2026-11-19",
+  "code_commit": "3be1d8d4f",
+  "recording": "saved-747dd29b27a745418524e2744ac29cb5",
+  "source_frame": 5372,
+  "target_frame": 5512,
+  "source_object_track_ids": [
+    6,
+    15,
+    591,
+    1251,
+    1717,
+    1718,
+    1902,
+    1903,
+    1904,
+    1905,
+    1907,
+    1908,
+    1910,
+    1966,
+    1967,
+    1968,
+    1969
+  ],
+  "source_object_tracks": 17,
+  "remaining_track_ids": [
+    6
+  ],
+  "usable_3d_pairs": 1,
+  "required_3d_pairs": 6,
+  "current_object_tracks": 29,
+  "track_losses": {
+    "1905": {
+      "frame": 5381,
+      "match_accepted": false,
+      "fb_error_px": 56.20456314086914,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1908": {
+      "frame": 5381,
+      "match_accepted": false,
+      "fb_error_px": 100.51026153564453,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1717": {
+      "frame": 5381,
+      "match_accepted": false,
+      "fb_error_px": 2.859288215637207,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1967": {
+      "frame": 5381,
+      "match_accepted": false,
+      "fb_error_px": 1.2515623569488525,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1903": {
+      "frame": 5381,
+      "match_accepted": false,
+      "fb_error_px": 1.4714356660842896,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1968": {
+      "frame": 5395,
+      "match_accepted": false,
+      "fb_error_px": 1.2161853313446045,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1966": {
+      "frame": 5401,
+      "match_accepted": false,
+      "fb_error_px": 43.340179443359375,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1904": {
+      "frame": 5401,
+      "match_accepted": false,
+      "fb_error_px": 3.6133878231048584,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1969": {
+      "frame": 5401,
+      "match_accepted": false,
+      "fb_error_px": 4.970261573791504,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1910": {
+      "frame": 5401,
+      "match_accepted": false,
+      "fb_error_px": 4.999324798583984,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1718": {
+      "frame": 5401,
+      "match_accepted": false,
+      "fb_error_px": 2.5486960411071777,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "15": {
+      "frame": 5410,
+      "match_accepted": false,
+      "fb_error_px": 2.402219772338867,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1902": {
+      "frame": 5410,
+      "match_accepted": false,
+      "fb_error_px": 2.1219418048858643,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "591": {
+      "frame": 5410,
+      "match_accepted": false,
+      "fb_error_px": 14.289560317993164,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1251": {
+      "frame": 5467,
+      "match_accepted": false,
+      "fb_error_px": 13.5435791015625,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    },
+    "1907": {
+      "frame": 5475,
+      "match_accepted": false,
+      "fb_error_px": 1.4742141962051392,
+      "limit_px": 1,
+      "reason": "image_rejected"
+    }
+  },
+  "pair_evidence": {
+    "source_uv": [
+      [
+        294.4111835479736,
+        260.3160771322514
+      ]
+    ],
+    "target_uv": [
+      [
+        232.0297969818115,
+        321.4935565758805
+      ]
+    ],
+    "stage": [
+      3
+    ],
+    "track_ids": [
+      6
+    ],
+    "backend": "lk"
+  },
+  "shared_matching_config": {
+    "backend": "lk",
+    "max_image_size_px": 640,
+    "scene_points": 800,
+    "object_points": 256,
+    "spacing_px": 5,
+    "history_frames": 64,
+    "depth_support_radius_px": 1,
+    "lk": {
+      "window_size_px": 21,
+      "pyramid_levels": 3,
+      "forward_backward_limit_px": 1
+    },
+    "ufm": {
+      "covisibility_min": 0.5
+    }
+  },
+  "source_sha256": {
+    "shared_image_tracking.py": "c1e9ed95bd46bd69a6a47bb25a37117ed839b58b68e91d0f98a45ccb41ae47da",
+    "image_matching.py": "15818b7bf88772502230c4f1fffda2178b3a473a8bb1306fd3e117ddf4b4b523",
+    "surface_observation.py": "9e8e08779a763eb8ff8e7790d6f491779ef6b7dfe93a8c18989c3198958fbb26"
+  },
+  "scope": "Replay shared image tracking from initialization 5118 through frame 5512 using recorded SAM masks and FoundationStereo depth. Audit tracks inside the object mask at frame 5372 and use the real SharedFrameTracker.pairs consumer for 5372 to 5512. One shared usable pair remains; zero validated image-motion inliers does not imply zero surviving track IDs. All sixteen missing source-object tracks fail the configured one-pixel forward/backward limit. This does not identify the physical cause of each LK failure.",
+  "object_image_points": {
+    "5372": {
+      "track_ids": [
+        6,
+        15,
+        591,
+        1251,
+        1717,
+        1718,
+        1902,
+        1903,
+        1904,
+        1905,
+        1907,
+        1908,
+        1910,
+        1966,
+        1967,
+        1968,
+        1969
+      ],
+      "uv_px": [
+        [
+          294.4111835479736,
+          260.3160771322514
+        ],
+        [
+          282.5969776153564,
+          280.0516903703384
+        ],
+        [
+          289.1568153381347,
+          278.0438428004144
+        ],
+        [
+          288.6136817932129,
+          262.3648148847548
+        ],
+        [
+          305.459899520874,
+          268.5413771149862
+        ],
+        [
+          313.70900306701657,
+          266.1963524581319
+        ],
+        [
+          321.93499755859375,
+          258.6260844699586
+        ],
+        [
+          286.88357582092283,
+          264.2889397552659
+        ],
+        [
+          304.5033504486084,
+          257.09303646193024
+        ],
+        [
+          292.62998695373534,
+          252.27896101303523
+        ],
+        [
+          299.97524948120116,
+          263.59665945485153
+        ],
+        [
+          302.0938423156738,
+          251.245436863346
+        ],
+        [
+          315.87405662536617,
+          256.2355970519682
+        ],
+        [
+          297.4715461730957,
+          271.26117111964777
+        ],
+        [
+          286.0478691101074,
+          269.42271128280385
+        ],
+        [
+          320.03625411987304,
+          264.9249935255525
+        ],
+        [
+          327.24745178222656,
+          263.0756889891229
+        ]
+      ]
+    },
+    "5512": {
+      "track_ids": [
+        6,
+        2430,
+        2434,
+        2497,
+        2498,
+        2590,
+        2593,
+        2595,
+        2596,
+        2597,
+        2598,
+        2633,
+        2634,
+        2635,
+        2636,
+        2637,
+        2638,
+        2639,
+        2640,
+        2641,
+        2642,
+        2643,
+        2644,
+        2645,
+        2646,
+        2647,
+        2648,
+        2649,
+        2650
+      ],
+      "uv_px": [
+        [
+          232.0297969818115,
+          321.4935565758805
+        ],
+        [
+          224.9040603637695,
+          331.7376904566644
+        ],
+        [
+          240.07983512878417,
+          310.7343196974275
+        ],
+        [
+          232.37803001403807,
+          331.980259679299
+        ],
+        [
+          233.79178657531736,
+          309.8700618849275
+        ],
+        [
+          272.6818992614746,
+          306.6236727382597
+        ],
+        [
+          251.44122085571288,
+          307.57525466160223
+        ],
+        [
+          262.20569343566893,
+          307.0441881042818
+        ],
+        [
+          236.590954208374,
+          297.9182924723757
+        ],
+        [
+          240.40010681152341,
+          307.0511886006561
+        ],
+        [
+          244.52451705932614,
+          297.6486317334254
+        ],
+        [
+          265.16249999999997,
+          336.9585635359116
+        ],
+        [
+          269.1375,
+          327.6767955801105
+        ],
+        [
+          275.7625,
+          321.04696132596683
+        ],
+        [
+          262.5125,
+          326.3508287292818
+        ],
+        [
+          267.8125,
+          315.74309392265195
+        ],
+        [
+          237.33749999999998,
+          338.28453038674036
+        ],
+        [
+          246.61249999999998,
+          318.3950276243094
+        ],
+        [
+          239.98749999999998,
+          322.3729281767956
+        ],
+        [
+          224.08749999999998,
+          338.28453038674036
+        ],
+        [
+          225.4125,
+          323.6988950276243
+        ],
+        [
+          239.98749999999998,
+          331.6546961325967
+        ],
+        [
+          250.58749999999998,
+          298.5055248618785
+        ],
+        [
+          245.2875,
+          338.28453038674036
+        ],
+        [
+          257.2125,
+          313.0911602209945
+        ],
+        [
+          251.9125,
+          325.02486187845307
+        ],
+        [
+          258.53749999999997,
+          338.28453038674036
+        ],
+        [
+          271.78749999999997,
+          334.3066298342541
+        ],
+        [
+          278.41249999999997,
+          311.7651933701658
+        ]
+      ]
+    }
+  },
+  "image_point_coordinates": "2D pixel positions [u, v] in the original 848 by 480 RGB image; top-left origin. Selected by the saved object mask, before usable-surface filtering."
+}

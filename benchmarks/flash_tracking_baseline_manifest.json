@@ -1,0 +1,92 @@
+{
+  "schema": "flash-tracking-baseline-manifest-v1",
+  "baseline_url": "https://github.com/TheWisp/lerobot/blob/09c1cd4cfb10fe20ae77023d26788176920a89f1/benchmarks/flash_tracking_baseline.json",
+  "baseline_sha256": "ba8b045560e283b8fac76121ce3df4ef11032bc4d6c6355f55e9f99623429dcb",
+  "suite_sha256": "0286490bbcd8a429a7ea58bcadb08008d465526709a4c78f3a50028deadeb058",
+  "cases": [
+    {
+      "id": "flash-demo-dowel-ring",
+      "status": "scored"
+    },
+    {
+      "id": "flash-demo-gamepad-cube",
+      "status": "scored"
+    },
+    {
+      "id": "ycb-bleach0",
+      "status": "scored"
+    },
+    {
+      "id": "ycb-bleach_hard_00_03_chaitanya",
+      "status": "scored"
+    },
+    {
+      "id": "ycb-cracker_box_reorient",
+      "status": "scored"
+    },
+    {
+      "id": "ycb-cracker_box_yalehand0",
+      "status": "scored"
+    },
+    {
+      "id": "ycb-mustard0",
+      "status": "scored"
+    },
+    {
+      "id": "ycb-mustard_easy_00_02",
+      "status": "scored"
+    },
+    {
+      "id": "ycb-sugar_box1",
+      "status": "scored"
+    },
+    {
+      "id": "ycb-sugar_box_yalehand0",
+      "status": "scored"
+    },
+    {
+      "id": "ycb-tomato_soup_can_yalehand0",
+      "status": "scored"
+    },
+    {
+      "id": "caryx-000",
+      "status": "scored"
+    },
+    {
+      "id": "caryx-002",
+      "status": "scored"
+    },
+    {
+      "id": "caryx-003",
+      "status": "scored"
+    },
+    {
+      "id": "caryx-007",
+      "status": "scored"
+    },
+    {
+      "id": "caryx-014",
+      "status": "scored"
+    },
+    {
+      "id": "caryx-015",
+      "status": "scored"
+    },
+    {
+      "id": "caryx-032",
+      "status": "scored"
+    },
+    {
+      "id": "caryx-041",
+      "status": "scored"
+    },
+    {
+      "id": "caryx-053",
+      "status": "scored"
+    },
+    {
+      "id": "caryx-090",
+      "status": "scored"
+    }
+  ]
+}

@@ -51,7 +51,7 @@ Old saved playback retains its actual solver/settings and never reruns inference
 Rerunning an old SciPy configuration selects the maintained fitter and records
 that change; the previous result is unchanged.
 
-The [sealed handover](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/policies/flash/docs/SEALED_20261031.md) describes the previous demo compiler,
+The [sealed handover](docs/SEALED_20261031.md) describes the previous demo compiler,
 robot engine and editor design. That code, and the pose service it ran on, were removed
 on 2026-11-27; [b2a7399ff](https://github.com/TheWisp/lerobot/tree/b2a7399ffa0cefee408f741b1d45ad3118954c63/src/lerobot/policies/flash) is the last commit that has it. The [old implementation map](https://github.com/TheWisp/lerobot/blob/18fa9d9f40d230ca2fa8d8bead75d24b573a8316/src/lerobot/policies/flash/README.md)
 is historical, not the current UI specification.
