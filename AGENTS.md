@@ -33,14 +33,15 @@ pre-commit run --all-files                           # Lint + format (ruff, typo
 too specific to guess. Each is a `SKILL.md` meant to be read in full before
 doing the thing it names, not skimmed afterwards.
 
-| Skill               | Read before                                                             |
-| ------------------- | ----------------------------------------------------------------------- |
-| `pull-request`      | opening a PR, rewriting a body, or preparing a branch for review        |
-| `verifying-changes` | writing tests for a fix, auditing a branch, or calling something proven |
-| `design-doc`        | writing or reviewing a design document                                  |
-| `gui-async-hygiene` | changing anything under `src/lerobot/gui`                               |
-| `remote-rig`        | running training, inference or the GUI on another machine               |
-| `openarm2`          | OpenArm2 hardware, CAN faults, gripper configuration                    |
+| Skill               | Read before                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| `pull-request`      | opening a PR, rewriting a body, or preparing a branch for review                         |
+| `verifying-changes` | writing tests for a fix, auditing a branch, or calling something proven                  |
+| `flash-terminology` | using, explaining, or introducing FLASH tracking terminology in any response or artifact |
+| `design-doc`        | writing or reviewing a design document                                                   |
+| `gui-async-hygiene` | changing anything under `src/lerobot/gui`                                                |
+| `remote-rig`        | running training, inference or the GUI on another machine                                |
+| `openarm2`          | OpenArm2 hardware, CAN faults, gripper configuration                                     |
 
 **Agents do not find these the same way, and one of them does not find them
 at all.** Claude Code reads `.claude/skills/`, which symlinks here, and offers
@@ -58,6 +59,28 @@ If your agent does neither, read the `SKILL.md` directly — the path is the
 whole instruction. Do not infer a convention from surrounding code instead: a
 PR body written without `pull-request` reliably has to be rewritten, which is
 the cost this section exists to avoid.
+
+## User agreement required for rule and test changes
+
+**Do not commit any rule or test change without the user's explicit agreement
+to that change.** This applies to additions, edits, deletions and reverts,
+including changes introduced through an amend, cherry-pick or merge.
+
+- Rules include `AGENTS.md`, other agent instructions, repository skills,
+  development policies and configuration that changes required checks.
+- Tests include test code, fixtures, snapshots, expected values, tolerances,
+  mocks, skips, expected failures and test selection or execution configuration.
+- Before seeking agreement, show the concrete proposed changes and explain
+  which rule or tested behavior they add or alter. General permission to fix a
+  bug, implement a feature or land code is not agreement to change rules or tests.
+- A specific user instruction to make and land a particular rule or test change
+  authorizes that scope; do not request the same agreement again. Additional
+  changes require their own agreement.
+- Keep unapproved rule and test changes uncommitted and out of otherwise approved
+  commits. Never rewrite expectations merely to make a changed implementation
+  pass; changing the intended behavior requires explicit user agreement.
+
+This requirement also applies to changing or removing this rule itself.
 
 ## Commit Messages
 
@@ -141,6 +164,21 @@ how several defects went unnoticed for months.
 
 ## Architecture (`src/lerobot/`)
 
+- **FLASH terminology:** every AI agent must read and follow
+  [the terminology skill](.agents/skills/flash-terminology/SKILL.md) before using,
+  explaining, or introducing tracking terms in conversation or repository work.
+  Consult the [Markdown glossary](src/lerobot/policies/flash/docs/glossary.md)
+  for the definitions; read the skill directly even if your agent does not
+  automatically discover repository skills.
+- **FLASH perception:** [`src/lerobot/gui/static/flash_architecture.html`](src/lerobot/gui/static/flash_architecture.html)
+  is the canonical diagram of the running frame path. Update it in the same
+  change when altering frame inputs, group evidence, fitting, pose publication,
+  or surface growth. Keep it descriptive of code that runs; put proposed
+  behavior elsewhere.
+  Increment `PIPELINE_VERSION` in `src/lerobot/policies/flash/pipeline_version.py`
+  when frame processing, grouping, association, pose estimation or saved display
+  evidence changes. The editor uses it to invalidate and rebuild saved demo results;
+  file schema and execution-plan versions do not replace this behavior version.
 - **`scripts/`** — CLI entry points (`lerobot-train`, `lerobot-eval`, `lerobot-record`, etc.), mapped in `pyproject.toml [project.scripts]`.
 - **`configs/`** — Dataclass configs parsed by draccus. `train.py` has `TrainPipelineConfig` (top-level). `policies.py` has `PreTrainedConfig` base. Polymorphism via `draccus.ChoiceRegistry` with `@register_subclass("name")` decorators.
 - **`policies/`** — Each policy in its own subdir. All inherit `PreTrainedPolicy` (`nn.Module` + `HubMixin`) from `pretrained.py`. Factory with lazy imports in `factory.py`.

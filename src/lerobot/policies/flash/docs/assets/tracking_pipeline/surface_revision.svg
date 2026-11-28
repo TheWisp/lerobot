@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1150" height="820" viewBox="0 0 1150 820">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#52647a"/></marker></defs>
+<rect width="1150" height="820" fill="#f5f7fb"/>
+<g font-family="DejaVu Sans, sans-serif">
+<text x="35" y="50" font-size="32" fill="#18283e" font-weight="bold" text-anchor="start">Undo a surface addition — and its consequences</text>
+<text x="35" y="88" font-size="23" fill="#52647a" font-weight="normal" text-anchor="start">Proposed mechanism · automatic mistake detection is still unresolved</text>
+<rect x="35" y="125" width="330" height="310" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="53" y="163" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">1. Keep originals</text>
+<rect x="60" y="215" width="70" height="90" rx="9" fill="#b8d8ef" stroke="#287abc" stroke-width="2"/>
+<text x="95" y="270" font-size="31" fill="#18283e" font-weight="bold" text-anchor="middle">1</text>
+<rect x="160" y="215" width="70" height="90" rx="9" fill="#f3c890" stroke="#287abc" stroke-width="2"/>
+<text x="195" y="270" font-size="31" fill="#18283e" font-weight="bold" text-anchor="middle">2</text>
+<rect x="260" y="215" width="70" height="90" rx="9" fill="#b8d8ef" stroke="#287abc" stroke-width="2"/>
+<text x="295" y="270" font-size="31" fill="#18283e" font-weight="bold" text-anchor="middle">3</text>
+<text x="200" y="355" font-size="20" fill="#18283e" font-weight="normal" text-anchor="middle">Keep additions 1, 2, 3</text>
+<text x="200" y="393" font-size="20" fill="#52647a" font-weight="normal" text-anchor="middle">Raw measurements preserved</text>
+<rect x="410" y="125" width="330" height="310" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="428" y="163" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">2. Exclude 2</text>
+<rect x="435" y="215" width="70" height="90" rx="9" fill="#b8d8ef" stroke="#bd742b" stroke-width="2"/>
+<text x="470" y="270" font-size="31" fill="#18283e" font-weight="bold" text-anchor="middle">1</text>
+<rect x="535" y="215" width="70" height="90" rx="9" fill="#f3c890" stroke="#bd742b" stroke-width="2"/>
+<text x="570" y="270" font-size="31" fill="#18283e" font-weight="bold" text-anchor="middle">2</text>
+<path d="M540 220 L600 300" stroke="#ad4e38" stroke-width="5" fill="none"/>
+<path d="M600 220 L540 300" stroke="#ad4e38" stroke-width="5" fill="none"/>
+<rect x="635" y="215" width="70" height="90" rx="9" fill="#b8d8ef" stroke="#bd742b" stroke-width="2"/>
+<text x="670" y="270" font-size="31" fill="#18283e" font-weight="bold" text-anchor="middle">3</text>
+<text x="575" y="355" font-size="20" fill="#18283e" font-weight="normal" text-anchor="middle">Do not erase 1 or 3</text>
+<text x="575" y="393" font-size="20" fill="#52647a" font-weight="normal" text-anchor="middle">Or correct its placement</text>
+<rect x="785" y="125" width="330" height="310" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="803" y="163" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">3. Rebuild</text>
+<rect x="810" y="215" width="70" height="90" rx="9" fill="#b8d8ef" stroke="#287abc" stroke-width="2"/>
+<text x="845" y="270" font-size="31" fill="#18283e" font-weight="bold" text-anchor="middle">1</text>
+<rect x="1010" y="215" width="70" height="90" rx="9" fill="#b8d8ef" stroke="#287abc" stroke-width="2"/>
+<text x="1045" y="270" font-size="31" fill="#18283e" font-weight="bold" text-anchor="middle">3</text>
+<text x="950" y="355" font-size="20" fill="#18283e" font-weight="normal" text-anchor="middle">Combine active patches again</text>
+<text x="950" y="393" font-size="20" fill="#52647a" font-weight="normal" text-anchor="middle">New model version</text>
+<path d="M368 260 L405 260" stroke="#52647a" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+<path d="M744 260 L780 260" stroke="#52647a" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+<rect x="35" y="470" width="1080" height="145" rx="14" fill="#e9edff" stroke="#d8e0e9" stroke-width="2"/>
+<text x="60" y="511" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">But later poses may have used the wrong addition 2.</text>
+<text x="60" y="552" font-size="24" fill="#18283e" font-weight="normal" text-anchor="start">Offline: restart before addition 2; reprocess the dependent frames.</text>
+<text x="60" y="588" font-size="24" fill="#18283e" font-weight="normal" text-anchor="start">Live: rebuild and refit now. This cannot undo past robot actions.</text>
+<rect x="35" y="645" width="1080" height="120" rx="14" fill="#fff2df" stroke="#d8e0e9" stroke-width="2"/>
+<text x="60" y="686" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">How do we know addition 2 was wrong?</text>
+<text x="60" y="727" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">That needs experiments. New disagreement alone does not prove addition 2 is wrong.</text>
+</g></svg>

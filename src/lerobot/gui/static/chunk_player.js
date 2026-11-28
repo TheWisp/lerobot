@@ -14,13 +14,14 @@
       tiles: (cameraKey) => canvas,           // the canvas a camera's frames paint on, or null
       drawMasks: (cameraKey, rows, size, labels, declared) => {},  // this frame's mask rows at `size`; `declared` is the camera's own [h, w]
       entryEnabled: (entry) => true,   // the mask layer's rule for a stored row's enabled flag
-      onPaint: (frame, episode) => {},        // frame j of every camera is on screen
+      loadFrameData: (start, count, signal, episode) => Promise.resolve(null), // optional aligned evidence
+      onPaint: (frame, episode, frameData) => {}, // RGB and evidence for frame j are ready together
       onHold: (waiting) => {},                // the frame counter is (not) waiting for a chunk
       onLog: (line) => {},
     });
     player.open(episode);
 
-  Nothing adapts: one profile, one chunk length, learned from the server's
+  Nothing adapts: a fixed requested profile, one chunk length, learned from the server's
   header and checked against what the page assumed. Playback wraps within the
   range the host sets (the episode by default) and never leaves the episode on
   its own. If any camera lacks frame j, no camera advances.
@@ -54,7 +55,6 @@
   const DECODE_QUIET_MS = 2500;
   const PAINT_LOG = 2000;      // painted frames kept for the metrics; ~a minute at 30 fps
   const MAX_REDECODES = 2;
-  const PROFILE = 'low';
 
   // ---------------------------------------------------------------- decisions
   //
@@ -185,6 +185,7 @@
     const T0 = performance.now();
     const now = () => performance.now() - T0;
     const { datasetId, fps, length, cameras } = opts;
+    const profile = opts.profile || 'low';
     // Extra request parameters the page wants on every chunk, e.g. the depth display mapping.
     const query = opts.query ? `&${opts.query}` : '';
     const tiles = opts.tiles || (() => null);
@@ -286,13 +287,20 @@
       const done = () => { if (inflight.get(start) === mine) inflight.delete(start); };
       const t = performance.now();
       const ep = episode;
-      const url = `${base()}/chunk?start=${start}&profile=${PROFILE}${query}`;
+      // Optional frame-aligned evidence shares the video chunk's readiness and
+      // lifetime. Never paint RGB first and asynchronously attach another frame.
+      const frameData = opts.loadFrameData
+        ? opts.loadFrameData(start, Math.min(n, length - start), abort.signal, ep) : Promise.resolve(null);
+      frameData.catch(() => {}); // Fetch failures below still own reporting.
+      const url = `${base()}/chunk?start=${start}&profile=${encodeURIComponent(profile)}${query}`;
       let resp, buf;
       try {
         resp = await fetch(url, { signal: abort.signal, cache: 'no-store', headers: { 'X-Player': playerState() } });
-        if (!resp.ok) { fail(`chunk ${start}: HTTP ${resp.status}`); done(); return; }
+        if (!resp.ok) { abort.abort(); fail(`chunk ${start}: HTTP ${resp.status}`); done(); return; }
         buf = await resp.arrayBuffer();
+        mine.frameData = await frameData;
       } catch (e) {
+        abort.abort();
         done();
         if (e.name !== 'AbortError') fail(`chunk ${start}: ${e.message}`);
         return;
@@ -302,6 +310,7 @@
       if (header.chunk_frames !== n) fail(`rule (grid): server chunks are ${header.chunk_frames} frames, page assumed ${n}`);
       const rec = { start: header.first_frame, frames: header.frames, header, parts, decoded: {}, decoders: {}, done: {}, masks: {}, maskSize: {}, maskLabels: {}, masksPending: 0, closed: false, arrivedAt: performance.now(), decodeDoneAt: null,
         lastOutputAt: performance.now(), redecodes: 0 };
+      rec.frameData = mine.frameData;
       M.chunks.push({ start: rec.start, frames: rec.frames, bytes: buf.byteLength, ms: +(performance.now() - t).toFixed(1), cache: resp.headers.get('x-chunk-cache'), serverMs: +(resp.headers.get('x-chunk-ms') || 0), url, at: Date.now() });
       log(`chunk ${rec.start}+${rec.frames} ${resp.headers.get('x-chunk-cache')} ${(buf.byteLength / 1000).toFixed(0)} kB in ${(performance.now() - t).toFixed(0)} ms`);
       chunks.set(rec.start, rec);
@@ -496,7 +505,7 @@
       if (M.painted.length > PAINT_LOG) M.painted.splice(0, M.painted.length - PAINT_LOG);
       if (M.firstPicture == null) { M.firstPicture = +now().toFixed(1); log(`first picture, frame ${j}, at ${M.firstPicture} ms`); }
       if (seekPending && j === seekPending.frame) { const ms = +(performance.now() - seekPending.t).toFixed(1); M.seeks.push({ frame: j, ms }); log(`seek to ${j}: painted after ${ms} ms`); seekPending = null; }
-      onPaint(j, episode);
+      onPaint(j, episode, rec.frameData?.[i] ?? null);
     }
 
     function clampIntoRange() { if (cur < rangeStart || cur >= rangeEnd) { cur = rangeStart; lastPainted = -1; } }

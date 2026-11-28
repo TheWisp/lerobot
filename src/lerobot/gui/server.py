@@ -34,6 +34,9 @@ from lerobot.gui.api import (
     chunk_playback,
     datasets,
     edits,
+    flash_editor,
+    flash_experiments,
+    flash_tracking,
     live_video,
     models,
     notes,
@@ -356,6 +359,9 @@ app.include_router(chunk_playback.router)
 app.include_router(edits.router)
 app.include_router(robot.router)
 app.include_router(run.router)
+app.include_router(flash_tracking.router)
+app.include_router(flash_editor.router)
+app.include_router(flash_experiments.router)
 app.include_router(live_video.router)
 app.include_router(models.router)
 app.include_router(overlays.router)
@@ -373,9 +379,19 @@ app.include_router(notes.router)
 _training_orch = training.make_default_orchestrator()
 training.init_state(orch=_training_orch, host_registry=_training_orch._hosts)  # noqa: SLF001
 
+
+class _GuiStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        # Keep ETag/304 caching, but revalidate after a server/code update.
+        # Apply to 304 responses too so a previously cached policy is replaced.
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 # Serve static files (CSS, JS)
 _static_dir = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+app.mount("/static", _GuiStaticFiles(directory=_static_dir), name="static")
 
 # Serve vendored robot descriptions (URDF + meshes) so the in-browser URDF
 # viewer can fetch them same-origin. Every robots/*_description package is
@@ -393,7 +409,9 @@ for _desc_dir in sorted(_robots_dir.glob("*_description")):
 @app.get("/")
 async def root():
     """Serve the HTML viewer."""
-    return FileResponse(_static_dir / "index.html", media_type="text/html")
+    return FileResponse(
+        _static_dir / "index.html", media_type="text/html", headers={"Cache-Control": "no-cache"}
+    )
 
 
 def _mount_mcp(host: str, port: int) -> None:

@@ -16,6 +16,7 @@ per-frame *values* (Phase A2).
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import httpx
 import numpy as np
@@ -143,6 +144,46 @@ class TestGetFrameFeatures:
             "video",
         ):
             assert "action" in body["values"]
+
+
+def test_recorded_depth_endpoint_keeps_metric_values_and_episode_alignment(app_with_state):
+    app, state = app_with_state
+
+    class Dataset:
+        meta = SimpleNamespace(
+            features={
+                "observation.images.overhead_depth": {
+                    "dtype": "image",
+                    "shape": [2, 3, 1],
+                    "info": {"is_depth_map": True, "depth_unit": "mm"},
+                },
+                "observation.images.overhead": {"dtype": "image", "shape": [2, 3, 3]},
+            },
+            total_episodes=2,
+            episodes=[{"length": 2}, {"length": 1}],
+        )
+
+        def __getitem__(self, index):
+            return {
+                "observation.images.overhead_depth": torch.tensor(
+                    [[[100 + index, 200, float("nan")], [0, 300, 400]]]
+                )
+            }
+
+    state.datasets["metric-demo"] = Dataset()
+
+    async def get(camera):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.get(f"/api/datasets/metric-demo/episodes/1/depth-frame/0?camera={camera}")
+
+    response = asyncio.run(get("observation.images.overhead_depth"))
+    assert response.status_code == 200
+    np.testing.assert_array_equal(
+        np.frombuffer(response.content, dtype="<u2").reshape(2, 3), [[102, 200, 0], [0, 300, 400]]
+    )
+    assert asyncio.run(get("observation.images.overhead")).status_code == 400
 
     def test_invalid_frame_returns_404(self, app_with_state, tmp_path, lerobot_dataset_factory):
         app, state = app_with_state

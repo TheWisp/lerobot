@@ -142,6 +142,54 @@ async def test_record_argv_parses():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("extension", [None, "geometry", "infrared"])
+async def test_record_entrypoint_selects_and_parses_optional_adapter(tmp_path, monkeypatch, extension):
+    import copy
+    import importlib
+
+    from lerobot.scripts import lerobot_record
+
+    profile = copy.deepcopy(ROBOT_PROFILE)
+    if extension == "geometry":
+        profile["fields"]["geometry_path"] = str(tmp_path / "geometry.json")
+    elif extension == "infrared":
+        profile["cameras"] = {
+            "scene": {
+                "type": "intelrealsense",
+                "serial_number_or_name": "123456789",
+                "width": 848,
+                "height": 480,
+                "fps": 30,
+                "use_depth": True,
+                "enable_infrared": True,
+            }
+        }
+    argv = await _capture_argv(
+        start_record,
+        RecordRequest(robot=profile, teleop=TELEOP_PROFILE, repo_id="test/adapter", single_task="move"),
+    )
+    parsed = []
+
+    def consume(cfg, **kwargs):
+        parsed.append((cfg, kwargs))
+
+    # Run the selected module's real main() and the recorder's real CLI parser,
+    # stopping before hardware is constructed.
+    consume.__annotations__["cfg"] = lerobot_record.RecordConfig
+    monkeypatch.setattr(lerobot_record, "record", parser.wrap()(consume))
+    monkeypatch.setattr(sys, "argv", [argv[2], *argv[3:]])
+    importlib.import_module(argv[2]).main()
+    cfg, kwargs = parsed[0]
+    assert (kwargs.get("prepare_recording") is not None) == (extension is not None)
+    assert cfg.dataset.repo_id == "test/adapter"
+    assert cfg.dataset.rgb_encoder.vcodec == "libsvtav1"
+    if extension == "geometry":
+        assert cfg.robot.geometry_path == tmp_path / "geometry.json"
+    elif extension == "infrared":
+        assert cfg.robot.cameras["scene"].enable_infrared
+
+
+@pytest.mark.asyncio
 async def test_record_argv_parses_in_policy_mode():
     """The policy branch emits a different flag set than the teleop branch."""
     from lerobot.scripts.lerobot_record import RecordConfig

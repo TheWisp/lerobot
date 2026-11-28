@@ -137,3 +137,12 @@ def test_one_file_is_asked_for_under_one_version():
             assert found, f"{js.name} loads urdf_viz.html with no version"
             versions.setdefault(found.group(1), []).append(js.name)
     assert len(versions) == 1, f"urdf_viz.html is asked for under {versions}"
+
+
+def test_rgbd_views_load_the_same_scene_version():
+    """Live, examples and editor must not reuse different cached scene modules."""
+    versions = {}
+    for caller in _callers():
+        for version in re.findall(_VERSION_OF.format(re.escape("rgbd_scene.js")), caller.read_text()):
+            versions.setdefault(version, []).append(caller.name)
+    assert len(versions) == 1, f"rgbd_scene.js is asked for under {versions}"

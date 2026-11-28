@@ -7,8 +7,7 @@ let obsStreamMeta = null; // {available, obs_scalar_keys, action_keys, image_key
 let obsStreamTimer = null; // interval ID for camera polling
 let liveVideo = null;      // the Low Bandwidth stream client, when that is the path
 let obsStreamGen = 0; // bumped on stop/restart to cancel an in-flight "wait for the obs-stream" loop
-let _runFormRendered = false; // true once all three workflow sections are in the DOM
-
+let _runFormRendered = false; // true once all workflow sections are in the DOM
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -81,6 +80,9 @@ function _initSelectTitleSync() {
 // ============================================================================
 
 async function selectWorkflow(workflow) {
+    // Keep old links and callers working; FLASH now owns a top-level tab.
+    if (workflow === 'flash') return switchTab('flash');
+    if (!document.getElementById('tab-run').classList.contains('active')) switchTab('run');
     selectedWorkflow = workflow;
     document.querySelectorAll('.workflow-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.workflow === workflow);
@@ -90,6 +92,8 @@ async function selectWorkflow(workflow) {
         const section = document.getElementById(`run-section-${wf}`);
         if (section) section.style.display = (wf === workflow) ? '' : 'none';
     }
+    const episodeControl = document.getElementById('run-episode-control');
+    if (episodeControl) episodeControl.style.display = '';
     if (workflow === 'policy' || workflow === 'teleop') {
         await _ensureModelDataLoaded();
     }
@@ -168,6 +172,7 @@ const _WORKFLOW_VALIDATORS = {
         }
         return null;
     },
+    flash: () => 'Use the Video examples or Live camera controls.',
 };
 
 let _isRunning = false;
@@ -197,6 +202,7 @@ function _updateLaunchButton() {
     if (!btn) return;
     const { ready, reason } = _validateLaunch();
     btn.disabled = !ready;
+    btn.textContent = 'Launch';
     // Native `title` shows on hover; gives the missing-field hint without
     // needing extra inline text below the button.
     btn.title = reason;
@@ -1300,7 +1306,7 @@ function renderRunForm() {
     // record, HVLA), so it lives outside the per-workflow sections.
     // Buttons start disabled; updateRunUI enables them while a subprocess
     // runs (the endpoint 409s otherwise).
-    html += '<div class="form-section">';
+    html += '<div class="form-section" id="run-episode-control">';
     // Live phase readout sits right in the section title so the operator can
     // see what a "Next episode" click will interrupt ("recording episode 3" /
     // "resetting" / ...). Fed by pollRunStatus from /api/run/status.
@@ -1364,6 +1370,7 @@ function _getActiveFpsInputId() {
 }
 
 async function launchRun() {
+
     const robotSelect = document.getElementById(_getActiveRobotSelectId());
     if (!robotSelect || !robotSelect.value) {
         showToast('Error', 'Select a robot profile', 'error');
@@ -2108,6 +2115,7 @@ async function pollRunStatus() {
         const status = await res.json();
         _reportRunFailure(status.last_error);
         updateRunUI(status.running, status.command);
+        if (status.running && status.command === 'flash_surface_live' && document.getElementById('tab-flash')?.classList.contains('active') && !flashLive.visible) await showFlashLive();
 
         // Live record-phase readout next to the episode-control buttons
         // ("recording episode 3" / "resetting" / ...). Empty when idle or
@@ -2138,7 +2146,7 @@ async function pollRunStatus() {
         // If running but no SSE, reconnect
         if (status.running && !runEventSource) {
             connectOutputSSE();
-            startObsStreamViewer();
+            if (status.command !== 'flash_surface_live') startObsStreamViewer();
         }
     } catch (e) {
         console.error('Status poll failed:', e);
@@ -2501,6 +2509,8 @@ async function startObsStreamViewer() {
         if (lowBandwidth) ov.style.display = 'none';
         else overlayElements[key] = ov;
 
+
+
         // Same chip family as the enlarge button beside it, and as the data tab's
         // tiles -- one class rather than two hand-written inline plates that had
         // already drifted apart in inset, padding and background.
@@ -2584,6 +2594,7 @@ async function startObsStreamViewer() {
         grid.style.gridTemplateColumns = focusedTile ? '1fr' : gridCols;
         grid.style.gridTemplateRows = focusedTile ? '1fr' : gridRows;
     }
+
     // Deliberately NO Esc hotkey: six other components already bind Escape (log modal,
     // process modal, bug-report and add-host dialogs, data-tab handlers), so a global
     // listener here would fire alongside whichever modal is topmost — and, added per

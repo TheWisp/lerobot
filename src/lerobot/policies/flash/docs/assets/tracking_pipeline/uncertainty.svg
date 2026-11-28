@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="1010" viewBox="0 0 1100 1010">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#52647a"/></marker></defs>
+<rect width="1100" height="1010" fill="#f5f7fb"/>
+<g font-family="DejaVu Sans, sans-serif">
+<text x="35" y="50" font-size="32" fill="#18283e" font-weight="bold" text-anchor="start">The surface and its pose can both be uncertain</text>
+<text x="35" y="87" font-size="23" fill="#52647a" font-weight="normal" text-anchor="start">Illustration · numbers below are examples, not measured accuracy</text>
+<rect x="35" y="120" width="1030" height="250" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<rect x="35" y="395" width="1030" height="250" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<rect x="35" y="670" width="1030" height="250" rx="14" fill="white" stroke="#d8e0e9" stroke-width="2"/>
+<text x="65" y="162" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">1. Surface uncertainty</text>
+<text x="585" y="213" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">Are these measured points correct?</text>
+<text x="585" y="254" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Depth noise changes individual points.</text>
+<text x="585" y="293" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">A wrong alignment shifts a whole patch.</text>
+<text x="585" y="332" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">The working surface can be distorted.</text>
+<path d="M110 275 C110 237 150 218 210 222 L410 222 C455 222 470 245 470 275 C470 304 447 322 410 322 L210 322 C150 327 110 308 110 275Z" fill="none" stroke="#aeb9c6" stroke-width="3" stroke-dasharray="7 6"/>
+<circle cx="141.40855857852367" cy="220.25258503149632" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="146.60330358128712" cy="320.57777589187833" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="156.31539738498688" cy="211.12990172011476" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="155.4893422774169" cy="319.12881371845" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="168.94119847971172" cy="223.16101616556827" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="166.96545259239994" cy="316.66237904671056" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="176.25218095447826" cy="221.93839679303085" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="180.7423609919752" cy="308.12697457506135" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="183.13869481634293" cy="236.59364090748355" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="192.3842054076242" cy="326.87947860958263" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="200.81054848982302" cy="219.1743411393403" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="199.29488673413363" cy="313.3907561016595" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="212.31919716345544" cy="220.66449027907524" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="206.99123893273782" cy="318.40098154500936" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="220.89329172687496" cy="217.39057731367112" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="226.12757469195296" cy="330.16378889186234" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="226.3913160188413" cy="225.79792479263685" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="235.3029655045267" cy="331.9461309497841" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="245.74297557168703" cy="207.49911184118278" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="245.9177096186026" cy="322.7552840765476" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="258.16555021151925" cy="225.7288190257642" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="251.904737168321" cy="336.0314669951786" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="263.5622293047178" cy="230.5505501175379" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="266.9966776123456" cy="318.1802708748843" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="272.2922659058164" cy="215.854554567887" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="275.13839007413577" cy="320.88738604790996" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="287.6209146786041" cy="234.2290352244394" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="288.9581557788606" cy="330.9168117358242" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="296.61339297710896" cy="218.96025371871033" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="301.0140042034849" cy="329.458017848315" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="311.5171661455853" cy="218.92810582049609" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="307.84041979470595" cy="335.33447806126486" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="319.5938358354304" cy="219.36060267598805" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="324.33969888414947" cy="322.71795871587597" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="330.7037881402129" cy="228.4118730121958" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="331.60088659513616" cy="331.81378999826893" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="342.77325036570176" cy="216.0246917181901" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="348.2416604158379" cy="331.3519877471957" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="354.3451198375543" cy="221.2338687176065" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="351.20006057767023" cy="317.8187156515416" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="362.33994109953466" cy="228.49861322221886" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="367.5865676618856" cy="319.6643879426452" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="374.9748439333792" cy="224.90900947430396" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="375.989808312333" cy="326.0022534602291" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="388.0626140434741" cy="225.09283256086843" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="388.3564152616572" cy="314.72540117985733" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="399.52165021894973" cy="207.18833761171607" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="398.23737967533526" cy="319.9314214411218" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="409.78884688010345" cy="220.61411161215594" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="409.5020294449139" cy="308.7387551592109" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="418.8829433569633" cy="216.05201470438902" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="420.7517865999137" cy="323.3410458930579" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="430.0267017190581" cy="218.06169059472467" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="429.46198343887175" cy="320.89289438382326" r="3.2" fill="#287abc" stroke="none" stroke-width="2"/>
+<circle cx="415" cy="205.0" r="4" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="420" cy="205.96296296296296" r="4" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="425" cy="208.85185185185185" r="4" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="430" cy="213.66666666666666" r="4" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="435" cy="220.40740740740742" r="4" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="440" cy="229.07407407407408" r="4" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="445" cy="239.66666666666666" r="4" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="450" cy="252.1851851851852" r="4" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="455" cy="266.6296296296296" r="4" fill="#bd742b" stroke="none" stroke-width="2"/>
+<circle cx="460" cy="283.0" r="4" fill="#bd742b" stroke="none" stroke-width="2"/>
+<text x="290" y="352" font-size="19" fill="#52647a" font-weight="normal" text-anchor="middle">Points can be misplaced</text>
+<text x="65" y="438" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">2. 6D pose: position</text>
+<ellipse cx="295" cy="535" rx="140" ry="28" fill="#e6f1fc" stroke="#287abc" stroke-width="2" stroke-dasharray="6 5"/>
+<g opacity=".17"><rect x="133" y="493" width="124" height="84" rx="18" fill="#b9d9f0" stroke="#287abc" stroke-width="3"/><circle cx="195" cy="535" r="5" fill="#287abc"/></g>
+<g opacity=".17"><rect x="333" y="493" width="124" height="84" rx="18" fill="#b9d9f0" stroke="#287abc" stroke-width="3"/><circle cx="395" cy="535" r="5" fill="#287abc"/></g>
+<g opacity="1"><rect x="233" y="493" width="124" height="84" rx="18" fill="#b9d9f0" stroke="#287abc" stroke-width="3"/><circle cx="295" cy="535" r="5" fill="#287abc"/></g>
+<path d="M155 590 L435 590" stroke="#287abc" stroke-width="2" fill="none"/>
+<path d="M155 585 L155 595" stroke="#287abc" stroke-width="2" fill="none"/>
+<path d="M435 585 L435 595" stroke="#287abc" stroke-width="2" fill="none"/>
+<text x="295" y="621" font-size="19" fill="#52647a" font-weight="normal" text-anchor="middle">Long ellipse = less certain sideways</text>
+<text x="585" y="487" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">Where is the whole object?</text>
+<text x="585" y="527" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Example spread: 10 mm sideways,</text>
+<text x="585" y="559" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">2 mm vertically (standard deviations).</text>
+<text x="585" y="600" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Each candidate keeps the same shape.</text>
+<text x="65" y="714" font-size="27" fill="#18283e" font-weight="bold" text-anchor="start">3. Same 6D pose: orientation</text>
+<g transform="rotate(-16 295 815)" opacity="0.15"><rect x="140" y="797" width="310" height="36" rx="18" fill="#b9d9f0" stroke="#287abc" stroke-width="3"/><path d="M295 815 L420 815" stroke="#287abc" stroke-width="3"/></g>
+<g transform="rotate(-8 295 815)" opacity="0.3"><rect x="140" y="797" width="310" height="36" rx="18" fill="#b9d9f0" stroke="#287abc" stroke-width="3"/><path d="M295 815 L420 815" stroke="#287abc" stroke-width="3"/></g>
+<g transform="rotate(16 295 815)" opacity="0.15"><rect x="140" y="797" width="310" height="36" rx="18" fill="#b9d9f0" stroke="#287abc" stroke-width="3"/><path d="M295 815 L420 815" stroke="#287abc" stroke-width="3"/></g>
+<g transform="rotate(8 295 815)" opacity="0.3"><rect x="140" y="797" width="310" height="36" rx="18" fill="#b9d9f0" stroke="#287abc" stroke-width="3"/><path d="M295 815 L420 815" stroke="#287abc" stroke-width="3"/></g>
+<g transform="rotate(0 295 815)" opacity="1"><rect x="140" y="797" width="310" height="36" rx="18" fill="#b9d9f0" stroke="#287abc" stroke-width="3"/><path d="M295 815 L420 815" stroke="#287abc" stroke-width="3"/></g>
+<circle cx="295" cy="815" r="6" fill="#18283e" stroke="none" stroke-width="2"/>
+<text x="295" y="904" font-size="19" fill="#52647a" font-weight="normal" text-anchor="middle">Same pivot; different orientations</text>
+<text x="585" y="765" font-size="25" fill="#18283e" font-weight="bold" text-anchor="start">Which way is it pointing?</text>
+<text x="585" y="805" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Example tilt spread: 8 degrees.</text>
+<text x="585" y="845" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">The whole object rotates together.</text>
+<text x="585" y="885" font-size="23" fill="#18283e" font-weight="normal" text-anchor="start">Its surface does not bend.</text>
+<text x="35" y="974" font-size="23" fill="#18283e" font-weight="bold" text-anchor="start">One 6 × 6 covariance includes all six directions and their correlations.</text>
+</g></svg>
