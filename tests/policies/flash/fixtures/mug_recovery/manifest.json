@@ -1,0 +1,337 @@
+{
+  "case": "dexycb-mug-20201002_111710",
+  "frame": 49,
+  "connected_frame": 37,
+  "time_s": 1.6333333333333333,
+  "previous_time_s": 1.6,
+  "observed_time_s": 1.2333333333333334,
+  "patches": {
+    "0": {
+      "active": true,
+      "support_frames": [
+        0
+      ]
+    },
+    "1": {
+      "active": true,
+      "support_frames": [
+        1,
+        2
+      ]
+    },
+    "2": {
+      "active": true,
+      "support_frames": [
+        2,
+        3
+      ]
+    },
+    "3": {
+      "active": true,
+      "support_frames": [
+        3,
+        4
+      ]
+    },
+    "4": {
+      "active": true,
+      "support_frames": [
+        4,
+        5
+      ]
+    },
+    "5": {
+      "active": true,
+      "support_frames": [
+        5,
+        26
+      ]
+    },
+    "6": {
+      "active": true,
+      "support_frames": [
+        6,
+        7
+      ]
+    },
+    "7": {
+      "active": true,
+      "support_frames": [
+        7,
+        10
+      ]
+    },
+    "8": {
+      "active": true,
+      "support_frames": [
+        8,
+        9
+      ]
+    },
+    "9": {
+      "active": true,
+      "support_frames": [
+        9,
+        10
+      ]
+    },
+    "11": {
+      "active": true,
+      "support_frames": [
+        11,
+        12
+      ]
+    },
+    "12": {
+      "active": false,
+      "support_frames": [
+        12
+      ]
+    },
+    "13": {
+      "active": true,
+      "support_frames": [
+        13,
+        26
+      ]
+    },
+    "14": {
+      "active": false,
+      "support_frames": [
+        14
+      ]
+    },
+    "15": {
+      "active": true,
+      "support_frames": [
+        15,
+        17
+      ]
+    },
+    "16": {
+      "active": true,
+      "support_frames": [
+        16,
+        17
+      ]
+    },
+    "17": {
+      "active": false,
+      "support_frames": [
+        17
+      ]
+    },
+    "18": {
+      "active": true,
+      "support_frames": [
+        18,
+        22
+      ]
+    },
+    "19": {
+      "active": true,
+      "support_frames": [
+        19,
+        20
+      ]
+    },
+    "21": {
+      "active": false,
+      "support_frames": [
+        21
+      ]
+    },
+    "23": {
+      "active": true,
+      "support_frames": [
+        23,
+        24
+      ]
+    },
+    "24": {
+      "active": true,
+      "support_frames": [
+        24,
+        25
+      ]
+    },
+    "25": {
+      "active": true,
+      "support_frames": [
+        25,
+        26
+      ]
+    },
+    "26": {
+      "active": true,
+      "support_frames": [
+        26,
+        28
+      ]
+    },
+    "28": {
+      "active": true,
+      "support_frames": [
+        28,
+        29
+      ]
+    },
+    "29": {
+      "active": true,
+      "support_frames": [
+        29,
+        31
+      ]
+    }
+  },
+  "map_version": 18,
+  "vision_config": {
+    "backend": "surface",
+    "sam_resolution": 504,
+    "min_similarity": 0.75,
+    "registration_threshold_m": 0.005,
+    "registration_min_inliers": 12,
+    "registration_trials": 100,
+    "visible_shape_fallback": false,
+    "parallel_surface_objects": true,
+    "pipeline_surface_frames": true,
+    "surface_object_workers": 2,
+    "surface_reference_max_points_per_view": 15000,
+    "compiled_surface_fit": true,
+    "reuse_surface_search": true,
+    "detection_correction": {
+      "enabled": false,
+      "offline_interval_frames": 16,
+      "runtime_interval_frames": 60,
+      "min_detector_score": 0.8,
+      "min_tracker_score": 0.8,
+      "min_mask_overlap": 0.5
+    },
+    "observation": {
+      "mask_margin_px": 2,
+      "depth_span_m": 0.01,
+      "depth_neighborhood_px": 3,
+      "normal_bilateral_diameter_px": 5,
+      "normal_bilateral_sigma_px": 2.0,
+      "huber_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "samples_across_object": 64,
+      "min_surface_spacing_m": 0.001,
+      "component_gap_m": 0.01,
+      "validation_tile_px": 4
+    },
+    "shape": {
+      "depth_tolerance_m": 0.005,
+      "surface_spacing_m": 0.003,
+      "mask_boundary_tolerance_px": 2.0,
+      "require_full_mask_coverage": false,
+      "max_surface_distance_m": 0.03,
+      "max_evaluations": 50,
+      "solver_tolerance": 1e-05,
+      "max_fit_points": 2048,
+      "nn_queries_per_worker": 512,
+      "batch_jacobian": true,
+      "batch_query_workers": 8
+    },
+    "motion": {
+      "crop_min_px": 160,
+      "crop_max_px": 480,
+      "crop_extent_multiplier": 2.5,
+      "input_size_px": 320,
+      "grid_step_px": 4,
+      "covisibility_min": 0.5,
+      "min_ransac_pairs": 6,
+      "ransac_distance_m": 0.006,
+      "ransac_confidence": 0.99,
+      "refinement_steps": 2,
+      "connected_dilation_px": 7
+    }
+  },
+  "surface_config": {
+    "spacing_m": 0.003,
+    "agreement_m": 0.005,
+    "min_overlap": 0.25,
+    "growth_agreement_m": 0.003,
+    "growth_min_overlap": 0.75,
+    "patch_consistency": 0.95,
+    "patch_overlap": 0.8,
+    "image_weight": 1.0,
+    "surface_priority": true,
+    "partial_surface_matching": true,
+    "confirmations": 2,
+    "max_patches": 32,
+    "max_pending": 8,
+    "points_per_patch": 1024,
+    "max_points": 8192,
+    "grow": true,
+    "retain_unobserved_pose": false,
+    "uncertainty": {
+      "enabled": true,
+      "mode": "kalman",
+      "initial_position_std_m": 0.005,
+      "initial_rotation_std_deg": 10.0,
+      "position_process_std_m_sqrt_s": 0.002,
+      "rotation_process_std_deg_sqrt_s": 2.0,
+      "independent_error_m": 0.001,
+      "correlated_error_m": 0.002,
+      "correlation_length_m": 0.01,
+      "max_measurements": 256,
+      "compatibility_probability": 0.95,
+      "max_visible_outlier_fraction": 0.25,
+      "prefer_supported_prediction": true
+    }
+  },
+  "recorded_cost": [
+    0.3391123890432203,
+    612.4869200185033,
+    0.33910514422655114,
+    0.3391123890432203,
+    612.4869200185033
+  ],
+  "recorded_innovation_squared": 2314.29955745121,
+  "scope": "One real frame from a recorded pre-update checkpoint; labels never enter tracking.",
+  "broader_variant": "Additional position process variance since last accepted observation, same checkpoint mean and history.",
+  "source_sha256": {
+    "frames.jsonl": "92e33d1b9d496cffaeb69ce5188511f60e9fe02e78527d6e69a869ec8c40e846",
+    "case.json": "837663b0260f23c8ceff0758af25db2a985b74d6113409f85d04cf729a551af1",
+    "provenance.json": "c05661cc3305147249720dff29612e7b9675f3ea133cbfaead1aef6906e2e22a"
+  },
+  "files_sha256": {
+    "frame_000000.npz": "07b957af71a722cfd39371c0f494d74a0f17e4f703fa6d5fec5bc9848d17489a",
+    "frame_000001.npz": "1936fb9e55c37542f3c6ed481d4bbbf3e853530b3e5ac02e142c10e18a35a262",
+    "frame_000002.npz": "e0959ac48d6ca7541157875253c56f68a3d83d6627c6ee605cd50c6aa5a504e5",
+    "frame_000003.npz": "bb054920378f68d38b6b8dbdb8dd9755a66a80200d0e3a77870a6a66fcb2307b",
+    "frame_000004.npz": "5ead2d72cce7a1a043422a488f539f3e98693ad2c6d9755ef8b7954294152c6f",
+    "frame_000005.npz": "07115ecd7720b7bf31699a72ce0a35468f18e21beb118c8be3c1ceefb85bf7ee",
+    "frame_000006.npz": "4202a0438c6e8c9dc0afd40669fda3be6d3043e12a45cda0abca2c9d885ff472",
+    "frame_000007.npz": "3685f71ae3ab3d78e45b093f772da3caba14e393303a81774d021ea15689acef",
+    "frame_000008.npz": "cdcf0a1f87d8ecc74bc1a18cfe97b1c0544a4c1c5921021ac4d1adb51a9d765a",
+    "frame_000009.npz": "f3412d1672ac377a2ecd9e1941c32c8db47c181514de8d7a4e7bca3de5260f55",
+    "frame_000011.npz": "cfd7d2bdff736e6a6a1c0cdf0406ded300151406ec21d289c63fc82be1e5c3da",
+    "frame_000012.npz": "2cb88cbf6c105992b16ed7395681bd2f4fe7b7ca28967d23f8e42263b15dddef",
+    "frame_000013.npz": "edf083ba2e67333260fe576cb92e3cac1766e5f9a739fbe042a66b1566955b6b",
+    "frame_000014.npz": "e8beb269d2493c02aae217bfa3fdb33023ad081fc2762c336136baf62370f83d",
+    "frame_000015.npz": "7b5696f249dc242c4fac2978926e39b75c3d5cd3d3a48e6f3802fd144acc7f04",
+    "frame_000016.npz": "487abdb90f67aa65cecae9135e74a440951bcd6066a3909a9ce0e9cbd024adc6",
+    "frame_000017.npz": "f644ea9eeb31b58b31e8f0d6cd34d52d4f1be2426213e1549bbbbe756e4cfa71",
+    "frame_000018.npz": "034ce2e25a01c86a9e60e0bac7b577ac45f623ac91317574e55a1205a2850d26",
+    "frame_000019.npz": "b740f86fafaf8ef9cf5f7f65690b9817f5f8664edb634ef0fee8b09077c7a135",
+    "frame_000021.npz": "1de1e0c1f40ed4688ae187fd950d02479a14e8e5fe8abf3bae6382a57a7c8cdb",
+    "frame_000023.npz": "1401f14f95a84dab15fa7c6dffa1e9f48c92f1fad1230a651f2be28e12d0c3b8",
+    "frame_000024.npz": "9e73e6bbd96fc6c333f6813dd7eee29e368bdf92432e66de811cc237a46877b9",
+    "frame_000025.npz": "7b180fd5867d88cc9b3116e575fd20bcc14a8d14b24544734404a380429c5c51",
+    "frame_000026.npz": "5bbc719879c24f4fc195bce01f4edf7af3b1358757e63fbf2b4ddafdff56c585",
+    "frame_000028.npz": "1b674ed782140f4c49c7bd46ed35786f247f98c0582a79409c0d597f9510bb19",
+    "frame_000029.npz": "e19345b89672744c03bc915af1e5cc4b4fff8f6ef0c00f02a3cebd0493db9165",
+    "frame_000037.npz": "b2ab34427b94e6194f6a3852e7101c01c0e53e0d6f25268ad46dbdf6762f46e9",
+    "frame_000049.npz": "82e2320f61f0990fe89e57e208db75c83f98ae2bcd630f5ba6533dc9a0e7b618",
+    "state.npz": "0bdca714c7794177f8766fde07bbb472ad49b0ac71670893708f8d17dd45d377"
+  },
+  "dataset": {
+    "name": "DexYCB",
+    "url": "https://dex-ycb.github.io/",
+    "sequence": "20201002-subject-08/20201002_111710/841412060263",
+    "input": "Recorded RGB, depth aligned to color, visible-object masks and calibrated intrinsics",
+    "labels": "Evaluation only; no labelled pose is used by the tracking update"
+  }
+}
