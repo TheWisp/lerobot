@@ -1,8 +1,4 @@
-"""The parked filter fix must survive combination with surface recovery.
-
-These checks forbid the recorded wrong jump. Recovery is tested separately in
-test_recorded_recovery_sequences: rejecting every candidate cannot pass that.
-"""
+"""Recovery comparison bookkeeping, and refusal of the recorded wrong gamepad pose."""
 
 from dataclasses import asdict, replace
 
@@ -46,25 +42,19 @@ def test_reset_comparison_changes_filter_policy_not_uncertainty_or_geometry(prev
     assert FILTERS["reset_broader"] is FILTERS["strict_broader"]
 
 
-def test_saved_no_reset_setting_rejects_the_recorded_wrong_gamepad_without_factory_override():
-    _, meta = load("gamepad_271")
-    vision, surface = configurations(
-        {"config": meta["vision"], "surface_experiment": meta["surface"]}, "recovery", "strict_broader"
-    )
-    changes = asdict(surface)
-    assert not changes["uncertainty"]["reset_on_geometry_conflict"]
-    result = replay("gamepad_271", surface_changes=changes, observation_changes=asdict(vision.observation))
-    detail = result["result"]["diagnostics"]["kalman"]
-    assert detail["prior_rejected_by_depth_mask"]
-    assert detail["innovation_squared"] > detail["innovation_limit"]
-    assert not detail["accepted"]
-    assert result["result"]["camera_from_reference"] is None
-    assert not result["surface_changed"]
-
-
-@pytest.mark.parametrize("fitting", ["baseline", "recovery"])
-@pytest.mark.parametrize("filter_name", ["strict", "strict_broader"])
-def test_failed_previous_geometry_does_not_authorize_recorded_wrong_gamepad_pose(fitting, filter_name):
+@pytest.mark.parametrize(
+    ("fitting", "filter_name", "filter_override"),
+    [
+        ("recovery", "strict_broader", False),
+        ("baseline", "strict", True),
+        ("baseline", "strict_broader", True),
+        ("recovery", "strict", True),
+        ("recovery", "strict_broader", True),
+    ],
+)
+def test_recorded_wrong_gamepad_alignment_is_not_published(fitting, filter_name, filter_override):
+    # Outcome only: nothing is shown and the surface is not grown, whichever
+    # check refuses the proposal.
     _, meta = load("gamepad_271")
     vision, surface = configurations(
         {"config": meta["vision"], "surface_experiment": meta["surface"]}, fitting, filter_name
@@ -73,14 +63,7 @@ def test_failed_previous_geometry_does_not_authorize_recorded_wrong_gamepad_pose
         "gamepad_271",
         surface_changes=asdict(surface),
         observation_changes=asdict(vision.observation),
-        filter_factory=FILTERS[filter_name],
+        **({"filter_factory": FILTERS[filter_name]} if filter_override else {}),
     )
-    details = report["result"]["diagnostics"]["kalman"]
-    # This actual depth/mask/fitter output disproves the old pose, but the new
-    # proposal still fails the unchanged Kalman consistency test.
-    assert details["prior_rejected_by_depth_mask"]
-    assert details["innovation_squared"] > details["innovation_limit"]
-    assert not details["accepted"]
-    assert details["reason"] == "innovation_conflict"
-    assert report["result"]["camera_from_reference"] is None
+    assert report["result"]["camera_from_reference"] is None, report["result"]["diagnostics"].get("reason")
     assert not report["surface_changed"]

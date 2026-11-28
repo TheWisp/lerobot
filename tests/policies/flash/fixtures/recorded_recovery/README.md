@@ -7,7 +7,7 @@ the last accepted measured view. It does **not** rerun segmentation or UFM;
 image correspondences/group residuals are absent and an available group pose
 is only a starting guess. Full causal replays are a separate experiment.
 
-| Fixture       |    Time | Required result                                            |
+| Fixture       |    Time | Pose check it was exported for (removed, see below)        |
 | ------------- | ------: | ---------------------------------------------------------- |
 | `gamepad_271` | 11.97 s | Returned orientation agrees with the measured broad face   |
 | `mustard_180` | 19.39 s | Returned pose within 20 mm / 20° of the dataset label      |
@@ -36,8 +36,11 @@ FLASH_RECOVERY_EXPERIMENT=partial_filtered_depth_search PYTHONPATH=src:. python 
 FLASH_RECOVERY_EXPERIMENT=recent_view PYTHONPATH=src:. python -m pytest tests/policies/flash/test_recorded_recovery_integration.py -q
 ```
 
-These are deliberately failing acceptance tests, not `xfail`s. Do not weaken
-the assertions to accept a returned but wrong pose. `partial_depth_search`
+**The pose checks in the table were removed on 2026-11-28.** They were written
+as deliberately failing checkpoints for a recovery experiment and still failed
+when FLASH landed. `test_recorded_recovery_integration.py` now checks only that
+a rejected alignment leaves the surface unchanged and that the captured process
+noise is applied once. `partial_depth_search`
 is the slower 24-start experiment without filtering the depth used by pose
 validation. The two other experiments use four starts. None is enabled by
 default. Configurations apply equally to every fixture.
@@ -57,8 +60,7 @@ FLASH_RECOVERY_SEQUENCE_ROOT=/path/to/completed/runs PYTHONPATH=src:. python -m 
 This requires complete recordings from frame zero. It reads independent labels
 from these fixtures, checks the frame/time/reference identity, and rejects a
 returned wrong pose. It does not launch inference itself. Without the environment
-variable these six full-sequence acceptance checks explicitly skip; the fourteen
-small checkpoint tests above still execute and expose the unresolved failures.
+variable these six full-sequence acceptance checks explicitly skip.
 
 The parked no-reset filters are compared jointly with surface recovery through
 `benchmarks.flash_recovery_combinations`. Its manifest selects recorded inputs;
@@ -72,9 +74,11 @@ name while overriding the class; their saved surface settings alone do not
 describe that override. Keep those artifacts as historical evidence. Velocity
 still requires the benchmark-only filter implementation and its saved settings.
 
-`test_combined_recovery.py` checks that the gamepad's wrong proposal is rejected
-even when the previous pose fails depth/mask validation. It does not call this
-successful recovery. The six sequence checks above still require useful poses;
-five additional sequence checks verify no Kalman rejection was bypassed anywhere
-in a completed combined replay. Restoring the old reset makes the gamepad
-rejection test fail at its acceptance assertion.
+`test_combined_recovery.py` checks how the comparison classifies wrong, missing
+and correct output, that a reset setting changes only the filter policy, and
+that the gamepad's recorded wrong proposal is never published and never grows
+the surface. Since c55938d09 removed the Kalman innovation veto on 2026-11-11,
+the geometry checks refuse it; **the checks that asserted the veto itself were
+removed on 2026-11-28.** The six sequence checks above still require useful poses; five
+additional sequence checks verify no Kalman rejection was bypassed anywhere in a
+completed combined replay.

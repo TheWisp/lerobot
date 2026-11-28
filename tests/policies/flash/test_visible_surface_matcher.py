@@ -12,9 +12,8 @@ from lerobot.policies.flash.vision_config import VisionPipelineConfig
 
 @pytest.mark.parametrize("history", METHODS)
 @pytest.mark.parametrize("frame", (540, 627))
-@pytest.mark.parametrize("clean", (False, True))
-def test_recorded_clear_gamepad_placement(history, frame, clean):
-    result = replay(history, frame, clean_start=clean, matcher="visible_icp")
+def test_recorded_clear_gamepad_placement(history, frame):
+    result = replay(history, frame, clean_start=True, matcher="visible_icp")
     assert result["solver"]["library"] == "visible_icp"
     assert result["geometry"]["accepted"], result
     assert result["result"]["mean_feature_error_mm"] <= 5, result

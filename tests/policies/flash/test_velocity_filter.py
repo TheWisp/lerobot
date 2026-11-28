@@ -92,25 +92,6 @@ def test_measured_group_displacement_is_not_added_twice():
     assert np.linalg.eigvalsh(f.joint_covariance).min() > 0
 
 
-def test_rejected_measurement_and_session_rollback_preserve_all_filter_state():
-    f = make_filter()
-    f.predict(0.1, np.eye(4), np.eye(4))
-    before = f.snapshot()
-    bad = f.pose.copy()
-    bad[0, 3] = 1.0
-    result = f.correct(bad, np.eye(6) * 1e6, f.center(bad), contradicted=True)
-    assert not result["accepted"]  # A failed old geometry check cannot bypass the gate.
-    np.testing.assert_array_equal(f.joint_covariance, before["joint_covariance"])
-    good = f.pose.copy()
-    good[0, 3] = 0.003
-    assert f.correct(good, np.eye(6) * 1e5, f.center(good))["accepted"]
-    assert np.linalg.norm(f.velocity) > 0
-    f.restore(before)
-    np.testing.assert_array_equal(f.velocity, before["velocity"])
-    np.testing.assert_array_equal(f.joint_covariance, before["joint_covariance"])
-    np.testing.assert_array_equal(f.pose, before["pose"])
-
-
 def test_unobserved_direction_cannot_create_velocity():
     f = make_filter()
     f.predict(0.1, np.eye(4), np.eye(4))
@@ -265,24 +246,6 @@ def test_recovery_after_hidden_motion_stays_accurate_when_the_object_stops():
         assert row["available"], (row["index"], row["reason"])
         assert row["error"]["median_point_error_mm"] < 5
         assert row["error"]["rotation_error_deg"] < 1
-
-
-def test_recorded_bad_mug_recovery_remains_rejected_without_surface_changes():
-    from benchmarks.flash_recovery_fixture import restore
-    from benchmarks.flash_recovery_matrix import WorkProbe
-
-    session, prepared, metadata, _ = restore("strict", filter_factory=VelocityPoseFilter)
-    before = session.store.points.copy()
-    with WorkProbe() as probe:
-        result = session.update(prepared, metadata["time_s"])
-    assert result["camera_from_reference"] is None
-    assert not result["diagnostics"]["kalman"]["accepted"]
-    assert result["diagnostics"]["kalman"]["filter_reason"] == "innovation_conflict"
-    np.testing.assert_array_equal(session.store.points, before)
-    assert not result["diagnostics"]["map_events"]
-    work = probe.result()
-    assert work["calls"]["kalman_correct"] == 1
-    assert work["calls"]["fit_refinement"] <= 6
 
 
 def test_reset_ablation_preserves_legacy_reset_but_discards_old_velocity():
