@@ -15,7 +15,7 @@ regression, not an independent test of LK or learned depth accuracy.
 
 The full-pipeline performance comparison separately runs every frame with its
 own original RGB, mask and depth; see the
-[dated evidence](https://github.com/TheWisp/lerobot/blob/80a635b64185099a1456e265b52b73d06ef270d5/docs/proofs/flash-recovery-20261119/README.md#depth-rejection-of-carried-group-points).
+[dated evidence](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/docs/proofs/flash-recovery-20261119/README.md#depth-rejection-of-carried-group-points).
 
 Re-export from the original recording:
 

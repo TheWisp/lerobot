@@ -1,0 +1,7 @@
+{
+  "source": "saved-12f52d18ae514eb99614dc61b9e89529",
+  "frames": [1866, 1871],
+  "description": "Recorded RGB-D and SAM masks around a surface-check rejection that erased surrounding ring support. Includes the earlier remembered surface and pose. Tests rerun shared LK and group estimation; saved pose is only the starting coordinate transform.",
+  "depth_units": "metres",
+  "camera_coordinates": "aligned RGB-D optical frame"
+}
