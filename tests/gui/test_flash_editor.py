@@ -504,7 +504,7 @@ async def test_editor_records_virtual_robot_through_real_writer(tmp_path, monkey
             repo_id="test/virtual-demo",
             root=str(tmp_path / "virtual-demo"),
             single_task="circle",
-            fps=10,
+            fps=30,
             episode_time_s=1,
             play_sounds=False,
         )
@@ -672,7 +672,7 @@ async def test_saved_setup_drives_recorder_and_camera(tmp_path, monkeypatch):
     teleop = {"type": "scripted_bimanual_ee", "fields": {"id": "test"}}
     atomic_json(robot_api.ROBOT_PROFILES_DIR / "robot.json", robot)
     atomic_json(robot_api.TELEOP_PROFILES_DIR / "leader.json", teleop)
-    settings = flash_editor.EditorSettings(robot="robot", teleop="leader", camera="scene", fps=20)
+    settings = flash_editor.EditorSettings(robot="robot", teleop="leader", camera="scene")
     settings.pipeline_settings["config"]["shape"]["registration"]["backend"] = "open3d_plane"
     settings.pipeline_settings["shared_matching"]["backend"] = "ufm"
     await flash_editor.save_settings(settings)
@@ -703,7 +703,7 @@ async def test_saved_setup_drives_recorder_and_camera(tmp_path, monkeypatch):
     async def record(req):
         events.append("record")
         assert req.robot == robot and req.teleop == teleop
-        assert req.fps == 20
+        assert req.fps == 30
         assert req.root.startswith(str(flash_editor.EDITOR_DIR / "recordings"))
         assert req.repo_id.startswith("local/flash-demo-")
         return {"root": req.root}
@@ -743,3 +743,30 @@ async def test_last_replay_and_saved_demos_survive_new_recording_and_restart(tmp
     renamed = await flash_editor.keep_demo(flash_editor.KeepDemo(id="one", name="Place cube"))
     assert len(renamed["demos"]) == 2
     assert renamed["demos"][1]["name"] == "Place cube"
+
+
+@pytest.mark.asyncio
+async def test_editor_refuses_to_record_a_demo_at_another_rate(tmp_path):
+    # Demo execution replays at 30 fps; a demo recorded at another rate would play at the wrong speed (#277).
+    with pytest.raises(HTTPException, match="recorded at 30 fps"):
+        await flash_editor.record(
+            run.RecordRequest(
+                robot=calibrated_profile(tmp_path),
+                teleop={"type": "scripted_bimanual_ee", "fields": {"id": "editor-test"}},
+                repo_id="test/demo",
+                root=str(tmp_path / "recording"),
+                single_task="pick cube",
+                fps=10,
+            )
+        )
+
+
+def test_settings_saved_with_a_recording_rate_still_load():
+    import json
+
+    from lerobot.policies.flash.surface_session_config import defaults
+
+    flash_editor.EDITOR_DIR.mkdir(parents=True, exist_ok=True)
+    saved = {"robot": "", "teleop": "", "camera": "", "fps": 10, "pipeline_settings": defaults()}
+    (flash_editor.EDITOR_DIR / "settings.json").write_text(json.dumps({**saved, "depth_source": "sensor"}))
+    assert "fps" not in flash_editor._read_settings().model_dump()

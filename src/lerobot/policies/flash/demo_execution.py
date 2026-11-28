@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .demo_document import tracking_stale_reason
+from .demo_document import DEMO_FPS, tracking_stale_reason
 from .execution import TimedAction
 from .experimental_surface_session import PoseHint
 from .geometry import transform
@@ -49,6 +49,11 @@ def load_reference(path, roles, *, frame_id=0, time_s=0.0, calibration_version="
 def compile_demo(dataset, episode, document, tracking_directory: Path, robot, camera_name):
     if not document.keyframes:
         raise ValueError("Mark at least one keyframe before applying the demo")
+    if dataset.fps != DEMO_FPS:
+        raise ValueError(
+            f"This demo was recorded at {dataset.fps} fps; FLASH replays demos at {DEMO_FPS} fps. "
+            f"Record it again at {DEMO_FPS} fps."
+        )
     if dataset.meta.info.robot_geometry != robot.geometry.to_dict():
         raise ValueError("Demo and selected robot geometry differ; use the robot that recorded this demo")
     model = robot.cartesian_model()
@@ -307,7 +312,7 @@ def _reference_for_range(plan, first, observations):
     return reference, evidence
 
 
-def plan_demo_range(plan, model, index, state, observations, now, *, fps=30.0):
+def plan_demo_range(plan, model, index, state, observations, now, *, fps=DEMO_FPS):
     """Convert a demo range to a queue; new targets rebuild the unissued suffix.
 
     The robot owns IK and joint units. The editor supplies only the recorded

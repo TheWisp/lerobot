@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from lerobot.gui.config_paths import gui_config_dir
 from lerobot.policies.flash.demo_document import (
+    DEMO_FPS,
     DemoDocument,
     atomic_json,
     document_path,
@@ -46,7 +47,6 @@ class EditorSettings(BaseModel):
     robot: str = ""
     teleop: str = ""
     camera: str = ""
-    fps: int = Field(default=30, ge=1, le=120)
     pipeline_settings: dict = Field(default_factory=dict)
     depth_source: str = "sensor"
 
@@ -78,7 +78,9 @@ def _read_settings():
 
     path = EDITOR_DIR / "settings.json"
     if path.exists():
-        return EditorSettings.model_validate_json(path.read_text())
+        saved = json.loads(path.read_text())
+        saved.pop("fps", None)  # Demos are always recorded at DEMO_FPS; older settings chose a rate.
+        return EditorSettings.model_validate(saved)
     return EditorSettings(pipeline_settings=defaults(), depth_source=preferred_depth_source())
 
 
@@ -196,7 +198,7 @@ async def record_current():
             repo_id=f"local/flash-demo-{identity}",
             root=str(EDITOR_DIR / "recordings" / identity),
             single_task="FLASH demonstration",
-            fps=settings.fps,
+            fps=DEMO_FPS,
             episode_time_s=600,
             reset_time_s=0,
             num_episodes=1,
@@ -231,7 +233,7 @@ async def preview():
             serial=str(camera["serial_number_or_name"]),
             width=camera["width"],
             height=camera["height"],
-            fps=camera.get("fps", settings.fps),
+            fps=camera.get("fps", DEMO_FPS),
             pipeline_settings=settings.pipeline_settings,
             depth_source=settings.depth_source,
         )
@@ -308,8 +310,8 @@ async def record(request: run.RecordRequest):
     if "record_depth" in robot.get("fields", {}):
         robot["fields"]["record_depth"] = True
     request = request.model_copy(update={"robot": robot})
-    if not 1 <= request.fps <= 120:
-        raise HTTPException(400, "Recording FPS must be between 1 and 120")
+    if request.fps != DEMO_FPS:
+        raise HTTPException(400, f"FLASH demos are recorded at {DEMO_FPS} fps")
     if len(request.repo_id.split("/")) != 2 or any(
         part in {"", ".", ".."} for part in request.repo_id.split("/")
     ):
@@ -321,15 +323,11 @@ async def record(request: run.RecordRequest):
         await asyncio.get_running_loop().run_in_executor(_io, _calibrated_cameras, request.robot)
     except (ValueError, OSError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    camera_rates = [
-        camera["fps"] for camera in request.robot.get("cameras", {}).values() if camera.get("fps")
-    ]
     request = request.model_copy(
         update={
             "root": str(root),
             "num_episodes": 1,
             "reset_time_s": 0,
-            "fps": min(request.fps, *camera_rates) if camera_rates else request.fps,
         }
     )
     launched = await run.start_record(request)
@@ -953,7 +951,7 @@ async def apply_demo(request: ApplyDemo):
                 serial=str(camera["serial_number_or_name"]),
                 width=camera["width"],
                 height=camera["height"],
-                fps=camera.get("fps", setup.fps),
+                fps=camera.get("fps", DEMO_FPS),
                 pipeline_settings=plan["settings"],
                 depth_source=plan["depth_source"],
             ),

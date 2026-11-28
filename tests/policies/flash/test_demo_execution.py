@@ -710,7 +710,7 @@ def test_new_scene_visible_surface_is_not_vetoed_by_demo_background(tmp_path):
         tracker.close()
 
 
-def make_annotated_demo(robot, tmp_path, states=None, *, gripper_commands=None):
+def make_annotated_demo(robot, tmp_path, states=None, *, gripper_commands=None, fps=30):
     model = robot.cartesian_model()
     initial_state = ready_state(model)
     names = [*model.joint_names, model.gripper]
@@ -723,7 +723,7 @@ def make_annotated_demo(robot, tmp_path, states=None, *, gripper_commands=None):
         "names": ["height", "width", "channels"],
     }
     ds = LeRobotDataset.create(
-        "test/actions", root=tmp_path / "episode", fps=30, features=features, use_videos=False
+        "test/actions", root=tmp_path / "episode", fps=fps, features=features, use_videos=False
     )
     attach_robot_geometry(ds.meta, robot)
     for index, state in enumerate(states or [initial_state] * 3):
@@ -790,6 +790,13 @@ def test_record_reopen_compile_uses_actual_measured_joints_and_selected_referenc
     packet["objects"]["object_2"]["status"] = "lost"
     atomic_json(bad, packet)
     with pytest.raises(ValueError, match="no usable pose"):
+        compile_demo(ds, 0, document, folder, robot, "camera")
+
+
+def test_demo_recorded_at_another_rate_is_refused(robot, tmp_path):
+    # Replay timing assumes 30 fps; a 10 fps demo would otherwise play three times too fast (#277).
+    ds, document, folder = make_annotated_demo(robot, tmp_path, fps=10)
+    with pytest.raises(ValueError, match="recorded at 10 fps"):
         compile_demo(ds, 0, document, folder, robot, "camera")
 
 

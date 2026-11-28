@@ -14,6 +14,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# Demos are recorded and replayed at the motor loop's rate; other rates are refused (#277).
+DEMO_FPS = 30
+
 
 class DemoObject(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)

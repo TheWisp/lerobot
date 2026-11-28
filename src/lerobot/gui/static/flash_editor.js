@@ -46,7 +46,6 @@ async function loadFlashEditorSettings(){
             ...profiles.map(p=>new Option(`${p.name} (${p.type})`,p.name)));
         editorElement(id).value=setup[id]||'';
     }
-    editorElement('fps').value=setup.fps;
     editorElement('depth-source').value=setup.depth_source;
     editorElement('matcher').replaceChildren(...Object.entries(flashEditor.defaults.matchers).map(([value,label])=>new Option(label,value)));
     editorElement('matcher').value=setup.pipeline_settings.config.shape.registration.backend;
@@ -62,9 +61,8 @@ async function openFlashEditorSettings(){
 }
 async function saveFlashEditorSettings(){
     try{
-        const fps=editorElement('fps');if(!fps.reportValidity())return;
         const setup={robot:editorElement('robot').value,teleop:editorElement('teleop').value,
-            camera:editorElement('setup-camera').value,fps:Number(fps.value),
+            camera:editorElement('setup-camera').value,
             depth_source:editorElement('depth-source').value,pipeline_settings:flashEditor.settingsForm.read()};
         flashEditor.setup=await editorRequest('/api/run/flash/editor/settings',setup,'PUT');
         editorElement('settings-dialog').close();
@@ -699,7 +697,7 @@ async function pollFlashDemo(){
         editorElement('execution').textContent=execution.reason||`${rest?'Reset robot':execution.mode==='robot'?'Robot':execution.mode==='simulation'?'Test run · no motion':'Run'} · ${executionState||'idle'}${execution.total?` · ${Math.min((execution.keyframe||0)+1,execution.total)} / ${execution.total}`:''}${execution.running&&execution.state==='complete'&&!rest?' · Choose End run to finish':''}`;
         if(wasExecuting&&!execution.running&&flashEditor.mode==='live')editorStatus(execution.reason||(rest?'Robot reset ended.': 'Rollout saved. Check placement in the recorded frames.'));
         await refreshFlashEditorOutput();
-        for(const id of ['robot','teleop','setup-camera','fps','matching','matcher','depth-source','settings-save'])editorElement(id).disabled=!!status.running;
+        for(const id of ['robot','teleop','setup-camera','matching','matcher','depth-source','settings-save'])editorElement(id).disabled=!!status.running;
         flashEditor.settingsForm?.update();
         if(own?.running){flashEditor.mode='live';await showFlashDemoViewer();}
         else if(data.preview_running && flashEditor.visible && flashEditor.mode==='live' && !flashEditor.previewHome)mountFlashEditorPreview();
