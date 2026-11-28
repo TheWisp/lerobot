@@ -8,6 +8,7 @@
 //   #/home
 //   #/dataset/<encoded repo_id>
 //   #/episode/<encoded repo_id>/<episode_id>
+//   #/local-episode/<encoded absolute path>/<episode_id>
 //   #/run/<run_id>
 //
 // hashchange fires both for backend-driven commands (we set
@@ -36,7 +37,9 @@
     home: "data",
     dataset: "data",
     episode: "data",
+    "local-episode": "data",
     run: "run",
+    flash: "flash",
     model: "model",
     robot: "robot",
   };
@@ -66,12 +69,16 @@
     if (view === "episode" && params.repo_id != null && params.episode_id != null) {
       return `#/episode/${encodeRepoId(params.repo_id)}/${Number(params.episode_id)}`;
     }
+    if (view === "local-episode" && params.path != null && params.episode_id != null) {
+      return `#/local-episode/${encodeURIComponent(params.path)}/${Number(params.episode_id)}`;
+    }
     if (view === "dataset" && params.repo_id != null) {
       return `#/dataset/${encodeRepoId(params.repo_id)}`;
     }
     if (view === "run" && params.run_id != null) {
       return `#/run/${encodeURIComponent(params.run_id)}`;
     }
+    if (view === "flash") return `#/flash/${["live", "editor"].includes(params.source) ? params.source : "examples"}`;
     if (view === "home") return "#/home";
     if (view === "model") return "#/model";
     if (view === "robot") return "#/robot";
@@ -99,8 +106,18 @@
         },
       };
     }
+    if (head === "local-episode" && parts.length === 3) {
+      return {
+        view: "local-episode",
+        params: { path: decodeURIComponent(parts[1]), episode_id: Number(parts[2]) },
+      };
+    }
     if (head === "run" && parts.length >= 2) {
+      if (parts[1] === "flash") return { view: "flash", params: { source: "examples" } };
       return { view: "run", params: { run_id: decodeURIComponent(parts[1]) } };
+    }
+    if (head === "flash") {
+      return { view: "flash", params: { source: ["live", "editor"].includes(parts[1]) ? parts[1] : "examples" } };
     }
     return null;
   }
@@ -122,12 +139,11 @@
     if (route) applyRoute(route.view, route.params);
   }
 
-  // Apply the URL hash on first load so deep-links work directly. bridge.js
-  // is loaded near the end of <body> (so it might run before or after
-  // DOMContentLoaded depending on script ordering / `defer`); fire the handler
-  // immediately if the document is already parsed, otherwise wait for it.
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", onHashChange);
+  // Apply the initial route after all page scripts have installed their
+  // consumers. Running it immediately from this script can switch the Run tab
+  // before bridge_consumers.js has registered the FLASH workflow handler.
+  if (document.readyState !== "complete") {
+    document.addEventListener("DOMContentLoaded", onHashChange, { once: true });
   } else {
     onHashChange();
   }

@@ -1,8 +1,16 @@
 # FLASH tracking glossary
 
-Definitions of the records and terms FLASH tracking uses, each with the code it describes. An
-entry is added in the same change as the code it describes.
+Definitions for the shared growing-surface tracker used by live camera, video examples,
+and demo extraction. The current sources are the [tracking design](tracking_pipeline.md),
+the [maintained frame architecture](../../../gui/static/flash_architecture.html), and the
+code cited below.
 These definitions describe what the system stores or computes; they do not certify an estimate.
+
+The design gives usable mask and depth priority over image-motion suggestions, keeps scene-group
+updates separate from object-pose decisions, and distinguishes observed poses from predictions and
+lost results. Predictions supply no new object surface. See the
+[core loop](tracking_pipeline.md#core-loop) and
+[scene-group boundary](tracking_pipeline.md#scene-groups-and-object-association).
 
 - [RGB-D frame](#rgb-d-frame)
 - [Depth support](#depth-support)
@@ -119,7 +127,7 @@ Mask membership and usable depth are separate: an object pixel with rejected dep
 become background. Current geometry uses cleaned depth inside the mask. RGB, mask and the selected
 depth map must belong to the same source frame and pixel coordinates. Selected depth can come from
 the sensor or a model; model depth is an estimate, not an independent sensor measurement.
-See the [frame inputs](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/gui/static/flash_architecture.html#metric-depth).
+See the [frame inputs](../../../gui/static/flash_architecture.html#metric-depth).
 
 Code: [`SharedFrameTracker.update`](../shared_image_tracking.py#L163) checks mask dimensions;
 [`pairs`](../shared_image_tracking.py#L223) checks source and target mask membership.
@@ -146,7 +154,7 @@ points into reference coordinates; [`PoseKalmanFilter`](../surface_kalman.py#L70
 object point. [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L771)
 initializes the fixed coordinates; [`ObjectGroupAssociation.record_observation`](../object_group_association.py#L174)
 composes the camera-to-base transform.
-Design: [persistent coordinates](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/policies/flash/docs/tracking_pipeline.md#what-persists-between-frames).
+Design: [persistent coordinates](tracking_pipeline.md#what-persists-between-frames).
 
 ## Stored surface / surface map
 
@@ -161,7 +169,7 @@ cannot influence fitting before confirmation. In fresh sessions, an accepted obs
 replaces overlapping visible map samples with current measurements and removes contradicted samples.
 Hidden or unknown surface is not removed merely for being unseen. This working map can change while
 the coordinate origin and original patch measurements remain fixed. Rejected poses and predictions
-cannot refresh or grow the map. See [surface persistence and refresh](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/policies/flash/docs/tracking_pipeline.md#what-persists-between-frames).
+cannot refresh or grow the map. See [surface persistence and refresh](tracking_pipeline.md#what-persists-between-frames).
 
 Code: [`SurfacePatch`](../experimental_surface_session.py#L286) and
 [`SurfaceStore`](../experimental_surface_session.py#L299), and
@@ -183,7 +191,7 @@ make its own pose pass. Image matches and group motion supply the initial motion
 The default small_gicp solver then fits the object geometry; the selectable `visible_icp` solver
 can also include image/group point residuals. Neither can override reliable mask/depth contradictions. The fitted pose and any
 subsequent Kalman-adjusted pose must both pass the geometry checks before the map can change.
-See the [fitting and publication path](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/gui/static/flash_architecture.html#surface-fit).
+See the [fitting and publication path](../../../gui/static/flash_architecture.html#surface-fit).
 
 Selecting object points does not itself remove their camera-space position. For example, object
 centres at camera X = 100 mm and X = 140 mm remain 40 mm apart after background points are removed.
@@ -252,7 +260,7 @@ carried positions. It owns group membership, fixed group-local positions, and ea
 into base coordinates. It receives no object masks, fitted object poses, or Kalman state.
 Mask-dependent sampling happens upstream in the shared image tracker. Object association only
 queries the resulting group snapshot; accepting or rejecting an object pose cannot rewrite it.
-See the [group architecture](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/gui/static/flash_architecture.html#group-update).
+See the [group architecture](../../../gui/static/flash_architecture.html#group-update).
 
 The implementation retains some members without accepted group measurements and predicts their
 positions from the accepted members. In `GroupView`, `measured` means both currently measured and
@@ -287,7 +295,7 @@ With Kalman enabled, measured group motion advances the previous corrected objec
 not replace it with the group's absolute pose hint. Without usable measured motion, prediction
 keeps the previous world position, compensates for known camera motion, and increases uncertainty.
 Whether a prediction is published depends on the configured support policy and any current
-geometry checks. See [prediction and correction](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/policies/flash/docs/tracking_pipeline.md#uncertainty-and-correction).
+geometry checks. See [prediction and correction](tracking_pipeline.md#uncertainty-and-correction).
 
 A prediction and a fit's [starting pose](#local-surface-fitting) need not be the same: the starting
 pose can instead come from current image matches. Publishing a predicted pose does not mean the
@@ -362,4 +370,4 @@ segmentation mask alone does not establish an accepted 3D pose.
 Code: [`GrowingSurfaceSession.update`](../experimental_surface_session.py#L771),
 [`_publish_prediction`](../experimental_surface_session.py#L1123), and
 [`_result`](../experimental_surface_session.py#L1179).
-Design: [initialization and frame sequence](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/policies/flash/docs/tracking_pipeline.md#initialization-and-frame-sequence).
+Design: [initialization and frame sequence](tracking_pipeline.md#initialization-and-frame-sequence).

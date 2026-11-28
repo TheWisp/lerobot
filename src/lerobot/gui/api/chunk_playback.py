@@ -59,17 +59,13 @@ _app_state: AppState = None  # type: ignore
 #: and R3. The page has to agree, and checks the header's ``chunk_frames``.
 CHUNK_SECONDS = 2.0
 
-#: The one video profile. A rule applied per camera: a target width each camera
-#: is scaled down to (never up), and a constant quality so bytes follow content.
-#: ``high`` is the JPEG path, not an encode, and is refused here.
-#:
-#: The quality is empirical; the width and the link it is chosen for are not
-#: this tab's to pick. Both come from ``gui.link_class``, shared with the Run
-#: tab's live stream, and the smoothness tests play this profile at its rate.
-PROFILES: dict[str, dict[str, Any]] = {"low": {"width": PROFILE_WIDTH, "crf": 26, "preset": "veryfast"}}
-
-#: What the page configures its decoder with: H.264 Main profile, level 3.1.
-CODEC_STRING = "avc1.4d401f"
+#: Data's low-bandwidth profile follows the shared link budget. FLASH inspection
+#: uses native dimensions, so texture detail isn't discarded before drawing
+#: tracking overlays. ``high`` still names Data's separate JPEG path.
+PROFILES: dict[str, dict[str, Any]] = {
+    "low": {"width": PROFILE_WIDTH, "crf": 26, "preset": "veryfast"},
+    "native": {"width": None, "crf": 18, "preset": "veryfast"},
+}
 
 #: Bump when the body layout or a part's content changes, so old cache entries are not served as new ones.
 # 3: a depth camera's part is a rendered picture, not its raw 12-bit codes
@@ -107,11 +103,12 @@ def chunk_frames(fps: float) -> int:
     return n
 
 
-def encoded_size(height: int, width: int, target_width: int) -> tuple[int, int]:
+def encoded_size(height: int, width: int, target_width: int | None) -> tuple[int, int]:
     """(height, width) one camera's video is encoded at under a profile: its own
     resolution scaled to the target width, aspect kept, never upscaled, height
     even as the encoder needs. Cameras differ, so this differs per camera, and
     the mask rows are resized to the same numbers so the two line up."""
+    target_width = width if target_width is None else target_width
     assert height > 0 and width > 0 and target_width > 0, (height, width, target_width)
     w = min(width, target_width)
     h = max(2, 2 * round(height * w / width / 2))
@@ -179,6 +176,14 @@ def _h264_out(frames: int, profile: dict[str, Any]) -> list[str]:
         "-g", gop, "-keyint_min", gop, "-sc_threshold", "0", "-bf", "0", "-forced-idr", "1",
         "-bsf:v", "h264_metadata=aud=insert", "-f", "h264", "pipe:1",
     ]  # fmt: skip
+
+
+def _codec_string(annexb: bytes) -> str:
+    """Read profile/constraints/level from x264's SPS, including native HD video."""
+    sps = annexb.find(b"\x00\x00\x01\x67")
+    if sps < 0 or sps + 7 > len(annexb):
+        raise RuntimeError("encoded chunk has no H.264 sequence parameter set")
+    return "avc1." + annexb[sps + 4 : sps + 7].hex()
 
 
 def _encode_depth_camera(
@@ -361,7 +366,7 @@ def build_chunk(
     for cam, data, sizes, (h, w), (sh, sw), secs in results:
         parts.append(
             {
-                "camera": cam, "kind": "video", "codec": "h264", "codec_string": CODEC_STRING,
+                "camera": cam, "kind": "video", "codec": "h264", "codec_string": _codec_string(data),
                 "width": w, "height": h, "stored_width": sw, "stored_height": sh,
                 "offset": offset, "length": len(data), "frame_sizes": sizes,
             }

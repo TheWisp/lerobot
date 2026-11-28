@@ -11,8 +11,8 @@ That Markdown file is the single source for definitions. Resolve its path from
 the repository root; do not rely on a browser tab or a locally served copy.
 
 When adding or correcting a definition, check it against the current
-[tracking design](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/policies/flash/docs/tracking_pipeline.md),
-[maintained frame architecture](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/gui/static/flash_architecture.html),
+[tracking design](../../../src/lerobot/policies/flash/docs/tracking_pipeline.md),
+[maintained frame architecture](../../../src/lerobot/gui/static/flash_architecture.html),
 and the cited implementation. Respect documents' status: `architecture.md` is
 explicitly superseded. If the intended design and running code differ, describe
 both and label the difference; do not redefine a term to make a bug look intended.

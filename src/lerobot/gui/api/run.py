@@ -11,7 +11,9 @@ import os
 import re
 import signal
 import sys
+import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -405,7 +407,30 @@ def is_run_active() -> bool:
     return _active_process is not None and _active_process.returncode is None
 
 
-async def _read_stream(stream: asyncio.StreamReader, prefix: str = "") -> None:
+_output_log_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gui-output-log")
+
+
+async def _save_output_line(path: Path | None, text: str) -> bool:
+    if path is None:
+        return True
+
+    def append():
+        with path.open("a") as output:
+            output.write(text + "\n")
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(_output_log_pool, append)
+        return True
+    except OSError as exc:
+        # A full disk must not stop pipe draining and block the robot worker.
+        logger.warning("Could not save rollout console output: %s", exc)
+        _append_output(f"Could not save rollout console output: {exc}")
+        return False
+
+
+async def _read_stream(
+    stream: asyncio.StreamReader, prefix: str = "", output_log: Path | None = None
+) -> None:
     """Read lines from a subprocess stream and append to output buffer."""
     while True:
         line = await stream.readline()
@@ -413,6 +438,8 @@ async def _read_stream(stream: asyncio.StreamReader, prefix: str = "") -> None:
             break
         text = line.decode("utf-8", errors="replace").rstrip("\n\r")
         _append_output(f"{prefix}{text}")
+        if not await _save_output_line(output_log, f"{prefix}{text}"):
+            output_log = None
 
 
 _stream_tasks: list[asyncio.Task] = []
@@ -460,7 +487,7 @@ def _clear_last_failure() -> None:
     _last_failure = None
 
 
-async def _wait_for_exit() -> None:
+async def _wait_for_exit(output_log: Path | None = None) -> None:
     """Wait for the subprocess to finish, log the exit, and clean up."""
     global _active_process, _active_command, _active_config
     if _active_process is None:
@@ -474,6 +501,7 @@ async def _wait_for_exit() -> None:
     rc = proc.returncode
     _note_exit(_active_command, rc, list(_output_lines))
     _append_output(f"\n--- Process exited with code {rc} ---")
+    await _save_output_line(output_log, f"\n--- Process exited with code {rc} ---")
     # Only clear if this is still the same process (not replaced by a new launch)
     if _active_process is proc:
         _active_process = None
@@ -528,7 +556,11 @@ def _set_pdeathsig_preexec() -> None:
 
 
 async def _launch_subprocess(
-    args: list[str], command: str, config: dict, extra_env: dict[str, str] | None = None
+    args: list[str],
+    command: str,
+    config: dict,
+    extra_env: dict[str, str] | None = None,
+    output_log: Path | None = None,
 ) -> None:
     """Launch a subprocess and start reading its output."""
     # TODO(gui-hardware): Manage SocketCAN interface lifecycle here before
@@ -599,6 +631,7 @@ async def _launch_subprocess(
     logger.info(f"Launching: {cmd_str}")
     _append_output(f"--- Starting {command} ---")
     _append_output(f"$ {cmd_str}\n")
+    await _save_output_line(output_log, f"--- Starting {command} ---\n$ {cmd_str}\n")
 
     # Claim ownership before the process exists, not after. A reader on another
     # thread's loop that catches the in-between state must never see the new
@@ -616,16 +649,15 @@ async def _launch_subprocess(
     )
 
     _stream_tasks = [
-        asyncio.create_task(_read_stream(_active_process.stdout)),
-        asyncio.create_task(_read_stream(_active_process.stderr, prefix="[stderr] ")),
+        asyncio.create_task(_read_stream(_active_process.stdout, output_log=output_log)),
+        asyncio.create_task(_read_stream(_active_process.stderr, prefix="[stderr] ", output_log=output_log)),
     ]
-    asyncio.create_task(_wait_for_exit())
+    asyncio.create_task(_wait_for_exit(output_log))
 
 
 async def _launch_debug_s2(config: DebugModelConfig) -> None:
     """Launch HVLA S2 standalone as a debug model process alongside teleop."""
     global _debug_process, _debug_output_path, _debug_output_lines, _debug_read_task
-    import tempfile
 
     await _stop_debug_process()
 
@@ -888,7 +920,13 @@ async def start_record(req: RecordRequest) -> dict:
         if req.teleop is None and req.policy_path is None:
             raise HTTPException(400, "Either teleop or policy_path must be provided")
 
-        args = [sys.executable, "-m", "lerobot.scripts.lerobot_record"]
+        measured_recording = req.robot.get("fields", {}).get("geometry_path") or any(
+            camera.get("enable_infrared", False) for camera in req.robot.get("cameras", {}).values()
+        )
+        record_module = (
+            "lerobot.policies.flash.record" if measured_recording else "lerobot.scripts.lerobot_record"
+        )
+        args = [sys.executable, "-m", record_module]
         args.extend(_profile_to_cli_args(req.robot, "robot"))
         if req.teleop is not None:
             args.extend(_profile_to_cli_args(req.teleop, "teleop"))
@@ -954,7 +992,6 @@ async def start_replay(req: ReplayRequest) -> dict:
 @router.post("/hvla")
 async def start_hvla(req: HVLARunRequest) -> dict:
     """Launch HVLA dual-system inference (S1 + S2)."""
-    import tempfile
 
     async with _launch_lock:
         _ensure_no_active_process()

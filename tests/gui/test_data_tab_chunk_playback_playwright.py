@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import struct
 import time
+from urllib.parse import quote
 
 import pytest
 
@@ -106,6 +107,25 @@ def _requests(page):
 
     page.on("request", on_request)
     return seen
+
+
+def test_local_episode_link_opens_and_paints_recorded_camera(server):
+    srv, ds_id = server
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(f"{srv.base}/#/local-episode/{quote(ds_id, safe='')}/0")
+        page.wait_for_function(
+            "([id]) => typeof currentDataset !== 'undefined' && currentDataset === id && currentEpisode === 0",
+            arg=[ds_id],
+            timeout=60_000,
+        )
+        page.wait_for_function(
+            "() => [...document.querySelectorAll('.camera-frame img')].some(img => img.naturalWidth > 0)",
+            timeout=60_000,
+        )
+        assert page.locator("#tab-data").evaluate("element => element.classList.contains('active')")
+        browser.close()
 
 
 def test_at_low_bandwidth_the_tiles_paint_from_chunks_and_never_ask_for_a_still(server):
