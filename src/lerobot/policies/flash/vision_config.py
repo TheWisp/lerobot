@@ -176,21 +176,3 @@ class VisionPipelineConfig:
 
     def to_dict(self):
         return asdict(self)
-
-    @classmethod
-    def from_settings(cls, settings: dict, *, backend: str = "surface"):
-        """Read old registration fields once; an explicit saved config wins."""
-        values = {
-            key: settings[key]
-            for key in (
-                "sam_resolution",
-                "min_similarity",
-                "registration_threshold_m",
-                "registration_min_inliers",
-                "registration_trials",
-            )
-            if key in settings
-        }
-        values.update(settings.get("vision_pipeline") or {})
-        values.setdefault("backend", backend)
-        return cls.from_dict(values)

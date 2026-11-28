@@ -31,57 +31,6 @@ def inverse(pose: np.ndarray) -> np.ndarray:
     return result
 
 
-def pregrasp_goal(demo_ee: np.ndarray, demo_object: np.ndarray, live_object: np.ndarray) -> np.ndarray:
-    """Keep the demonstrated gripper-to-object relation before grasp."""
-    return transform(live_object) @ inverse(demo_object) @ transform(demo_ee)
-
-
-def held_object_goal(
-    demo_held: np.ndarray,
-    demo_target: np.ndarray,
-    live_target: np.ndarray,
-    live_attachment: np.ndarray,
-) -> np.ndarray:
-    """Make the live held object follow its demo relation to the live target.
-
-    ``live_attachment`` is ``T_E_H``, estimated from this rollout. It can be
-    predicted through occlusion, but its evidence state belongs to the pose
-    provider and must be checked by the caller.
-    """
-    desired_relation = inverse(demo_target) @ transform(demo_held)
-    return transform(live_target) @ desired_relation @ inverse(live_attachment)
-
-
-def turn_about_reference_point(
-    goal: np.ndarray,
-    reference: np.ndarray,
-    pivot_reference_m: tuple[float, float, float],
-    axis_reference: tuple[float, float, float],
-    angle_rad: float,
-) -> np.ndarray:
-    """Turn a goal about an annotated point carried by its live reference.
-
-    Both the pivot and direction are stored in the *reference object* frame,
-    so moving that object moves the whole allowed family of goals with it.
-    """
-    from scipy.spatial.transform import Rotation
-
-    if not np.isfinite(angle_rad):
-        raise ValueError("turn angle must be finite")
-    axis_reference = np.asarray(axis_reference, dtype=float)
-    # The rotation vector is angle × axis, so any other length scales the turn.
-    if axis_reference.shape != (3,) or not np.isclose(np.linalg.norm(axis_reference), 1.0, atol=1e-5):
-        raise ValueError("turn direction must be a unit vector")
-    reference = transform(reference)
-    pivot = reference[:3, :3] @ np.asarray(pivot_reference_m) + reference[:3, 3]
-    axis = reference[:3, :3] @ axis_reference
-    rotation = Rotation.from_rotvec(float(angle_rad) * axis).as_matrix()
-    result = np.eye(4)
-    result[:3, :3] = rotation
-    result[:3, 3] = pivot - rotation @ pivot
-    return transform(result @ transform(goal))
-
-
 def interpolate(a: np.ndarray, b: np.ndarray, fraction: float) -> np.ndarray:
     """Linear position and shortest-path rotation interpolation."""
     from scipy.spatial.transform import Rotation, Slerp

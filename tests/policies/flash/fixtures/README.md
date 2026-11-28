@@ -20,14 +20,30 @@ and the same frame's point-group pose. The two reference views were frames
 100 and 300, joined using the recorded group transforms. This fixture
 documents a disagreement, not an independently measured ground-truth pose.
 
-`ring_tray_motion_20261016.npz` contains sparse, persistent RGB-D point tracks
-from camera frames 331, 360, 390 and 422 of the 2026-10-16 11:21:49 insertion
-attempt. The tray and ring visibly moved together between the first two frames.
-Ring centres are approximated from the old run's outline and aligned depth;
-they are not independent ground truth. The fixture checks whether the new
-environment relationship finds measured co-motion and predicts the later
-centre within the sensor-scale tolerance. It stores no RGB, depth images or
-motor actions.
+`dowel_live_visible_shape_20261020.npz` stores only the prepared dowel's
+metric reference points, aligned depth inside two object masks, and camera
+intrinsics from the failed 2026-10-20 startup scene. The full text-prompted
+mask covers the visible dowel; the point-seeded mask covers only a fragment.
+The other mask is the green ring, a same-frame negative identity case. No RGB,
+robot state, or complete user episode is stored in this fixture.
+
+`gamepad_reference_depth_20261028.npz` stores only the prepared gamepad's
+first-view metric reference points, the frame-223/246/290/300/430 direct poses,
+aligned depth and SAM3 masks, intrinsics and camera calibration from the `pick_place`
+demo. It contains no RGB or robot commands. All five poses were labeled
+observed by the earlier surface pipeline. The clean visible reference patch
+agrees with measured depth at 290 and 300, but frame 430 has a large residual;
+the fixture tests that a good current-to-reference patch fit alone does not
+certify the whole transported reference or the hidden contact pose. A large
+residual may also reflect a reference surface that is now occluded. These are
+same-frame support checks, not independent ground truth or a verdict that the
+old pose was wrong.
+
+The gripper mostly hides the gamepad at 223 and 246. The cleaned connected
+surface has less lateral extent than the earlier fit's own 90th-percentile
+error, so it cannot certify a full rigid pose even though the fit passed its
+old point-count and depth-error checks. Frames 290 and 300 provide the
+complementary broader visible patch.
 
 `image_matching_gamepad_168.npz` and `image_matching_dowel_240.npz` freeze
 real-frame outputs from the implementation immediately before the 2026-11-02

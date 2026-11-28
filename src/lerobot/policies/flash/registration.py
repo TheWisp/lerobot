@@ -13,28 +13,6 @@ class DegenerateRegistrationError(RuntimeError):
     pass
 
 
-def valid_depth_pixels(depth: np.ndarray, xy: np.ndarray) -> np.ndarray:
-    """Which aligned image pixels are in bounds and have finite positive depth."""
-    pixels = np.asarray(xy, dtype=float)
-    if pixels.ndim != 2 or pixels.shape[1] != 2:
-        raise ValueError("pixels must be Nx2")
-    valid = np.isfinite(pixels).all(axis=1)
-    rounded = np.zeros(pixels.shape, dtype=int)
-    rounded[valid] = np.rint(pixels[valid]).astype(int)
-    inside = (
-        valid
-        & (rounded[:, 0] >= 0)
-        & (rounded[:, 0] < depth.shape[1])
-        & (rounded[:, 1] >= 0)
-        & (rounded[:, 1] < depth.shape[0])
-    )
-    valid[:] = False
-    valid[inside] = np.isfinite(depth[rounded[inside, 1], rounded[inside, 0]]) & (
-        depth[rounded[inside, 1], rounded[inside, 0]] > 0
-    )
-    return valid
-
-
 def unproject_pixels(
     depth: np.ndarray, intrinsics: np.ndarray, xy: np.ndarray, depth_m_per_unit: float
 ) -> np.ndarray:
