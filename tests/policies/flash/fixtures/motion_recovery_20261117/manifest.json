@@ -1,0 +1,239 @@
+{
+  "source_recording": "saved-747dd29b27a745418524e2744ac29cb5",
+  "source_commit": "efdc380a59942fcf72115f698dcabca8210b9222",
+  "settings": {
+    "config": {
+      "backend": "surface",
+      "sam_resolution": 504,
+      "min_similarity": 0.75,
+      "registration_threshold_m": 0.005,
+      "registration_min_inliers": 12,
+      "registration_trials": 100,
+      "visible_shape_fallback": false,
+      "parallel_surface_objects": true,
+      "pipeline_surface_frames": true,
+      "surface_object_workers": 2,
+      "surface_reference_max_points_per_view": 15000,
+      "compiled_surface_fit": true,
+      "reuse_surface_search": true,
+      "detection_correction": {
+        "enabled": false,
+        "offline_interval_frames": 16,
+        "runtime_interval_frames": 60,
+        "min_detector_score": 0.8,
+        "min_tracker_score": 0.8,
+        "min_mask_overlap": 0.5
+      },
+      "observation": {
+        "mask_margin_px": 4,
+        "outer_mask_margin_px": 2,
+        "depth_span_m": 0.01,
+        "depth_neighborhood_px": 3,
+        "normal_bilateral_diameter_px": 5,
+        "normal_bilateral_sigma_px": 2,
+        "huber_m": 0.005,
+        "surface_spacing_m": 0.003,
+        "samples_across_object": 64,
+        "min_surface_spacing_m": 0.001,
+        "component_gap_m": null,
+        "depth_outlier_sigma": 3,
+        "filtered_depth_for_fitting": true,
+        "validation_tile_px": 4
+      },
+      "shape": {
+        "registration": {
+          "backend": "small_gicp",
+          "voxel_sizes_m": [
+            0.006,
+            0.003
+          ],
+          "iterations_per_level": 20,
+          "correspondence_voxels": 3,
+          "threads": 2,
+          "translation_epsilon_m": 0.0001,
+          "rotation_epsilon_rad": 0.001,
+          "colored_geometry_weight": 0.968,
+          "appearance_weight": 1
+        },
+        "depth_tolerance_m": 0.005,
+        "surface_spacing_m": 0.003,
+        "mask_boundary_tolerance_px": 2,
+        "free_space_min_supports": 3,
+        "require_full_mask_coverage": true,
+        "mask_coverage_weight": 0.5,
+        "scene_depth_constraints": true,
+        "prefer_observed_overlap": true,
+        "max_surface_distance_m": 0.03,
+        "max_evaluations": 50,
+        "solver_tolerance": 1e-05,
+        "max_fit_points": 2048,
+        "nn_queries_per_worker": 512,
+        "batch_query_workers": 8
+      },
+      "motion": {
+        "crop_min_px": 160,
+        "crop_max_px": 480,
+        "crop_extent_multiplier": 2.5,
+        "input_size_px": 320,
+        "grid_step_px": 4,
+        "covisibility_min": 0.5,
+        "min_ransac_pairs": 6,
+        "ransac_distance_m": 0.006,
+        "ransac_confidence": 0.99,
+        "refinement_steps": 2,
+        "connected_dilation_px": 7
+      }
+    },
+    "surface_experiment": {
+      "spacing_m": 0.003,
+      "agreement_m": 0.005,
+      "min_overlap": 0.25,
+      "growth_agreement_m": 0.003,
+      "growth_min_overlap": 0.75,
+      "refresh_observed_surface": true,
+      "local_growth_enabled": false,
+      "growth_local_overlap": 0.5,
+      "patch_consistency": 0.95,
+      "patch_overlap": 0.8,
+      "image_weight": 1,
+      "group_point_evidence_weight": 1,
+      "group_association_min_points": 12,
+      "surface_priority": true,
+      "partial_surface_matching": true,
+      "fit_view_limit": 1,
+      "confirmations": 2,
+      "max_patches": 32,
+      "max_pending": 8,
+      "points_per_patch": 1024,
+      "max_points": 8192,
+      "grow": true,
+      "retain_unobserved_pose": false,
+      "uncertainty": {
+        "enabled": true,
+        "mode": "kalman",
+        "initial_position_std_m": 0.005,
+        "initial_rotation_std_deg": 10,
+        "position_process_std_m_sqrt_s": 0.03,
+        "rotation_process_std_deg_sqrt_s": 2,
+        "unmeasured_rotation_std_deg_sqrt_s": 10,
+        "reset_on_geometry_conflict": false,
+        "independent_error_m": 0.001,
+        "correlated_error_m": 0.002,
+        "correlation_length_m": 0.01,
+        "max_measurements": 256,
+        "compatibility_probability": 0.95,
+        "max_visible_outlier_fraction": 0.25,
+        "prefer_supported_prediction": true
+      }
+    },
+    "group_experiment": {
+      "min_inliers": 12,
+      "min_motion_points": 4,
+      "fit_threshold_m": 0.005,
+      "support_confirmation_s": 0.8,
+      "split_tolerance_m": 0.003,
+      "split_confirmation_s": 0.2,
+      "merge_tolerance_m": 0.003,
+      "merge_confirmation_s": 0.8,
+      "max_points": 4096,
+      "max_groups": 32,
+      "motion_hypotheses": 48
+    },
+    "shared_matching": {
+      "backend": "lk",
+      "max_image_size_px": 640,
+      "scene_points": 800,
+      "object_points": 256,
+      "spacing_px": 5,
+      "history_frames": 64,
+      "depth_support_radius_px": 1,
+      "lk": {
+        "window_size_px": 21,
+        "pyramid_levels": 3,
+        "forward_backward_limit_px": 1
+      },
+      "ufm": {
+        "covisibility_min": 0.5
+      }
+    },
+    "retain_motion_reference": true
+  },
+  "cases": {
+    "cube": [
+      2735,
+      2741,
+      2747,
+      2752
+    ],
+    "pointer": [
+      2992,
+      3000,
+      3008
+    ],
+    "ring": [
+      4740,
+      4750,
+      4759,
+      4765
+    ]
+  },
+  "frames": {
+    "2735": {
+      "time_s": 1461314.24818107,
+      "rgb_sha256": "4ebbb6aafb42260d3668dbf9311841da16098aa1fa7e0365d63d0ba85b02393b",
+      "depth_sha256": "c2ffda5603fe18d0121b6bf2cd9c40ea56731125ba77d540893c3cc723a781d0"
+    },
+    "2741": {
+      "time_s": 1461314.448336327,
+      "rgb_sha256": "ea5c991ce7a57930172c878b665466f9dda9cd7f8e899a8707868b0c0d998aa9",
+      "depth_sha256": "11294a3b0f4c6d4678266f8b3e751c3e2e80e1d144ce465f1bd1dc116b8c6997"
+    },
+    "2747": {
+      "time_s": 1461314.648654267,
+      "rgb_sha256": "fe22e87fdc3d01f2018e0fc90f71a41632ff2d81c2252b49b382036b88749d0a",
+      "depth_sha256": "e915a073071a955a4f8d28ff79c2f6b6f42eb7a075a76435a95041d705c83c77"
+    },
+    "2752": {
+      "time_s": 1461314.815443984,
+      "rgb_sha256": "6141307d6688b4c161411cff1efaf8d71152db06d4331963037f31102add77a2",
+      "depth_sha256": "d6634782a82e5b742dfb3fe1bd996eb6a725cf5e60c4f12de70c29b6e42aabd3"
+    },
+    "2992": {
+      "time_s": 1461322.821113837,
+      "rgb_sha256": "35e3549b2774468fb42fd09fd0abd095d36c482f45a3318a3ebdc8321b7af434",
+      "depth_sha256": "6eb7b5442b948d7deeaea4ab91023450538b6b526a8e4a026f1d314249727124"
+    },
+    "3000": {
+      "time_s": 1461323.088033188,
+      "rgb_sha256": "ea2dfaf168d0d98dbef3d889ec7054683c7e405e71abe85b2710c8cb363939d6",
+      "depth_sha256": "8195c4dc4e6c22ed674f7fc64f4ef07634f080a3f54e037bd9f6b84ef753b7fe"
+    },
+    "3008": {
+      "time_s": 1461323.354804502,
+      "rgb_sha256": "1e1acf237a21838ca9995868039d9015606c55cf6c3e83ca91b665d7491c444d",
+      "depth_sha256": "cca7bb63ff9dec535cc08fccbfabb1876380c440fbceec6839dd4fa8125a193f"
+    },
+    "4740": {
+      "time_s": 1461381.130388565,
+      "rgb_sha256": "469265026f5f8cf28f718eb7e97c83fbc38269dc8c2f0e7129f2ef3bec8c0f09",
+      "depth_sha256": "c75a051ae75149d0fae9affbced5415c62e5591c240e292b54e601db3e48d092"
+    },
+    "4750": {
+      "time_s": 1461381.463976571,
+      "rgb_sha256": "f75a96155c517e960d7cbefcc91aadf684eb2026caadaba8b16011999acdac5e",
+      "depth_sha256": "d749d14fafeb57555d9bd85e6a8914c0ef27c83eb1c6dec4975f4e2e252dbbc3"
+    },
+    "4759": {
+      "time_s": 1461381.76405343,
+      "rgb_sha256": "47b8309bdae682a6312fee0b9ad73e0067a9b74b687e425edae6fb5bca7adf6f",
+      "depth_sha256": "1ea66051c7b858c1bb5ae718474a440455a0215db97634c4e7ef57ccad6fc4e6"
+    },
+    "4765": {
+      "time_s": 1461381.964097089,
+      "rgb_sha256": "918b31c03fad1c1708f7fa3e0280e0e106735c67ff7ac49bc11942df87b75645",
+      "depth_sha256": "326b80d9bf5aea9fe494404111ce7009957e3ff511fc107a8cd1e8a450dd043c"
+    }
+  },
+  "sha256": "021c7614d5a1047e79fba96e906daffdd4e60f01d62fd0ee1a4eea0f09f7d419",
+  "scope": "Lossless RGB, original float32 model depth, saved SAM masks and calibration. Short sequences initialize fresh, so they reproduce failure mechanisms, not the entire original map or group history. No recorded pose is an estimator input. No independent full 6D pose labels are available."
+}
