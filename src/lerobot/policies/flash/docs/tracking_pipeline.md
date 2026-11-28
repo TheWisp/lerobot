@@ -618,6 +618,6 @@ model-free growing surface.
 
 This is the current design. Dated experiments stay in the
 [research record](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/docs/proofs/flash-tracker-restart/RESEARCH.md).
-The [sealed debugger](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/src/lerobot/policies/flash/docs/surface_tracking.md) and
+The [sealed debugger](surface_tracking.md) and
 [earlier growth experiments](https://github.com/TheWisp/lerobot/blob/29a575fe8a8621ebf38990a8af578d3ed02f5ede/docs/proofs/flash-surface-multiview/README.md)
 remain historical evidence, not competing specifications.
